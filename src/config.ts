@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 
-export const DATA_DIR = process.env.DATA_DIR ?? "./data";
+export const DATA_DIR = process.env.DATA_DIR ?? "/app/data";
 export const DB_PATH = `${DATA_DIR}/app.db`;
 export const RCLONE_CONF_PATH = `${DATA_DIR}/rclone.conf`;
 export const BIND = process.env.BIND ?? "0.0.0.0";

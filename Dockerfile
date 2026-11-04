@@ -11,13 +11,14 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 COPY . .
-# /data is the recommended path for a mounted volume. Pre-create it and give
-# ownership to the runtime user so a freshly-created directory is writable even
-# before a volume is attached. (A host-mounted volume may still be root-owned;
-# set DATA_DIR to a writable path or run as root in that case.)
-RUN mkdir -p /data && chown -R bun:bun /data
-ENV DATA_DIR=/data PORT=8080
-VOLUME /data
+# Default data directory lives under the app directory, which is owned by the
+# runtime user, so SQLite works out of the box even without a mounted volume.
+# Pre-create it and give ownership to `bun`. To persist across redeploys either
+# mount a volume here (note: a host/Render disk mount is root-owned and may need
+# DATA_DIR pointed elsewhere) or use Postgres.
+RUN mkdir -p /app/data && chown -R bun:bun /app/data
+ENV DATA_DIR=/app/data PORT=8080
+VOLUME /app/data
 EXPOSE 8080
 USER bun
 CMD ["bun","run","src/server.ts"]

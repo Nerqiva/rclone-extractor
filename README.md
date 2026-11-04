@@ -45,7 +45,7 @@ docker run -d --name rclone-extractor \
   -e APP_PASSWORD=change-me \
   -e SECRET_KEY=change-me-too \
   -p 8080:8080 \
-  -v rclone-data:/data \
+  -v rclone-data:/app/data \
   ghcr.io/<owner>/rclone-extractor:latest
 ```
 
@@ -78,14 +78,17 @@ bun test                       # run the test suite
 The local filesystem is only needed for **SQLite** and the transient
 `rclone.conf`. With **Postgres**, the app needs no writable disk at all.
 
-- **Recommended:** set `DATABASE_URL` and everything persists in Postgres — the
-  container filesystem can be read-only.
-- **If using SQLite**, the container user must be able to write `DATA_DIR`. A
-  Render persistent disk is mounted **root-owned**, while the image runs as the
-  non-root `bun` user, so writing to it fails with `EACCES`. Either:
+- The default `DATA_DIR` is **`/app/data`**, inside the app directory owned by
+  the runtime user, so SQLite works out of the box with no extra setup.
+- **Recommended for persistence:** set `DATABASE_URL` and store everything in
+  Postgres — the container filesystem can then be read-only, and data survives
+  redeploys.
+- **If using SQLite on a host with a mounted disk**, note the mount may be
+  **root-owned** (Render persistent disks are), which the non-root `bun` user
+  cannot write and produces `EACCES`. Either:
   - switch to Postgres (recommended), or
-  - point `DATA_DIR` at a writable path (e.g. under the app directory or
-    `/tmp`), accepting that it is **ephemeral** and lost on redeploy.
+  - point `DATA_DIR` at a writable path, accepting that data under it is
+    **ephemeral** and lost on redeploy.
 
 The app never crashes on an unwritable disk: with Postgres it boots normally;
 with SQLite it prints a clear message telling you to set `DATA_DIR` to a
@@ -103,7 +106,7 @@ SECRET_KEY=change-me-too               # passphrase for encrypting stored secret
 
 # --- database (leave DATABASE_URL empty to use local SQLite) ---
 DATABASE_URL=                          # e.g. postgres://user:pass@host:5432/db?sslmode=require
-DATA_DIR=./data                        # SQLite file + working rclone.conf (only used for SQLite)
+DATA_DIR=/app/data                      # SQLite file + working rclone.conf (only used for SQLite)
 
 # --- http ---
 BIND=0.0.0.0                           # bind address
@@ -128,7 +131,7 @@ database. They can also be seeded from environment variables.
 | `APP_PASSWORD` | *(empty)* | Fallback login password, seeded into settings on first boot. |
 | `SECRET_KEY` | *(empty)* | Passphrase for encrypting stored secrets. **Omit to disable encryption.** |
 | `DATABASE_URL` | *(empty)* | Postgres connection string. When empty, SQLite at `DATA_DIR/app.db` is used. |
-| `DATA_DIR` | `./data` | Directory for the SQLite file and the working `rclone.conf`. Only needed when using SQLite. |
+| `DATA_DIR` | `/app/data` | Directory for the SQLite file and the working `rclone.conf`. Only needed when using SQLite. |
 | `BIND` | `0.0.0.0` | HTTP bind address. |
 | `PORT` | `8080` | HTTP port. |
 
