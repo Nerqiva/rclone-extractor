@@ -21,12 +21,15 @@ export function rail(active: string): string {
         n.label,
       )}</a>`,
   ).join("");
-  return `<aside class="rail">
+  return `<aside class="rail" id="rail">
     <div class="brand">rclone<span>/</span>extractor</div>
     <nav class="nav">${links}</nav>
     <div class="rail-foot">
       <span class="dot" id="status-dot" title="status"></span>
       <span class="dot-label">authed</span>
+      <form method="post" action="/logout" class="rail-logout">
+        <button class="btn" type="submit">Sign out</button>
+      </form>
     </div>
   </aside>`;
 }
@@ -36,6 +39,29 @@ export function layout(
   body: string,
   active = "",
 ): string {
+  const railHtml = active !== "" ? `<button class="rail-toggle" id="rail-toggle" aria-label="Toggle navigation" aria-controls="rail" aria-expanded="false"><span></span><span></span><span></span></button>${rail(active)}<div class="rail-overlay" id="rail-overlay"></div>` : "";
+  const script = active !== "" ? `<script>
+var btn = document.getElementById("rail-toggle");
+var overlay = document.getElementById("rail-overlay");
+var bodyEl = document.body;
+
+function setRail(open) {
+  bodyEl.classList.toggle("rail-open", open);
+  btn.setAttribute("aria-expanded", String(open));
+}
+
+var isMobile = window.matchMedia("(max-width: 719px)").matches;
+var stored = localStorage.getItem("rail-open");
+setRail(isMobile ? false : stored !== "0");
+
+btn.addEventListener("click", function () {
+  setRail(!bodyEl.classList.contains("rail-open"));
+  localStorage.setItem("rail-open", bodyEl.classList.contains("rail-open") ? "1" : "0");
+});
+overlay.addEventListener("click", function () {
+  setRail(false);
+});
+</script>` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -46,11 +72,12 @@ export function layout(
 <script src="/public/htmx.min.js" defer></script>
 </head>
 <body>
-${rail(active)}
+${railHtml}
 <main class="content">
 <h1 class="page-title">${esc(title)}</h1>
 ${body}
 </main>
+${script}
 </body>
 </html>`;
 }

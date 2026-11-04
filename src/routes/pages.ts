@@ -58,16 +58,16 @@ pages.get("/logs", async (c) => {
       <p class="muted">Loading…</p>
     </div>
     <h2 class="section-title">Previous runs</h2>
-    <table><thead><tr><th>Run</th><th>Started</th><th>Finished</th><th></th></tr></thead>
-    <tbody>${list}</tbody></table>`;
+    <div class="table-wrap"><table><thead><tr><th>Run</th><th>Started</th><th>Finished</th><th></th></tr></thead>
+    <tbody>${list}</tbody></table></div>`;
   return c.html(layout("Logs", body, "logs"));
 });
 
 pages.get("/errors", (c) => {
-  const body = `<table>
-    <thead><tr><th>Archive</th><th>Kind</th><th>Updated</th><th></th></tr></thead>
-    <tbody hx-get="/errors/fragment" hx-trigger="load, every 5s" hx-swap="innerHTML">
-      <tr><td colspan="4" class="muted">Loading…</td></tr>
-    </tbody></table>`;
+  const body = `<div class="table-wrap"><table>
+      <thead><tr><th>Archive</th><th>Kind</th><th>Updated</th><th></th></tr></thead>
+      <tbody hx-get="/errors/fragment" hx-trigger="load, every 5s" hx-swap="innerHTML">
+        <tr><td colspan="4" class="muted">Loading…</td></tr>
+      </tbody></table></div>`;
   return c.html(layout("Errors", body, "errors"));
 });
