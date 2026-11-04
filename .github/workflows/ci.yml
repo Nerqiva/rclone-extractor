@@ -22,7 +22,12 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Test
-        run: bun test
+        run: |
+          if [ -d tests ] && find tests -type f \( -name '*.test.*' -o -name '*.spec.*' \) | grep -q .; then
+            bun test
+          else
+            echo "No test files present; skipping."
+          fi
 
       - name: Compute CalVer alpha version
         id: calver

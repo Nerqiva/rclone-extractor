@@ -2,4 +2,3 @@ node_modules
 data
 rclone.conf
 *.log
-tests
