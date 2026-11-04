@@ -1,8 +1,9 @@
 import { Hono } from "hono";
-import { db, setSetting, allSettings } from "../db";
+import { store, setSetting, allSettings, getSetting } from "../db";
 import { engineState, runEngine, stopEngine } from "../engine";
-import { DATA_DIR } from "../config";
 import { esc } from "../ui";
+import { encryptionEnabled } from "../crypto";
+import { APP_PASSWORD } from "../config";
 
 export const actions = new Hono();
 
@@ -18,16 +19,16 @@ export function controlsFragment(): string {
   </div>`;
 }
 
-actions.post("/run/start", (c) => {
+actions.post("/run/start", async (c) => {
   if (!engineState.running) {
-    db.exec("UPDATE archives SET status='queued' WHERE status='failed'");
-    setSetting("cancel", "0");
+    await store.run("UPDATE archives SET status='queued' WHERE status='failed'");
+    await setSetting("cancel", "0");
     void runEngine();
   }
   return c.html(controlsFragment());
 });
 
-actions.post("/run/stop", (c) => {
+actions.post("/run/stop", async (c) => {
   stopEngine();
   return c.html(controlsFragment());
 });
@@ -46,27 +47,39 @@ actions.post("/config", async (c) => {
   const form = await c.req.formData();
   for (const key of SETTING_KEYS) {
     const value = form.get(key);
-    if (value !== null) setSetting(key, String(value));
+    if (value !== null) await setSetting(key, String(value));
   }
-  setSetting("dry_run", form.get("dry_run") !== null ? "1" : "0");
-  return c.html(configForm("<p class=\"note\">Saved.</p>"));
+  await setSetting("dry_run", form.get("dry_run") !== null ? "1" : "0");
+  await setSetting("resume", form.get("resume") !== null ? "1" : "0");
+  return c.html(await configForm(`<p class="note">Saved.</p>`));
 });
 
 actions.post("/rclone-conf", async (c) => {
   const body = await c.req.text();
-  await Bun.write(`${DATA_DIR}/rclone.conf`, body);
-  return c.html(`<p class="note">Uploaded rclone.conf (${esc(body.length)} bytes).</p>`);
+  await setSetting("rclone_conf", body);
+  return c.html(`<p class="note">Stored rclone.conf (${esc(body.length)} bytes).</p>`);
 });
 
-export function configForm(note = ""): string {
-  const s = allSettings();
+export async function configForm(note = ""): Promise<string> {
+  const s = await allSettings();
   const sel = (v: string, o: string) => (v === o ? " selected" : "");
+  const backend = store.backend();
+  const enc = encryptionEnabled();
+  const appPassword = await getSetting("password", "");
+  const pwWorks = appPassword ? "set" : APP_PASSWORD ? "from env" : "not set";
   return `<form class="card" hx-post="/config" hx-target="#config-form" hx-swap="innerHTML" id="config-form">
   ${note}
+  <p class="muted">
+    Backend: <strong>${esc(backend)}</strong>
+    &middot; Encryption: <strong>${enc ? "on" : "off"}</strong>
+    <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">password ${esc(pwWorks)}</span>
+  </p>
   <label class="field"><span>scan_root</span>
     <input type="text" name="scan_root" value="${esc(s.scan_root ?? "")}" placeholder="remote:path or /local/path"></label>
   <label class="field"><span>remote_flags</span>
     <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--config /data/rclone.conf"></label>
+  <label class="field"><span>database_url (read-only; set the DATABASE_URL env var and restart to switch)</span>
+    <input type="text" name="database_url" value="${esc(s.database_url ?? "")}" placeholder="postgres://user:pass@host:5432/db?sslmode=require" readonly disabled></label>
   <div class="field-row" style="display:flex;gap:14px;flex-wrap:wrap">
     <label class="field" style="flex:1"><span>queue_max</span>
       <input type="number" name="queue_max" value="${esc(s.queue_max ?? "500")}"></label>
@@ -88,6 +101,7 @@ export function configForm(note = ""): string {
   <label class="field"><span>password</span>
     <input type="text" name="password" value="${esc(s.password ?? "")}"></label>
   <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run</label>
+  <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> Continue previous task (resume after crash/failure)</label>
   <div class="btn-row">
     <button class="btn primary" type="submit">Save</button>
   </div>

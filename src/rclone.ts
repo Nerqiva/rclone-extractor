@@ -1,6 +1,7 @@
-import { appendFileSync } from "node:fs";
 import { getSetting } from "./db";
+import { store } from "./db";
 import { isSupported } from "./archive";
+import { RCLONE_CONF_PATH } from "./config";
 
 export type Outcome = { code: number; tail: string[]; stderr: string };
 
@@ -11,14 +12,18 @@ export class Rclone {
     public flags: string[],
   ) {}
 
-  static fromSettings(): Rclone {
-    const root = getSetting("scan_root", "") ?? "";
-    const flagsRaw = getSetting("remote_flags", "") ?? "";
+  static async fromSettings(): Promise<Rclone> {
+    const root = (await getSetting("scan_root", "")) ?? "";
+    const flagsRaw = (await getSetting("remote_flags", "")) ?? "";
     const flags = flagsRaw.split(/\s+/).filter((f) => f.length > 0);
+
+    const conf = (await getSetting("rclone_conf", "")) ?? "";
+    if (conf) await Bun.write(RCLONE_CONF_PATH, conf);
+
     return new Rclone("rclone", root, flags);
   }
 
-  async list(onFile: (rel: string, size: number) => void): Promise<void> {
+  async list(onFile: (rel: string, size: number) => void | Promise<void>): Promise<void> {
     const args = [
       "lsf",
       this.root,
@@ -49,11 +54,15 @@ export class Rclone {
       if (!path) continue;
       const name = path.slice(path.lastIndexOf("/") + 1);
       if (!isSupported(name)) continue;
-      onFile(path, Number(size));
+      await onFile(path, Number(size));
     }
   }
 
-  async run(args: string[], dry: boolean, logFile: string): Promise<Outcome> {
+  async run(
+    args: string[],
+    dry: boolean,
+    ref: { scope: "archive"; refId: number; kind: "rclone" | "extract" },
+  ): Promise<Outcome> {
     const full = [...args, ...this.flags];
     if (dry) full.push("--dry-run");
     const proc = Bun.spawn([this.bin, ...full], {
@@ -67,7 +76,13 @@ export class Rclone {
 
     const combined = `${out}${err}`.split("\n").filter((l) => l.length > 0);
     const stamp = new Date().toISOString();
-    appendFileSync(logFile, combined.map((l) => `${stamp} ${l}`).join("\n") + (combined.length ? "\n" : ""));
+    let seq = 0;
+    for (const line of combined) {
+      await store.run(
+        "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        [ref.scope, ref.refId, ref.kind, seq++, stamp, null, line],
+      );
+    }
 
     return { code, tail: combined.slice(-40), stderr: err };
   }
@@ -76,7 +91,7 @@ export class Rclone {
     rel: string,
     tmp: string,
     dry: boolean,
-    logFile: string,
+    ref: { scope: "archive"; refId: number; kind: "rclone" | "extract" },
   ): Promise<Outcome> {
     return this.run(
       [
@@ -89,7 +104,7 @@ export class Rclone {
         "--stats-one-line",
       ],
       dry,
-      logFile,
+      ref,
     );
   }
 
@@ -97,7 +112,7 @@ export class Rclone {
     rel: string,
     tmp: string,
     dry: boolean,
-    logFile: string,
+    ref: { scope: "archive"; refId: number; kind: "rclone" | "extract" },
   ): Promise<Outcome> {
     const idx = rel.lastIndexOf("/");
     const parent = idx === -1 ? "" : rel.slice(0, idx);
@@ -109,28 +124,28 @@ export class Rclone {
         "--delete-empty-src-dirs",
       ],
       dry,
-      logFile,
+      ref,
     );
   }
 
-  async cleanup(tmp: string, dry: boolean, logFile: string): Promise<Outcome> {
-    return this.run(["purge", `${this.root}/${tmp}`], dry, logFile);
+  async cleanup(
+    tmp: string,
+    dry: boolean,
+    ref: { scope: "archive"; refId: number; kind: "rclone" | "extract" },
+  ): Promise<Outcome> {
+    return this.run(["purge", `${this.root}/${tmp}`], dry, ref);
   }
 
   async trash(
     rel: string,
     subdir: string,
     dry: boolean,
-    logFile: string,
+    ref: { scope: "archive"; refId: number; kind: "rclone" | "extract" },
   ): Promise<Outcome> {
     return this.run(
-      [
-        "moveto",
-        `${this.root}/${rel}`,
-        `${this.root}/${subdir}/${rel}`,
-      ],
+      ["moveto", `${this.root}/${rel}`, `${this.root}/${subdir}/${rel}`],
       dry,
-      logFile,
+      ref,
     );
   }
 }

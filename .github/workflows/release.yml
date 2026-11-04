@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute CalVer alpha version
+        id: calver
+        run: |
+          set -euo pipefail
+          # Skip automated version-bump commits to avoid re-releasing.
+          MSG="$(git log -1 --pretty=%s)"
+          if echo "$MSG" | grep -qE '^chore\(release\):'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping: latest commit is an automated release bump ($MSG)"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          DATE="$(date -u +%Y.%m.%d)"
+          # Count existing tags for today's date to build the per-day counter.
+          COUNT="$(git tag -l "v${DATE}.*" | wc -l | tr -d ' ')"
+          NEXT=$((COUNT + 1))
+          VERSION="${DATE}.${NEXT}-alpha"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION}"
+
+      - name: Sync version into VERSION and package.json
+        if: steps.calver.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.calver.outputs.version }}"
+          echo "$VERSION" > VERSION
+          if command -v jq >/dev/null 2>&1; then
+            jq --arg v "$VERSION" '.version = $v' package.json > package.json.tmp
+            mv package.json.tmp package.json
+          else
+            # Fallback without jq: replace the version line only.
+            sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")/\1${VERSION}\2/" package.json
+          fi
+
+      - name: Commit version bump
+        if: steps.calver.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION package.json
+          if git diff --cached --quiet; then
+            echo "No version changes to commit"
+          else
+            git commit -m "chore(release): ${{ steps.calver.outputs.version }} [skip ci]"
+            git push
+          fi
+
+      - name: Create prerelease
+        if: steps.calver.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.calver.outputs.tag }}" \
+            --target "$(git rev-parse HEAD)" \
+            --title "${{ steps.calver.outputs.version }}" \
+            --notes "Automated **alpha** prerelease.
+
+          - Version: \`${{ steps.calver.outputs.version }}\`
+          - CalVer date: \`${{ steps.calver.outputs.date }}\`
+          - Stability: \`alpha\`
+          - Commit: \`$(git rev-parse HEAD)\`" \
+            --prerelease
+

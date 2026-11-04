@@ -24,6 +24,15 @@ jobs:
       - name: Test
         run: bun test
 
+      - name: Compute CalVer alpha version
+        id: calver
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y.%m.%d)"
+          COUNT="$(git tag -l "v${DATE}.*" | wc -l | tr -d ' ')"
+          NEXT=$((COUNT + 1))
+          echo "version=${DATE}.${NEXT}-alpha" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -37,12 +46,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.calver.outputs.version }}
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

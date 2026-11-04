@@ -1,13 +1,21 @@
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { BIND, PORT } from "./config";
-import "./db";
+import { initDb, store, getSetting } from "./db";
+import { recoverStale } from "./engine";
 import { auth, authMiddleware } from "./routes/auth";
 import { pages } from "./routes/pages";
 import { dashboard } from "./routes/dashboard";
 import { actions } from "./routes/actions";
 import { logsapi } from "./routes/logsapi";
 import { data } from "./routes/data";
+
+await initDb();
+
+if ((await getSetting("resume", "1")) === "1") {
+  const recovered = await recoverStale();
+  if (recovered > 0) console.log(`boot: recovered ${recovered} stale archive(s)`);
+}
 
 const app = new Hono();
 
@@ -24,10 +32,10 @@ app.route("/", actions);
 app.route("/", logsapi);
 app.route("/", data);
 
+console.log(`rclone-extractor listening on http://${BIND}:${PORT} (db=${store.backend()})`);
+
 export default {
   port: PORT,
   hostname: BIND,
   fetch: app.fetch,
 };
-
-console.log(`rclone-extractor listening on http://${BIND}:${PORT}`);

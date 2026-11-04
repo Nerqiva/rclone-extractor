@@ -1,7 +1,7 @@
-import { Logger, logPath } from "./log";
-import { db, getSetting, setSetting } from "./db";
+import { Logger } from "./log";
+import { store, getSetting, setSetting } from "./db";
 import { Rclone } from "./rclone";
-import { parentRel, tmpRel, trashRel } from "./archive";
+import { tmpRel } from "./archive";
 
 export const engineState = {
   running: false,
@@ -16,11 +16,23 @@ export const engineState = {
 };
 
 export function stopEngine(): void {
-  setSetting("cancel", "1");
+  void setSetting("cancel", "1");
 }
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/** Reset archives left mid-extraction by a crash back to the queue. */
+export async function recoverStale(): Promise<number> {
+  const before = await store.query<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM archives WHERE status='extracting'",
+  );
+  const n = Number(before[0]?.c ?? 0);
+  if (n > 0) {
+    await store.run("UPDATE archives SET status='queued' WHERE status='extracting'");
+  }
+  return n;
 }
 
 export async function runEngine(): Promise<void> {
@@ -34,7 +46,7 @@ export async function runEngine(): Promise<void> {
   engineState.failed = 0;
   engineState.skipped = 0;
 
-  const scanRoot = getSetting("scan_root", "") ?? "";
+  const scanRoot = (await getSetting("scan_root", "")) ?? "";
   if (!scanRoot) {
     engineState.stage = "error";
     engineState.lastError = "scan_root not set";
@@ -42,21 +54,25 @@ export async function runEngine(): Promise<void> {
     return;
   }
 
-  setSetting("cancel", "0");
+  await setSetting("cancel", "0");
 
   let runRowId = 0;
   let logger: Logger | null = null;
 
   try {
-    const startedAt = now();
-    const ins = db
-      .query("INSERT INTO runs(started_at, total) VALUES(?, 0)")
-      .run(startedAt);
-    runRowId = Number(ins.lastInsertRowid);
+    if ((await getSetting("resume", "1")) === "1") {
+      const recovered = await recoverStale();
+      if (recovered > 0) console.log(`resumed ${recovered} stale archive(s)`);
+    }
 
-    const stamp = startedAt.replace(/[:.]/g, "-");
-    const runName = `run-${runRowId}-${stamp}.log`;
-    logger = new Logger(logPath(runName));
+    const startedAt = now();
+    runRowId = await store.insertReturningId(
+      "INSERT INTO runs(started_at, total) VALUES(?, 0)",
+      [startedAt],
+    );
+    await setSetting("last_run_id", String(runRowId));
+
+    logger = new Logger({ scope: "run", refId: runRowId, kind: "main" });
     logger.info(`run ${runRowId} started`);
 
     engineState.runId = runRowId;
@@ -64,92 +80,97 @@ export async function runEngine(): Promise<void> {
     logger.info(`scan_root=${scanRoot}`);
     engineState.stage = "listing";
 
-    const rc = Rclone.fromSettings();
-    const queueMax = Number(getSetting("queue_max", "500") ?? "500");
+    const rc = await Rclone.fromSettings();
+    const queueMax = Number((await getSetting("queue_max", "500")) ?? "500");
     let queued = 0;
     const createdAt = now();
-    const insertArchive = db.query(
-      "INSERT OR IGNORE INTO archives(path, size, status, created_at, updated_at) VALUES(?, ?, 'queued', ?, ?)",
-    );
-    await rc.list((rel, size) => {
+    await rc.list(async (rel, size) => {
       if (queued >= queueMax) return;
-      insertArchive.run(rel, size, createdAt, createdAt);
+      await store.run(
+        "INSERT OR IGNORE INTO archives(path, size, status, created_at, updated_at) VALUES(?, ?, 'queued', ?, ?)",
+        [rel, size, createdAt, createdAt],
+      );
       queued++;
     });
     logger.info(`listing complete: ${queued} archives queued`);
 
     engineState.stage = "queueing";
-    const sortBy = getSetting("sort_by", "path") === "size" ? "size" : "path";
-    const sortDir = getSetting("sort_dir", "asc") === "desc" ? "DESC" : "ASC";
-    const rows = db
-      .query(
-        `SELECT id, path, size FROM archives WHERE status='queued' ORDER BY ${sortBy} ${sortDir}`,
-      )
-      .all() as { id: number; path: string; size: number }[];
+    const sortBy = (await getSetting("sort_by", "path")) === "size" ? "size" : "path";
+    const sortDir = (await getSetting("sort_dir", "asc")) === "desc" ? "DESC" : "ASC";
+    const rows = await store.query<{ id: number; path: string; size: number }>(
+      `SELECT id, path, size FROM archives WHERE status='queued' ORDER BY ${sortBy} ${sortDir}`,
+    );
 
-    db.query("UPDATE runs SET total=? WHERE id=?").run(rows.length, runRowId);
+    await store.run("UPDATE runs SET total=? WHERE id=?", [rows.length, runRowId]);
     engineState.total = rows.length;
     logger.info(`queue size ${rows.length}`);
 
     engineState.stage = "extracting";
-    const dryRun = (getSetting("dry_run", "0") ?? "0") === "1";
-    const trashSubdir = getSetting("trash_subdir", "trash") ?? "trash";
+    const dryRun = (await getSetting("dry_run", "0")) === "1";
+    const trashSubdir = (await getSetting("trash_subdir", "trash")) ?? "trash";
 
     for (const row of rows) {
-      if ((getSetting("cancel", "0") ?? "0") === "1") {
+      if ((await getSetting("cancel", "0")) === "1") {
         logger.info("cancel requested, stopping");
         break;
       }
 
       const rel = row.path;
       engineState.currentRel = rel;
-      db.query("UPDATE archives SET status='extracting', updated_at=? WHERE id=?").run(
-        now(),
-        row.id,
+      await store.run(
+        "UPDATE archives SET status='extracting', updated_at=? WHERE id=?",
+        [now(), row.id],
       );
 
       const tmp = tmpRel(rel, runRowId);
-      const extractLog = logPath(`archive-${row.id}-extract.log`);
+      const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
 
-      const ex = await rc.extract(rel, tmp, dryRun, extractLog);
-      db.query(
+      const ex = await rc.extract(rel, tmp, dryRun, ref);
+      await store.run(
         "INSERT OR REPLACE INTO logs(archive_id, kind, rel_path) VALUES(?, 'extract', ?)",
-      ).run(row.id, extractLog);
+        [row.id, `archive-${row.id}-extract.log`],
+      );
 
       if (ex.code !== 0) {
         const all = `${ex.tail.join("\n")}\n${ex.stderr}`;
         if (/password/i.test(all)) {
-          db.query(
+          await store.run(
             "UPDATE archives SET status='skipped', error_kind='password', updated_at=? WHERE id=?",
-          ).run(now(), row.id);
+            [now(), row.id],
+          );
           logger.warn(`skipped (password): ${rel}`);
           engineState.skipped++;
         } else {
-          await rc.cleanup(tmp, dryRun, extractLog);
-          db.query(
+          await rc.cleanup(tmp, dryRun, ref);
+          await store.run(
             "UPDATE archives SET status='failed', error_kind='extract', updated_at=? WHERE id=?",
-          ).run(now(), row.id);
+            [now(), row.id],
+          );
           logger.error(`extract failed: ${rel}`, ex.tail.join("\n"));
           engineState.failed++;
         }
       } else {
-        await rc.promote(rel, tmp, dryRun, extractLog);
-        await rc.cleanup(tmp, dryRun, extractLog);
-        await rc.trash(rel, trashSubdir, dryRun, extractLog);
-        db.query(
+        await rc.promote(rel, tmp, dryRun, ref);
+        await rc.cleanup(tmp, dryRun, ref);
+        await rc.trash(rel, trashSubdir, dryRun, ref);
+        await store.run(
           "UPDATE archives SET status='done', error_kind=NULL, updated_at=? WHERE id=?",
-        ).run(now(), row.id);
+          [now(), row.id],
+        );
         logger.info(`done: ${rel}`);
         engineState.done++;
       }
 
-      db.query(
-        "UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?",
-      ).run(engineState.done, engineState.failed, engineState.skipped, runRowId);
+      await store.run("UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?", [
+        engineState.done,
+        engineState.failed,
+        engineState.skipped,
+        runRowId,
+      ]);
     }
 
     engineState.stage = "finished";
-    db.query("UPDATE runs SET finished_at=? WHERE id=?").run(now(), runRowId);
+    await store.run("UPDATE runs SET finished_at=? WHERE id=?", [now(), runRowId]);
     logger.info(
       `run ${runRowId} finished: done=${engineState.done} failed=${engineState.failed} skipped=${engineState.skipped}`,
     );
@@ -157,7 +178,9 @@ export async function runEngine(): Promise<void> {
     engineState.lastError = String(e);
     engineState.stage = "error";
     logger?.error("engine error", String(e));
-    if (runRowId) db.query("UPDATE runs SET finished_at=? WHERE id=?").run(now(), runRowId);
+    if (runRowId) {
+      await store.run("UPDATE runs SET finished_at=? WHERE id=?", [now(), runRowId]);
+    }
   } finally {
     engineState.running = false;
     engineState.currentRel = "";

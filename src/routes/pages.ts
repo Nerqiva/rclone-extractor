@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { readdirSync, statSync, existsSync } from "node:fs";
+import { store } from "../db";
 import { layout, esc } from "../ui";
 import { configForm } from "./actions";
-import { LOG_DIR } from "../config";
+import { encryptionEnabled } from "../crypto";
 
 export const pages = new Hono();
 
@@ -19,50 +19,46 @@ pages.get("/", (c) =>
   ),
 );
 
-pages.get("/config", (c) => {
+pages.get("/config", async (c) => {
   const extra = `<div class="card">
     <h2 class="section-title" style="margin-top:0">Backup</h2>
     <form method="post" action="/export">
-      <label class="check"><input type="checkbox" name="include_rclone" value="1"> include rclone.conf</label>
-      <button class="btn" type="submit">Export .tar.gz</button>
+      <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, password, database_url)</label>
+      <button class="btn" type="submit">Export JSON</button>
     </form>
     <form style="margin-top:14px" method="post" action="/import" enctype="multipart/form-data">
-      <label class="field"><span>Import backup</span><input type="file" name="archive" accept=".gz,.tgz"></label>
-      <button class="btn danger" type="submit">Import (replaces DB)</button>
+      <label class="field"><span>Import backup (.json)</span><input type="file" name="archive" accept=".json"></label>
+      <button class="btn danger" type="submit">Import (replaces data)</button>
     </form>
+    ${
+      encryptionEnabled()
+        ? ""
+        : `<p class="muted">Set the <code>SECRET_KEY</code> env var to encrypt stored secrets.</p>`
+    }
   </div>`;
-  return c.html(layout("Configuration", configForm() + extra, "config"));
+  return c.html(layout("Configuration", (await configForm()) + extra, "config"));
 });
 
-pages.get("/logs", (c) => {
-  const files = existsSync(LOG_DIR)
-    ? readdirSync(LOG_DIR)
-        .filter((f) => /^run-.*\.log$/.test(f))
-        .map((f) => ({
-          name: f,
-          mtime: new Date(statSync(`${LOG_DIR}/${f}`).mtimeMs).toISOString(),
-        }))
-        .sort((a, b) => (a.mtime < b.mtime ? 1 : -1))
-    : [];
-  const idOf = (name: string) => {
-    const m = name.match(/^run-(\d+)-/);
-    return m ? m[1] : "0";
-  };
-  const list = files.length
-    ? files
+pages.get("/logs", async (c) => {
+  const runs = await store.query<{ id: number; started_at: string; finished_at: string | null }>(
+    "SELECT id, started_at, finished_at FROM runs ORDER BY id DESC LIMIT 50",
+  );
+  const list = runs.length
+    ? runs
         .map(
-          (f) =>
-            `<tr><td>${esc(f.name)}</td><td class="muted">${esc(f.mtime)}</td>
-        <td><a href="/download/run/${idOf(f.name)}">download</a></td></tr>`,
+          (r) =>
+            `<tr><td>run ${r.id}</td><td class="muted">${esc(r.started_at)}</td>
+        <td class="muted">${esc(r.finished_at ?? "in progress")}</td>
+        <td><a href="/download/run/${r.id}">download</a></td></tr>`,
         )
         .join("")
-    : `<tr><td colspan="3" class="muted">No runs yet.</td></tr>`;
+    : `<tr><td colspan="4" class="muted">No runs yet.</td></tr>`;
 
   const body = `<div hx-get="/logs/fragment" hx-trigger="load, every 1s" hx-swap="innerHTML">
       <p class="muted">Loading…</p>
     </div>
     <h2 class="section-title">Previous runs</h2>
-    <table><thead><tr><th>File</th><th>Modified</th><th></th></tr></thead>
+    <table><thead><tr><th>Run</th><th>Started</th><th>Finished</th><th></th></tr></thead>
     <tbody>${list}</tbody></table>`;
   return c.html(layout("Logs", body, "logs"));
 });

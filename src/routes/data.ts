@@ -1,86 +1,97 @@
 import { Hono } from "hono";
-import { existsSync, renameSync, mkdtempSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { db, allSettings, setSetting } from "../db";
-import { DATA_DIR } from "../config";
+import { store, allSettings, setSetting, SECRET_KEYS } from "../db";
+import { encryptionEnabled } from "../crypto";
 
 export const data = new Hono();
 
 data.post("/export", async (c) => {
-  db.exec("PRAGMA wal_checkpoint(FULL)");
-  await Bun.write(`${DATA_DIR}/settings.json`, JSON.stringify(allSettings(), null, 2));
-
   const form = await c.req.formData().catch(() => null);
-  const includeRclone = form?.get("include_rclone") != null;
+  const includeSecrets = form?.get("include_rclone") != null;
 
-  const members = ["app.db", "logs", "settings.json"];
-  if (includeRclone && existsSync(`${DATA_DIR}/rclone.conf`)) members.push("rclone.conf");
+  const settings = await allSettings();
+  const payload: Record<string, unknown> = {
+    version: 1,
+    exported_at: new Date().toISOString(),
+    settings: includeSecrets ? settings : omitSecrets(settings),
+    archives: await store.query("SELECT * FROM archives"),
+    runs: await store.query("SELECT * FROM runs"),
+    logs: await store.query("SELECT * FROM logs"),
+    log_lines: await store.query("SELECT * FROM log_lines"),
+  };
 
-  const p = Bun.spawn(["tar", "czf", "-", "-C", DATA_DIR, ...members], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return new Response(p.stdout, {
+  return new Response(JSON.stringify(payload, null, 2), {
     headers: {
-      "Content-Type": "application/gzip",
-      "Content-Disposition": `attachment; filename=export-${Date.now()}.tar.gz`,
+      "Content-Type": "application/json",
+      "Content-Disposition": `attachment; filename=export-${Date.now()}.json`,
     },
   });
 });
+
+function omitSecrets(settings: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(settings)) {
+    out[k] = SECRET_KEYS.has(k) ? "" : v;
+  }
+  return out;
+}
 
 data.post("/import", async (c) => {
   const form = await c.req.formData();
   const file = form.get("archive");
   if (!(file instanceof File)) return c.text("no archive uploaded", 400);
 
-  const work = mkdtempSync(join(tmpdir(), "rx-import-"));
-  const tarPath = join(work, "upload.tar.gz");
-  await Bun.write(tarPath, file);
-
-  const extractDir = join(work, "x");
-  mkdirSync(extractDir, { recursive: true });
-  const ex = Bun.spawn(["tar", "xzf", tarPath, "-C", extractDir], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const err = await new Response(ex.stderr).text();
-  const code = await ex.exited;
-  if (code !== 0) return c.text(`extract failed: ${err}`, 400);
-
-  let imported: string[] = [];
-
-  if (existsSync(`${DATA_DIR}/app.db`)) {
-    renameSync(`${DATA_DIR}/app.db`, `${DATA_DIR}/app.db.bak`);
-  }
-  const newDb = join(extractDir, "app.db");
-  if (existsSync(newDb)) {
-    await Bun.write(`${DATA_DIR}/app.db`, Bun.file(newDb));
-    imported.push("app.db");
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (e) {
+    return c.text(`invalid JSON: ${String(e)}`, 400);
   }
 
-  const newLogs = join(extractDir, "logs");
-  if (existsSync(newLogs)) {
-    const oldLogs = `${DATA_DIR}/logs.old-${Date.now()}`;
-    if (existsSync(`${DATA_DIR}/logs`)) renameSync(`${DATA_DIR}/logs`, oldLogs);
-    const mv = Bun.spawn(["cp", "-r", newLogs, `${DATA_DIR}/logs`]);
-    await mv.exited;
-    imported.push("logs");
+  const counts: string[] = [];
+
+  const settings = parsed.settings as Record<string, string> | undefined;
+  if (settings) {
+    for (const [k, v] of Object.entries(settings)) {
+      if (typeof v === "string") await setSetting(k, v);
+    }
+    counts.push(`settings`);
   }
 
-  const newSettings = join(extractDir, "settings.json");
-  if (existsSync(newSettings)) {
-    const parsed = JSON.parse(await Bun.file(newSettings).text()) as Record<string, string>;
-    for (const [k, v] of Object.entries(parsed)) setSetting(k, String(v));
-    imported.push("settings.json");
+  const archives = parsed.archives as Record<string, unknown>[] | undefined;
+  if (Array.isArray(archives)) {
+    for (const a of archives) {
+      await store.run(
+        "INSERT OR REPLACE INTO archives(id, path, size, status, error_kind, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        [a.id, a.path, a.size, a.status, a.error_kind, a.created_at, a.updated_at],
+      );
+    }
+    counts.push(`${archives.length} archives`);
   }
 
-  if (existsSync(join(extractDir, "rclone.conf"))) {
-    await Bun.write(`${DATA_DIR}/rclone.conf`, Bun.file(join(extractDir, "rclone.conf")));
-    imported.push("rclone.conf");
+  const runs = parsed.runs as Record<string, unknown>[] | undefined;
+  if (Array.isArray(runs)) {
+    for (const r of runs) {
+      await store.run(
+        "INSERT OR REPLACE INTO runs(id, started_at, finished_at, total, done, failed, skipped) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped],
+      );
+    }
+    counts.push(`${runs.length} runs`);
   }
 
+  const logLines = parsed.log_lines as Record<string, unknown>[] | undefined;
+  if (Array.isArray(logLines)) {
+    for (const l of logLines) {
+      await store.run(
+        "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        [l.scope, l.ref_id, l.kind, l.seq, l.ts, l.level, l.line],
+      );
+    }
+    counts.push(`${logLines.length} log lines`);
+  }
+
+  const enc = encryptionEnabled() ? "Secrets re-encrypted with the current key." : "Encryption off: secrets stored in plaintext.";
   return c.html(
-    `<p class="note">Imported: ${imported.join(", ") || "nothing"}. Backup at app.db.bak. Restart to load the new database.</p>`,
+    `<p class="note">Imported ${counts.join(", ") || "nothing"}. ${enc}</p>`,
   );
 });

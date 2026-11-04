@@ -345,6 +345,10 @@ textarea {
   color: var(--err);
   margin: 8px 0 0;
 }
+.warn-line {
+  color: var(--warn);
+  margin: 8px 0 0;
+}
 
 /* ---- tables ---- */
 table {
