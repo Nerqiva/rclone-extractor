@@ -1,7 +1,7 @@
 import { getSetting } from "./db";
 import { store } from "./db";
 import { isSupported } from "./archive";
-import { RCLONE_CONF_PATH } from "./config";
+import { RCLONE_CONF_PATH, ensureDataDir } from "./config";
 
 export type Outcome = { code: number; tail: string[]; stderr: string };
 
@@ -18,7 +18,15 @@ export class Rclone {
     const flags = flagsRaw.split(/\s+/).filter((f) => f.length > 0);
 
     const conf = (await getSetting("rclone_conf", "")) ?? "";
-    if (conf) await Bun.write(RCLONE_CONF_PATH, conf);
+    if (conf) {
+      if (ensureDataDir()) {
+        await Bun.write(RCLONE_CONF_PATH, conf);
+      } else {
+        console.warn(
+          `could not write ${RCLONE_CONF_PATH}: data directory not writable; relying on existing rclone config`,
+        );
+      }
+    }
 
     return new Rclone("rclone", root, flags);
   }

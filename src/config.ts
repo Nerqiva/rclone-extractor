@@ -2,7 +2,6 @@ import { mkdirSync } from "node:fs";
 
 export const DATA_DIR = process.env.DATA_DIR ?? "./data";
 export const DB_PATH = `${DATA_DIR}/app.db`;
-export const LOG_DIR = `${DATA_DIR}/logs`;
 export const RCLONE_CONF_PATH = `${DATA_DIR}/rclone.conf`;
 export const BIND = process.env.BIND ?? "0.0.0.0";
 export const PORT = Number(process.env.PORT ?? 8080);
@@ -10,6 +9,15 @@ export const APP_PASSWORD = process.env.APP_PASSWORD ?? ""; // fallback only
 export const SECRET_KEY = process.env.SECRET_KEY ?? ""; // at-rest encryption passphrase
 export const DATABASE_URL = process.env.DATABASE_URL ?? ""; // remote postgres, optional
 
-mkdirSync(DATA_DIR, { recursive: true });
-mkdirSync(LOG_DIR, { recursive: true });
-mkdirSync("public", { recursive: true });
+// The local filesystem is only needed for the SQLite database and the
+// transient rclone.conf working copy. On hosts with a read-only or
+// non-writable disk (and when Postgres is used) none of this is required, so
+// directory creation is best-effort and must never crash the process.
+export function ensureDataDir(): boolean {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
