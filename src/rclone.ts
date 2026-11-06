@@ -1,4 +1,5 @@
 import { getSetting, store } from "./db";
+import { existsSync } from "node:fs";
 import { isSupported } from "./archive";
 import { RCLONE_CONF, RCLONE_CONF_PATH, ensureDataDir, RCLONE_BIN } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
@@ -174,6 +175,20 @@ async function probeRclone(): Promise<RcloneHealth> {
   }
 }
 
+function stripConfFlags(flags: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < flags.length; i++) {
+    const f = flags[i];
+    if (f === "--config") {
+      i++; // drop the value too
+      continue;
+    }
+    if (f.startsWith("--config=")) continue;
+    out.push(f);
+  }
+  return out;
+}
+
 export class Rclone {
   onCommand?: (command: string) => void;
 
@@ -182,12 +197,20 @@ export class Rclone {
     public root: string,
     public flags: string[],
     private runLog?: Logger,
+    private confPath?: string,
   ) {}
+
+  // rclone only reads a config file passed via --config. Without this the
+  // subprocess falls back to ~/.config/rclone/rclone.conf and errors with
+  // "didn't find section in config file".
+  private confArgs(): string[] {
+    return this.confPath ? ["--config", this.confPath] : [];
+  }
 
   static async fromSettings(runLog?: Logger): Promise<Rclone> {
     const root = (await getSetting("scan_root", "")) ?? "";
     const flagsRaw = (await getSetting("remote_flags", "")) ?? "";
-    const flags = flagsRaw.split(/\s+/).filter((f) => f.length > 0);
+    const flags = stripConfFlags(flagsRaw.split(/\s+/).filter((f) => f.length > 0));
 
     const storedConf = (await getSetting("rclone_conf", "")) ?? "";
     let conf = "";
@@ -211,7 +234,8 @@ export class Rclone {
       }
     }
 
-    return new Rclone(RCLONE_BIN, root, flags, runLog);
+    const confPath = existsSync(RCLONE_CONF_PATH) ? RCLONE_CONF_PATH : undefined;
+    return new Rclone(RCLONE_BIN, root, flags, runLog, confPath);
   }
 
   private announce(args: string[]): string {
@@ -251,6 +275,7 @@ export class Rclone {
   ): Promise<ListOutcome> {
     const args = [
       "lsf",
+      ...this.confArgs(),
       this.root,
       "--recursive",
       "--files-only",
@@ -313,7 +338,7 @@ export class Rclone {
   }
 
   async run(args: string[], dry: boolean, ref: RcloneRef): Promise<Outcome> {
-    const full = [...args, ...this.flags];
+    const full = [...this.confArgs(), ...args, ...this.flags];
     if (dry) full.push("--dry-run");
     const command = this.announce(full);
 

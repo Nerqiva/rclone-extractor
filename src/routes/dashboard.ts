@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { engineState } from "../engine";
-import { store } from "../db";
+import { store, getSetting } from "../db";
 import { esc } from "../ui";
 import { controlsFragment } from "./actions";
 
@@ -19,6 +19,7 @@ interface Snapshot {
   startedAt: string;
   finishedAt: string;
   lastError: string;
+  scanRoot: string;
 }
 
 const STAGE_LABEL: Record<string, string> = {
@@ -76,6 +77,7 @@ function etaLabel(processed: number, total: number, elapsedMs: number): string {
 }
 
 async function snapshot(): Promise<Snapshot> {
+  const scanRoot = (await getSetting("scan_root", "")) ?? "";
   // Prefer in-memory state while a run exists. Also surface startup errors that
   // happen before a run row can be created (for example a missing scan_root).
   if (engineState.runId > 0 || engineState.stage === "error") {
@@ -92,6 +94,7 @@ async function snapshot(): Promise<Snapshot> {
       startedAt: engineState.startedAt,
       finishedAt: engineState.finishedAt,
       lastError: engineState.lastError,
+      scanRoot,
     };
   }
 
@@ -120,6 +123,7 @@ async function snapshot(): Promise<Snapshot> {
       startedAt: "",
       finishedAt: "",
       lastError: "",
+      scanRoot,
     };
   }
 
@@ -136,6 +140,7 @@ async function snapshot(): Promise<Snapshot> {
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? "",
     lastError: "",
+    scanRoot,
   };
 }
 
@@ -161,6 +166,7 @@ export async function progressPanel(): Promise<string> {
       <div class="empty-state">
         <h2>No tasks yet</h2>
         <p class="muted">Press Start to scan the configured remote and extract archives.</p>
+        <p class="muted">Scan root: <code>${esc(s.scanRoot || "not set")}</code></p>
       </div>
     </section>`;
   }
@@ -228,6 +234,10 @@ export async function progressPanel(): Promise<string> {
     </div>
 
     <dl class="detail-grid">
+      <div>
+        <dt>Scan root</dt>
+        <dd>${esc(s.scanRoot || "—")}</dd>
+      </div>
       <div>
         <dt>Current archive</dt>
         <dd title="${esc(current)}">${esc(current)}</dd>

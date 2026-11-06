@@ -1,10 +1,13 @@
 import { Hono } from "hono";
+import { rmSync } from "node:fs";
 import { store, setSetting, allSettings } from "../db";
 import { engineState, runEngine, stopEngine } from "../engine";
 import { esc } from "../ui";
 import { encryptionEnabled } from "../crypto";
-import { APP_PASSWORD, RCLONE_CONF } from "../config";
+import { APP_PASSWORD, RCLONE_CONF, RCLONE_CONF_PATH } from "../config";
 import { normalizeRcloneConf } from "../rcloneconf";
+
+const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
 export const actions = new Hono();
 
@@ -50,10 +53,20 @@ const SETTING_KEYS = [
 actions.post("/config", async (c) => {
   const form = await c.req.formData();
 
+  const confFile = form.get("rclone_conf_file");
   const confField = form.get("rclone_conf");
   let normalizedConf: string | null = null;
-  if (confField !== null) {
-    const parsed = normalizeRcloneConf(String(confField));
+  if (confFile instanceof File && confFile.size > MAX_CONF_BYTES) {
+    return c.html(await configForm(`<p class="note err">rclone.conf is too large</p>`));
+  }
+  const source =
+    confFile instanceof File && confFile.size > 0
+      ? await confFile.text()
+      : confField === null
+        ? ""
+        : String(confField);
+  if (source.trim()) {
+    const parsed = normalizeRcloneConf(source);
     if (!parsed.ok) {
       return c.html(
         await configForm(`<p class="note err">rclone_conf: ${esc(parsed.error)}</p>`),
@@ -81,6 +94,35 @@ actions.post("/rclone-conf", async (c) => {
   return c.html(
     `<p class="note">Stored rclone.conf (${esc(Buffer.byteLength(parsed.text, "utf8"))} bytes).</p>`,
   );
+});
+
+actions.post("/config/rclone-clear", async (c) => {
+  await setSetting("rclone_conf", "");
+  try {
+    rmSync(RCLONE_CONF_PATH, { force: true });
+  } catch {}
+  return c.html(await configForm(`<p class="note">rclone.conf cleared.</p>`));
+});
+
+actions.post("/maintenance/archives", async (c) => {
+  await store.run("DELETE FROM log_lines WHERE scope='archive'");
+  await store.run("DELETE FROM logs");
+  await store.run("DELETE FROM archives");
+  return c.html(`<p class="note">Cleared archive queue.</p>`);
+});
+
+actions.post("/maintenance/runs", async (c) => {
+  await store.run("DELETE FROM log_lines WHERE scope='run'");
+  await store.run("DELETE FROM runs");
+  return c.html(`<p class="note">Cleared run history and logs.</p>`);
+});
+
+actions.post("/maintenance/all", async (c) => {
+  await store.run("DELETE FROM log_lines");
+  await store.run("DELETE FROM logs");
+  await store.run("DELETE FROM runs");
+  await store.run("DELETE FROM archives");
+  return c.html(`<p class="note">Cleared all task data and logs.</p>`);
 });
 
 function settingRow(
@@ -131,16 +173,15 @@ export async function configForm(note = ""): Promise<string> {
   const confLabel = !effectiveConf
     ? "not set"
     : storedConf
-      ? `set (${storedConf.length} base64 chars)`
-      : `from RCLONE_CONF env (${RCLONE_CONF.length} base64 chars)`;
-  return `<form class="card" hx-post="/config" hx-target="#config-form" hx-swap="outerHTML" id="config-form">
+      ? "set"
+      : "from RCLONE_CONF env";
+  return `<form class="card" hx-post="/config" hx-encoding="multipart/form-data" hx-target="#config-form" hx-swap="outerHTML" id="config-form">
   ${note}
   <p class="muted">
     Backend: <strong>${esc(backend)}</strong>
     &middot; Encryption: <strong>${enc ? "on" : "off"}</strong>
     <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">APP_PASSWORD ${esc(pwWorks)}</span>
   </p>
-  <p class="muted">Login is controlled by the <code>APP_PASSWORD</code> environment variable and is never stored in the database.</p>
   ${settingRow(
     "scan_root",
     s.scan_root || "not set",
@@ -149,13 +190,13 @@ export async function configForm(note = ""): Promise<string> {
     { unset: !s.scan_root },
   )}
   <label class="field"><span>remote_flags</span>
-    <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--config /data/rclone.conf"></label>
+    <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list"></label>
   ${settingRow(
     "rclone_conf",
     confLabel,
-    `<label class="field"><span>rclone_conf (base64)</span>
-      <textarea name="rclone_conf" rows="5" spellcheck="false" placeholder="base64-encoded rclone.conf">${esc(storedConf)}</textarea></label>
-    <p class="muted">Paste a base64-encoded rclone.conf, or a plain INI config. Generate it with <code>base64 -w0 rclone.conf</code>.</p>`,
+    `<label class="field"><span>rclone.conf</span>
+      <input type="file" name="rclone_conf_file" accept=".conf,text/plain"></label>
+    <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML">Clear stored config</button>`,
     { unset: !effectiveConf },
   )}
   ${settingRow(

@@ -16,6 +16,7 @@ export const engineState = {
   startedAt: "",
   finishedAt: "",
   lastError: "",
+  scanRoot: "",
 };
 
 export function stopEngine(): void {
@@ -68,6 +69,7 @@ export async function runEngine(): Promise<void> {
   engineState.finishedAt = "";
 
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
+  engineState.scanRoot = scanRoot;
   if (!scanRoot) {
     engineState.stage = "error";
     engineState.lastError = "scan_root not set";

@@ -55,6 +55,16 @@ pages.get("/config", async (c) => {
         : `<p class="muted">Set the <code>SECRET_KEY</code> env var to encrypt stored secrets.</p>`
     }
   </div>
+  <div class="card">
+    <h2 class="section-title" style="margin-top:0">Maintenance</h2>
+    <p class="muted">Remove task data from the database. This cannot be undone.</p>
+    <div class="btn-row">
+      <button class="btn" hx-post="/maintenance/archives" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear the archive queue?">Clear archives</button>
+      <button class="btn" hx-post="/maintenance/runs" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear run history and logs?">Clear runs</button>
+      <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear ALL task data and logs?">Clear everything</button>
+    </div>
+    <div id="maintenance-result"></div>
+  </div>
   <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
   <script>
   (function () {
