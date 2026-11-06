@@ -38,13 +38,18 @@ function omitSecrets(settings: Record<string, string>): Record<string, string> {
 data.post("/import", async (c) => {
   const form = await c.req.formData();
   const file = form.get("archive");
-  if (!(file instanceof File)) return c.text("no archive uploaded", 400);
+  if (!(file instanceof File)) {
+    return c.json({ ok: false, message: "no archive uploaded" }, 400);
+  }
 
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(await file.text());
   } catch (e) {
-    return c.text(`invalid JSON: ${String(e)}`, 400);
+    return c.json({ ok: false, message: `invalid JSON: ${String(e)}` }, 400);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return c.json({ ok: false, message: "invalid backup: expected a JSON object" }, 400);
   }
 
   const counts: string[] = [];
@@ -90,8 +95,11 @@ data.post("/import", async (c) => {
     counts.push(`${logLines.length} log lines`);
   }
 
-  const enc = encryptionEnabled() ? "Secrets re-encrypted with the current key." : "Encryption off: secrets stored in plaintext.";
-  return c.html(
-    `<p class="note">Imported ${counts.join(", ") || "nothing"}. ${enc}</p>`,
-  );
+  const enc = encryptionEnabled()
+    ? "Secrets re-encrypted with the current key."
+    : "Encryption off: secrets stored in plaintext.";
+  return c.json({
+    ok: true,
+    message: `Imported ${counts.join(", ") || "nothing"}. ${enc}`,
+  });
 });

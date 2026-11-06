@@ -108,6 +108,9 @@ SECRET_KEY=change-me-too               # passphrase for encrypting stored secret
 DATABASE_URL=                          # e.g. postgres://user:pass@host:5432/db?sslmode=require
 DATA_DIR=/app/data                      # SQLite file + working rclone.conf (only used for SQLite)
 
+# --- rclone config (optional; base64-encoded rclone.conf) ---
+RCLONE_CONF=                            # generate with: base64 -w0 rclone.conf
+
 # --- http ---
 BIND=0.0.0.0                           # bind address
 PORT=8080                              # listen port
@@ -130,6 +133,7 @@ database. They can also be seeded from environment variables.
 |---|---|---|
 | `APP_PASSWORD` | *(empty)* | Fallback login password, seeded into settings on first boot. |
 | `SECRET_KEY` | *(empty)* | Passphrase for encrypting stored secrets. **Omit to disable encryption.** |
+| `RCLONE_CONF` | *(empty)* | Base64-encoded `rclone.conf`, used as a fallback when the stored `rclone_conf` setting is empty. Generate with `base64 -w0 rclone.conf`. |
 | `DATABASE_URL` | *(empty)* | Postgres connection string. When empty, SQLite at `DATA_DIR/app.db` is used. |
 | `DATA_DIR` | `/app/data` | Directory for the SQLite file and the working `rclone.conf`. Only needed when using SQLite. |
 | `BIND` | `0.0.0.0` | HTTP bind address. |
@@ -148,7 +152,11 @@ database. They can also be seeded from environment variables.
 | `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start. |
 | `password` | Login password (encrypted at rest when `SECRET_KEY` is set). |
-| `rclone_conf` | Uploaded rclone config (encrypted at rest). |
+| `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. |
+
+Most settings are shown as compact rows on the Configuration page. Click **Edit**
+to unfold a field, then **Save**. `remote_flags` stays permanently visible, and
+`database_url` is read-only because it is controlled by the environment.
 
 ### Switching between SQLite and Postgres
 
@@ -300,6 +308,8 @@ On the Configuration page:
   on import.
 - **Import** reads a previously exported JSON and merges it into the active
   database.
+- Both actions run in place: a spinner shows progress and a toast reports the
+  result without navigating away from the Configuration page.
 
 The export is backend-independent, so it can move data between SQLite and
 Postgres.

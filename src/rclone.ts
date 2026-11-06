@@ -1,7 +1,8 @@
 import { getSetting } from "./db";
 import { store } from "./db";
 import { isSupported } from "./archive";
-import { RCLONE_CONF_PATH, ensureDataDir } from "./config";
+import { RCLONE_CONF, RCLONE_CONF_PATH, ensureDataDir } from "./config";
+import { normalizeRcloneConf } from "./rcloneconf";
 
 export type Outcome = { code: number; tail: string[]; stderr: string };
 
@@ -17,7 +18,18 @@ export class Rclone {
     const flagsRaw = (await getSetting("remote_flags", "")) ?? "";
     const flags = flagsRaw.split(/\s+/).filter((f) => f.length > 0);
 
-    const conf = (await getSetting("rclone_conf", "")) ?? "";
+    const storedConf = (await getSetting("rclone_conf", "")) ?? "";
+    let conf = "";
+    for (const candidate of [storedConf, RCLONE_CONF]) {
+      if (!candidate) continue;
+      const parsed = normalizeRcloneConf(candidate);
+      if (parsed.ok && parsed.text) {
+        conf = parsed.text;
+        break;
+      }
+      if (!parsed.ok) console.warn(`ignoring invalid rclone_conf: ${parsed.error}`);
+    }
+
     if (conf) {
       if (ensureDataDir()) {
         await Bun.write(RCLONE_CONF_PATH, conf);

@@ -12,6 +12,14 @@ to `main`.
 ## [Unreleased]
 
 ### Added
+- Base64-encoded rclone config support. The new `RCLONE_CONF` environment
+  variable and the Configuration page's `rclone_conf` editor both accept a
+  base64 `rclone.conf`; legacy plain INI values keep working.
+- Edit-in-place rows on the Configuration page. Each setting shows its current
+  value with an **Edit** button that unfolds the input, while `remote_flags`
+  stays permanently visible.
+- Import/export now show an inline spinner and toast instead of navigating to a
+  result page.
 - Pluggable database backends: SQLite (`bun:sqlite`, default) and remote
   **PostgreSQL** (`Bun.SQL`) behind a single async `Store` interface in
   `src/db/`. The backend is selected at startup via `DATABASE_URL`; the schema
