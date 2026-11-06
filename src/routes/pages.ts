@@ -3,17 +3,20 @@ import { store } from "../db";
 import { layout, esc } from "../ui";
 import { configForm } from "./actions";
 import { encryptionEnabled } from "../crypto";
+import { engineState } from "../engine";
 
 export const pages = new Hono();
 
 pages.get("/", (c) =>
   c.html(
     layout(
-      "Dashboard",
-      `<div hx-get="/dashboard/fragment" hx-trigger="load, every 1s" hx-swap="innerHTML">
-        <p class="muted">Loading…</p>
+      "Task progress",
+      `<div class="page-toolbar">
+        <div id="controls" hx-get="/dashboard/controls" hx-trigger="load" hx-swap="outerHTML"></div>
       </div>
-      <div id="controls" hx-get="/dashboard/controls" hx-trigger="load" hx-swap="outerHTML"></div>`,
+      <div hx-get="/dashboard/fragment" hx-trigger="load, every 1s" hx-swap="innerHTML">
+        <p class="muted">Loading…</p>
+      </div>`,
       "dashboard",
     ),
   ),
@@ -23,7 +26,7 @@ pages.get("/config", async (c) => {
   const extra = `<div class="card">
     <h2 class="section-title" style="margin-top:0">Backup</h2>
     <form id="export-form" method="post" action="/export">
-      <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, password, database_url)</label>
+      <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, database_url)</label>
       <button class="btn" type="submit" data-loading-label="Exporting…"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Export JSON</span></button>
     </form>
     <form id="import-form" style="margin-top:14px" method="post" action="/import" enctype="multipart/form-data">
@@ -154,26 +157,90 @@ pages.get("/config", async (c) => {
 });
 
 pages.get("/logs", async (c) => {
-  const runs = await store.query<{ id: number; started_at: string; finished_at: string | null }>(
-    "SELECT id, started_at, finished_at FROM runs ORDER BY id DESC LIMIT 50",
-  );
-  const list = runs.length
-    ? runs
-        .map(
-          (r) =>
-            `<tr><td>run ${r.id}</td><td class="muted">${esc(r.started_at)}</td>
-        <td class="muted">${esc(r.finished_at ?? "in progress")}</td>
-        <td><a href="/download/run/${r.id}">download</a></td></tr>`,
-        )
-        .join("")
-    : `<tr><td colspan="4" class="muted">No runs yet.</td></tr>`;
+  const runs = await store.query<{
+    id: number;
+    started_at: string;
+    finished_at: string | null;
+  }>("SELECT id, started_at, finished_at FROM runs ORDER BY id DESC LIMIT 50");
 
-  const body = `<div hx-get="/logs/fragment" hx-trigger="load, every 1s" hx-swap="innerHTML">
-      <p class="muted">Loading…</p>
+  if (runs.length === 0) {
+    return c.html(
+      layout(
+        "Logs",
+        `<div class="card"><p class="muted">No runs yet. Start a task from the Progress page.</p></div>`,
+        "logs",
+      ),
+    );
+  }
+
+  const running = engineState.running && engineState.runId > 0;
+  const asked = Number(c.req.query("run") ?? "");
+  let selectedId = running
+    ? engineState.runId
+    : Number.isFinite(asked) && asked > 0
+      ? asked
+      : Number(runs[0]?.id ?? 0);
+  if (!runs.some((r) => Number(r.id) === selectedId)) {
+    selectedId = running ? engineState.runId : Number(runs[0]?.id ?? 0);
+  }
+  if (!runs.some((r) => Number(r.id) === selectedId)) {
+    selectedId = Number(runs[0]?.id ?? 0);
+  }
+
+  const kind = c.req.query("kind") === "errors" ? "errors" : "main";
+  const selected = runs.find((r) => Number(r.id) === selectedId) ?? runs[0];
+  const isLive = running && Number(selected.id) === engineState.runId;
+
+  const options = runs
+    .map(
+      (r) =>
+        `<option value="${r.id}"${Number(r.id) === selectedId ? " selected" : ""}>Run #${r.id} · ${esc(
+          r.started_at,
+        )} · ${r.finished_at ? "finished" : "in progress"}</option>`,
+    )
+    .join("");
+
+  const picker = running
+    ? `<div class="session-static"><span class="pill warn">live</span> <span class="muted">Old sessions are available when this task finishes.</span></div>`
+    : `<form class="session-picker" method="get" action="/logs">
+        <label class="field">
+          <span>Session</span>
+          <select name="run">${options}</select>
+        </label>
+        <input type="hidden" name="kind" value="${kind}">
+        <button class="btn small" type="submit">View</button>
+      </form>`;
+
+  const tabs = `<div class="log-tabs">
+    <a class="log-tab${kind === "main" ? " active" : ""}" href="/logs?run=${selectedId}&amp;kind=main">Run log</a>
+    <a class="log-tab${kind === "errors" ? " active" : ""}" href="/logs?run=${selectedId}&amp;kind=errors">Errors</a>
+  </div>`;
+
+  const statusPill = isLive
+    ? `<span class="pill warn">live</span>`
+    : `<span class="pill ${selected.finished_at ? "ok" : "warn"}">${
+        selected.finished_at ? "finished" : "incomplete"
+      }</span>`;
+
+  const meta = `<div class="log-meta">
+    ${statusPill}
+    <span>Run #${selected.id}</span>
+    <span class="muted">${esc(selected.started_at)}${
+      selected.finished_at ? ` → ${esc(selected.finished_at)}` : ""
+    }</span>
+    <a class="btn small" href="/download/run/${selected.id}?kind=${kind}">Download ${
+      kind === "errors" ? "errors" : "log"
+    }</a>
+  </div>`;
+
+  const body = `<div class="log-toolbar">
+      ${picker}
+      ${tabs}
     </div>
-    <h2 class="section-title">Previous runs</h2>
-    <div class="table-wrap"><table><thead><tr><th>Run</th><th>Started</th><th>Finished</th><th></th></tr></thead>
-    <tbody>${list}</tbody></table></div>`;
+    ${meta}
+    <div id="log-output" hx-get="/logs/fragment?run=${selected.id}&amp;kind=${kind}" hx-trigger="load, every 2s" hx-swap="innerHTML">
+      <p class="muted">Loading…</p>
+    </div>`;
   return c.html(layout("Logs", body, "logs"));
 });
 

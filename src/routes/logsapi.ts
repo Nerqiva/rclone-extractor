@@ -1,22 +1,43 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
 import { tail, readAll } from "../log";
+import { engineState } from "../engine";
 import { esc } from "../ui";
 
 export const logsapi = new Hono();
 
 async function latestRunId(): Promise<number> {
+  if (engineState.running && engineState.runId > 0) return engineState.runId;
   const setting = Number((await getSetting("last_run_id", "0")) ?? "0");
   if (setting > 0) return setting;
   const row = await store.get1<{ id: number }>("SELECT id FROM runs ORDER BY id DESC LIMIT 1");
   return Number(row?.id ?? 0);
 }
 
+function kindOf(value: string | undefined): "main" | "errors" {
+  return value === "errors" ? "errors" : "main";
+}
+
 logsapi.get("/logs/fragment", async (c) => {
-  const runId = await latestRunId();
-  if (!runId) return c.html(`<p class="muted">No runs yet.</p>`);
-  const lines = await tail({ scope: "run", refId: runId, kind: "main" }, 200);
-  if (lines.length === 0) return c.html(`<p class="muted">No runs yet.</p>`);
+  const latest = await latestRunId();
+  let runId = Number(c.req.query("run") ?? "");
+  if (!Number.isFinite(runId) || runId <= 0) runId = latest;
+  // While a task is running only the live session is available.
+  if (engineState.running && engineState.runId > 0) runId = engineState.runId;
+
+  const kind = kindOf(c.req.query("kind"));
+  if (!runId) {
+    return c.html(`<p class="muted">No runs yet.</p>`);
+  }
+
+  const lines = await tail({ scope: "run", refId: runId, kind }, 300);
+  if (lines.length === 0) {
+    return c.html(
+      `<p class="muted">${
+        kind === "errors" ? "No errors in this session." : "No log lines yet."
+      }</p>`,
+    );
+  }
   return c.html(`<pre class="tail">${esc(lines.join("\n"))}</pre>`);
 });
 
@@ -47,12 +68,14 @@ logsapi.get("/errors/fragment", async (c) => {
 
 logsapi.get("/download/run/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  const lines = await readAll({ scope: "run", refId: id, kind: "main" });
+  const kind = kindOf(c.req.query("kind"));
+  const lines = await readAll({ scope: "run", refId: id, kind });
   if (lines.length === 0) return c.text("not found", 404);
+  const suffix = kind === "errors" ? "-errors" : "";
   return new Response(lines.join("\n") + "\n", {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
-      "Content-Disposition": `attachment; filename="run-${id}.log"`,
+      "Content-Disposition": `attachment; filename="run-${id}${suffix}.log"`,
     },
   });
 });

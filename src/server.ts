@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
-import { BIND, PORT } from "./config";
+import { APP_PASSWORD, BIND, PORT } from "./config";
 import { initDb, store, getSetting } from "./db";
 import { recoverStale } from "./engine";
 import { auth, authMiddleware } from "./routes/auth";
@@ -12,10 +12,13 @@ import { data } from "./routes/data";
 
 await initDb();
 
-if ((await getSetting("resume", "1")) === "1") {
-  const recovered = await recoverStale();
-  if (recovered > 0) console.log(`boot: recovered ${recovered} stale archive(s)`);
+if (!APP_PASSWORD) {
+  console.warn("APP_PASSWORD is not set; login is disabled.");
 }
+
+const resume = (await getSetting("resume", "1")) === "1";
+const recovered = await recoverStale(resume);
+if (recovered > 0) console.log(`boot: recovered ${recovered} stale archive(s)`);
 
 const app = new Hono();
 

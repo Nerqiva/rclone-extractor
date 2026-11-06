@@ -10,6 +10,7 @@ let runEngine: typeof import("../src/engine").runEngine;
 let engineState: typeof import("../src/engine").engineState;
 let getSetting: typeof import("../src/db").getSetting;
 let setSetting: typeof import("../src/db").setSetting;
+let readAll: typeof import("../src/log").readAll;
 
 beforeAll(async () => {
   const base = mkdtempSync(join(tmpdir(), "rx-s3-"));
@@ -51,6 +52,7 @@ exit 0
   const eng = await import("../src/engine");
   runEngine = eng.runEngine;
   engineState = eng.engineState;
+  readAll = (await import("../src/log")).readAll;
 
   await runEngine();
 });
@@ -71,6 +73,58 @@ test("engine processes archives", async () => {
   expect(engineState.done).toBe(1);
   expect(engineState.skipped).toBe(1);
   expect(await getSetting("scan_root")).toBeTruthy();
+});
+
+test("run log and error log include the active rclone command", async () => {
+  const main = await readAll({
+    scope: "run",
+    refId: engineState.runId,
+    kind: "main",
+  });
+  expect(main.some((line) => line.includes("$ rclone lsf"))).toBe(true);
+
+  const errors = await readAll({
+    scope: "run",
+    refId: engineState.runId,
+    kind: "errors",
+  });
+  const commandLine = errors.find((line) =>
+    line.includes("$ rclone archive extract"),
+  );
+  expect(commandLine).toBeDefined();
+  expect(commandLine).toContain("c.zip");
+});
+
+test("per-archive log records the command that ran", async () => {
+  const row = await db!.store.get1<{ id: number }>(
+    "SELECT id FROM archives WHERE path='a/c.zip'",
+  );
+  expect(row).toBeDefined();
+  const lines = await readAll({
+    scope: "archive",
+    refId: Number(row!.id),
+    kind: "extract",
+  });
+  expect(lines.some((line) => line.includes("$ rclone archive extract"))).toBe(
+    true,
+  );
+});
+
+test("done paths are re-queued on a later non-dry run", async () => {
+  await setSetting("dry_run", "0");
+  await runEngine();
+  expect(engineState.total).toBe(1);
+  const row = await db!.store.get1<{ status: string }>(
+    "SELECT status FROM archives WHERE path='a/b.zip'",
+  );
+  expect(row?.status).toBe("done");
+});
+
+test("dry-run does not re-queue done paths", async () => {
+  await setSetting("dry_run", "1");
+  await runEngine();
+  expect(engineState.total).toBe(0);
+  await setSetting("dry_run", "0");
 });
 
 test("resume recovers stale extracting rows", async () => {

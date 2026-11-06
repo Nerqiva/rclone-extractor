@@ -57,6 +57,7 @@ data.post("/import", async (c) => {
   const settings = parsed.settings as Record<string, string> | undefined;
   if (settings) {
     for (const [k, v] of Object.entries(settings)) {
+      if (k === "password") continue; // legacy setting; login uses APP_PASSWORD only
       if (typeof v === "string") await setSetting(k, v);
     }
     counts.push(`settings`);

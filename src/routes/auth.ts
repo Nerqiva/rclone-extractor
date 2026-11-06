@@ -1,7 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { getSetting } from "../db";
 import { APP_PASSWORD } from "../config";
 import { layout, esc } from "../ui";
 
@@ -9,29 +8,31 @@ export const auth = new Hono();
 
 const COOKIE = "sess";
 
-async function password(): Promise<string> {
-  const stored = await getSetting("password", "");
-  return stored || APP_PASSWORD;
-}
-
 function hmac(data: string, key: string): string {
   return createHmac("sha256", key).update(data).digest("hex");
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
 }
 
 export async function makeToken(): Promise<string> {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const random = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  return `${random}.${hmac(random, await password())}`;
+  return `${random}.${hmac(random, APP_PASSWORD)}`;
 }
 
 export async function verifyToken(value: string | undefined): Promise<boolean> {
-  if (!value) return false;
+  if (!APP_PASSWORD || !value) return false;
   const idx = value.lastIndexOf(".");
   if (idx === -1) return false;
   const random = value.slice(0, idx);
   const sig = value.slice(idx + 1);
-  const expected = hmac(random, await password());
+  const expected = hmac(random, APP_PASSWORD);
   const a = Buffer.from(sig, "hex");
   const b = Buffer.from(expected, "hex");
   if (a.length !== b.length) return false;
@@ -39,6 +40,9 @@ export async function verifyToken(value: string | undefined): Promise<boolean> {
 }
 
 function loginPage(error?: string): string {
+  const missing = !APP_PASSWORD
+    ? `<p class="err-line">APP_PASSWORD is not set on the server. Login is disabled.</p>`
+    : "";
   return layout(
     "Sign in",
     `<form class="card login-card" method="post" action="/login">
@@ -46,6 +50,7 @@ function loginPage(error?: string): string {
         <span>Password</span>
         <input type="password" name="password" autocomplete="current-password" autofocus>
       </label>
+      ${missing}
       ${error ? `<p class="err-line">${esc(error)}</p>` : `<p class="muted">Enter the app password.</p>`}
       <button class="btn primary" type="submit">Sign in</button>
     </form>`,
@@ -57,7 +62,7 @@ auth.get("/login", (c) => c.html(loginPage()));
 auth.post("/login", async (c) => {
   const form = await c.req.formData();
   const supplied = String(form.get("password") ?? "");
-  if (supplied && supplied === (await password())) {
+  if (APP_PASSWORD && supplied && safeEqual(supplied, APP_PASSWORD)) {
     setCookie(c, COOKIE, await makeToken(), {
       httpOnly: true,
       sameSite: "Lax",

@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS log_lines(
 
 CREATE INDEX IF NOT EXISTS idx_log_lines_scope
   ON log_lines(scope, ref_id, kind, seq);
+
+CREATE INDEX IF NOT EXISTS idx_log_lines_scope_id
+  ON log_lines(scope, ref_id, kind, id);
 `;
 
 export const PG_SCHEMA = `
@@ -92,6 +95,9 @@ CREATE TABLE IF NOT EXISTS log_lines(
 
 CREATE INDEX IF NOT EXISTS idx_log_lines_scope
   ON log_lines(scope, ref_id, kind, seq);
+
+CREATE INDEX IF NOT EXISTS idx_log_lines_scope_id
+  ON log_lines(scope, ref_id, kind, id);
 `;
 
 /**

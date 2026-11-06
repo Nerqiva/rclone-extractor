@@ -8,7 +8,7 @@ export function esc(s: unknown): string {
 }
 
 const NAV: { href: string; label: string; key: string }[] = [
-  { href: "/", label: "Dashboard", key: "dashboard" },
+  { href: "/", label: "Progress", key: "dashboard" },
   { href: "/config", label: "Configuration", key: "config" },
   { href: "/logs", label: "Logs", key: "logs" },
   { href: "/errors", label: "Errors", key: "errors" },

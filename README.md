@@ -2,7 +2,7 @@
 
 A small, self-hosted web app that scans an [rclone](https://rclone.org) remote
 for archives, extracts them **in place**, promotes the results up a directory,
-and moves the archive to a trash folder. It ships with a live dashboard, a
+and moves the archive to a trash folder. It ships with a live progress page, a
 configuration page, and log/error views.
 
 Written in TypeScript and run directly by [Bun](https://bun.sh) — no build step,
@@ -22,17 +22,19 @@ scan  →  extract  →  promote  →  trash
   .tz2 .tar.lz .tar.lz4 .tar.xz .txz .tar.zst .tzst .tar.br .tar.sz .tar.mz`
 - **Extract → promote → trash** pipeline, one archive at a time, fully
   cancellable mid-run.
-- **Live dashboard** — progress bar, ring, stage text, and done/failed/skipped
-  counters update every second without a page reload.
+- **Live progress page** — KPI cards, a segmented progress bar, stage text,
+  per-run rate/ETA, the active rclone command, and done/failed/skipped counters
+  update every second without a page reload.
 - **Continue previous task** — resumable runs. If the app crashes or is
   restarted mid-job, archives stuck in *extracting* are automatically re-queued.
 - **Choose your database** — SQLite by default, or a remote **PostgreSQL**
   server (e.g. Aiven, Supabase, RDS). Everything persists in the DB, so an
   ephemeral container filesystem loses nothing.
-- **Encrypted secrets at rest** — the app password, `rclone.conf`, and the
-  database URL are encrypted with AES-256-GCM when `SECRET_KEY` is set.
+- **Encrypted secrets at rest** — `rclone.conf` and the database URL are
+  encrypted with AES-256-GCM when `SECRET_KEY` is set. The login password is
+  read from `APP_PASSWORD` at runtime and is never stored.
 - **Portable backup** — export/import the whole dataset as JSON.
-- **Dry-run mode** and password-protected single-user login.
+- **Dry-run mode** and `APP_PASSWORD`-protected single-user login.
 
 ---
 
@@ -101,7 +103,7 @@ need, then paste into your `.env`, Render "Environment", or Docker `--env-file`.
 
 ```bash
 # --- required ---
-APP_PASSWORD=change-me                 # login password (seeded into settings on first boot)
+APP_PASSWORD=change-me                 # login password (environment only; never stored)
 SECRET_KEY=change-me-too               # passphrase for encrypting stored secrets (omit to disable encryption)
 
 # --- database (leave DATABASE_URL empty to use local SQLite) ---
@@ -131,7 +133,7 @@ database. They can also be seeded from environment variables.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `APP_PASSWORD` | *(empty)* | Fallback login password, seeded into settings on first boot. |
+| `APP_PASSWORD` | *(empty)* | Login password. Required for login; never stored in the database. When empty, login is disabled. |
 | `SECRET_KEY` | *(empty)* | Passphrase for encrypting stored secrets. **Omit to disable encryption.** |
 | `RCLONE_CONF` | *(empty)* | Base64-encoded `rclone.conf`, used as a fallback when the stored `rclone_conf` setting is empty. Generate with `base64 -w0 rclone.conf`. |
 | `DATABASE_URL` | *(empty)* | Postgres connection string. When empty, SQLite at `DATA_DIR/app.db` is used. |
@@ -151,7 +153,6 @@ database. They can also be seeded from environment variables.
 | `dry_run` | When on, rclone runs with `--dry-run`; nothing is moved or deleted. |
 | `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start. |
-| `password` | Login password (encrypted at rest when `SECRET_KEY` is set). |
 | `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. |
 
 Most settings are shown as compact rows on the Configuration page. Click **Edit**
@@ -179,7 +180,7 @@ filesystem keeps all state across restarts:
 
 | Data | Storage |
 |---|---|
-| Settings (incl. `rclone.conf`, password, DB URL) | `settings` table (secrets encrypted) |
+| Settings (incl. `rclone.conf`, DB URL) | `settings` table (secrets encrypted) |
 | Archive queue & status | `archives` table |
 | Run history & counters | `runs` table |
 | Log output (run + per-archive) | `log_lines` table |
@@ -203,9 +204,9 @@ plaintext secrets are **encrypted automatically on first boot** after you set
 `SECRET_KEY`.
 
 > **Important:** the encryption key is only as safe as `SECRET_KEY`. If you
-> change `SECRET_KEY`, previously stored secrets can no longer be decrypted and
-> login will fail. To recover, set `APP_PASSWORD` in the environment (it seeds
-> the password) or clear the stored `password` setting, then sign in again.
+> change `SECRET_KEY`, previously stored secrets (`rclone.conf`, database URL)
+> can no longer be decrypted; re-enter them on the Configuration page. Login is
+> unaffected because `APP_PASSWORD` comes from the environment.
 
 If `SECRET_KEY` is unset, the app runs normally but stores secrets in plaintext
 and shows a warning on the Configuration page.
@@ -226,8 +227,27 @@ cleanup: rclone purge <ROOT>/<TMPREL>
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
 
-`<TMPREL>` is `.rclone-extractor-tmp/<runid>/<stem>`. `remote_flags` is
-appended to every command; `--dry-run` is added when `dry_run` is on.
+`<TMPREL>` is `.rclone-extractor-tmp/<runid>/<archiveid>/<stem>`, so two
+archives with the same filename cannot collide. `remote_flags` is appended to
+every command; `--dry-run` is added when `dry_run` is on. The active command is
+written to both the run log and, for per-archive work, the archive log; when a
+stage fails, the command and its output are also written to the errors log.
+
+### Queue and re-runs
+
+- `queue_max` (clamped to a positive integer) caps both how many paths are
+  accepted while listing and how many queued rows are selected for a run.
+- New paths are added as `queued`. A path already marked `done` that appears in
+  the listing again is treated as a new upload and re-queued — except in
+  dry-run mode, where the original archive is never moved and re-queueing would
+  repeat the same work every run.
+- **Start** re-queues archives in the `failed` state and clears their
+  `error_kind`. `resume` also recovers archives stuck in `extracting` after a
+  crash.
+- An archive becomes `done` only when extract, promote, cleanup, and trash all
+  succeed. Cleanup failure is logged as a warning; extract, promote, or trash
+  failure marks the archive `failed`. A run stopped by the user ends with the
+  `cancelled` stage, and unfinished runs are closed on the next boot.
 
 ### Continue previous task (resume)
 
@@ -237,6 +257,14 @@ appended to every command; `--dry-run` is added when `dry_run` is on.
   recovered again (when `resume` is on).
 
 This makes an interrupted run safe to resume by simply restarting the app.
+
+### Logs
+
+The **Logs** page opens on the current (latest) session. While a task is
+running, only that live session is shown. When the app is idle, the same log
+window has a session picker so older runs can be viewed without leaving the
+page, plus tabs for the run log and the errors log. The download button exports
+the selected session and tab.
 
 ### Backend adapter
 
@@ -267,7 +295,7 @@ src/
   routes/
     pages.ts       GET /  /config  /logs  /errors
     auth.ts        login/logout + signed-cookie middleware
-    dashboard.ts   GET /dashboard/fragment (htmx poll target)
+    dashboard.ts   GET /dashboard/fragment (progress panel poll target)
     actions.ts     POST /run/start  /run/stop  /config  /rclone-conf
     logsapi.ts     GET /logs/fragment  /errors/fragment  + downloads
     data.ts        POST /export  POST /import
@@ -280,11 +308,11 @@ public/
 ### HTTP routes
 
 ```
-GET  /                     dashboard            (auth)
+GET  /                     task progress        (auth)
 GET  /config               configuration        (auth)
 GET  /logs  /errors        log & error pages    (auth)
 GET  /login  POST /login  POST /logout
-GET  /dashboard/fragment   live status          (auth)
+GET  /dashboard/fragment   live progress panel  (auth)
 GET  /dashboard/controls   run controls         (auth)
 GET  /logs/fragment        live log tail        (auth)
 GET  /errors/fragment      error rows           (auth)
@@ -303,9 +331,9 @@ GET  /public/*             static files (no auth)
 On the Configuration page:
 
 - **Export JSON** downloads `settings`, `archives`, `runs`, `logs`, and
-  `log_lines`. Secrets (`rclone.conf`, `password`, `database_url`) are included
-  only if you tick *include secrets*; they are re-encrypted with the current key
-  on import.
+  `log_lines`. Secrets (`rclone.conf`, `database_url`) are included only if you
+  tick *include secrets*; they are re-encrypted with the current key on import.
+  A legacy `password` setting in an old export is ignored on import.
 - **Import** reads a previously exported JSON and merges it into the active
   database.
 - Both actions run in place: a spinner shows progress and a toast reports the

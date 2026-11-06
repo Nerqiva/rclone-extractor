@@ -1,4 +1,4 @@
-import { APP_PASSWORD, DATABASE_URL } from "../config";
+import { DATABASE_URL } from "../config";
 import { encrypt, decrypt, isEncrypted, encryptionEnabled } from "../crypto";
 import { SqliteStore } from "./sqlite";
 import { PostgresStore } from "./postgres";
@@ -13,7 +13,7 @@ export interface Store {
   close(): Promise<void>;
 }
 
-export const SECRET_KEYS = new Set(["rclone_conf", "password", "database_url"]);
+export const SECRET_KEYS = new Set(["rclone_conf", "database_url"]);
 
 export const store: Store = DATABASE_URL
   ? new PostgresStore(DATABASE_URL)
@@ -31,7 +31,6 @@ const defaults: Record<string, string> = {
   resume: "1",
   database_url: DATABASE_URL,
   rclone_conf: "",
-  password: APP_PASSWORD,
   last_run_id: "0",
 };
 
@@ -52,7 +51,20 @@ export async function initDb(): Promise<void> {
     ]);
   }
 
+  await removeLegacyPassword();
   await migratePlaintextSecrets();
+}
+
+async function removeLegacyPassword(): Promise<void> {
+  const legacy = await store.get1<{ value: string }>(
+    "SELECT value FROM settings WHERE key = ?",
+    ["password"],
+  );
+  if (!legacy) return;
+  await store.run("DELETE FROM settings WHERE key = ?", ["password"]);
+  console.warn(
+    "removed legacy settings.password; login now uses the APP_PASSWORD environment variable only",
+  );
 }
 
 async function migratePlaintextSecrets(): Promise<void> {

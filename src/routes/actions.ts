@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { store, setSetting, allSettings, getSetting } from "../db";
+import { store, setSetting, allSettings } from "../db";
 import { engineState, runEngine, stopEngine } from "../engine";
 import { esc } from "../ui";
 import { encryptionEnabled } from "../crypto";
@@ -22,7 +22,10 @@ export function controlsFragment(): string {
 
 actions.post("/run/start", async (c) => {
   if (!engineState.running) {
-    await store.run("UPDATE archives SET status='queued' WHERE status='failed'");
+    await store.run(
+      "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE status='failed'",
+      [new Date().toISOString()],
+    );
     await setSetting("cancel", "0");
     void runEngine();
   }
@@ -42,7 +45,6 @@ const SETTING_KEYS = [
   "sort_by",
   "sort_dir",
   "trash_subdir",
-  "password",
 ];
 
 actions.post("/config", async (c) => {
@@ -122,8 +124,7 @@ export async function configForm(note = ""): Promise<string> {
   const sel = (v: string, o: string) => (v === o ? " selected" : "");
   const backend = store.backend();
   const enc = encryptionEnabled();
-  const appPassword = await getSetting("password", "");
-  const pwWorks = appPassword ? "set" : APP_PASSWORD ? "from env" : "not set";
+  const pwWorks = APP_PASSWORD ? "set" : "not set";
 
   const storedConf = s.rclone_conf ?? "";
   const effectiveConf = storedConf || RCLONE_CONF;
@@ -132,19 +133,14 @@ export async function configForm(note = ""): Promise<string> {
     : storedConf
       ? `set (${storedConf.length} base64 chars)`
       : `from RCLONE_CONF env (${RCLONE_CONF.length} base64 chars)`;
-  const passwordLabel = appPassword
-    ? "set"
-    : APP_PASSWORD
-      ? "from APP_PASSWORD env"
-      : "not set";
-
   return `<form class="card" hx-post="/config" hx-target="#config-form" hx-swap="outerHTML" id="config-form">
   ${note}
   <p class="muted">
     Backend: <strong>${esc(backend)}</strong>
     &middot; Encryption: <strong>${enc ? "on" : "off"}</strong>
-    <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">password ${esc(pwWorks)}</span>
+    <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">APP_PASSWORD ${esc(pwWorks)}</span>
   </p>
+  <p class="muted">Login is controlled by the <code>APP_PASSWORD</code> environment variable and is never stored in the database.</p>
   ${settingRow(
     "scan_root",
     s.scan_root || "not set",
@@ -191,13 +187,6 @@ export async function configForm(note = ""): Promise<string> {
         <option value="asc"${sel(s.sort_dir ?? "asc", "asc")}>asc</option>
         <option value="desc"${sel(s.sort_dir ?? "asc", "desc")}>desc</option>
       </select></label>`,
-  )}
-  ${settingRow(
-    "password",
-    passwordLabel,
-    `<label class="field"><span>password</span>
-      <input type="password" name="password" value="${esc(s.password ?? "")}" autocomplete="new-password"></label>`,
-    { unset: !appPassword },
   )}
   ${staticRow(
     "database_url",

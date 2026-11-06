@@ -11,6 +11,16 @@ export interface LogRef {
   kind: LogKind;
 }
 
+interface LogRow {
+  ts: string;
+  level: string | null;
+  line: string;
+}
+
+function formatRow(row: LogRow): string {
+  return `${row.ts}${row.level ? ` ${row.level}` : ""} ${row.line}`.trimEnd();
+}
+
 export class Logger {
   private seq = 0;
 
@@ -46,17 +56,17 @@ export async function tail(
   ref: LogRef,
   limit = 200,
 ): Promise<string[]> {
-  const rows = await store.query<{ line: string }>(
-    "SELECT line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY seq DESC LIMIT ?",
+  const rows = await store.query<LogRow>(
+    "SELECT ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY id DESC LIMIT ?",
     [ref.scope, ref.refId, ref.kind, limit],
   );
-  return rows.map((r) => r.line).reverse();
+  return rows.reverse().map(formatRow);
 }
 
 export async function readAll(ref: LogRef): Promise<string[]> {
-  const rows = await store.query<{ ts: string; level: string | null; line: string }>(
-    "SELECT ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY seq ASC",
+  const rows = await store.query<LogRow>(
+    "SELECT ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY id ASC",
     [ref.scope, ref.refId, ref.kind],
   );
-  return rows.map((r) => `${r.ts} ${r.level ?? ""} ${r.line}`.trimEnd());
+  return rows.map(formatRow);
 }

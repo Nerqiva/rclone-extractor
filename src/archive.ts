@@ -39,9 +39,9 @@ export function parentRel(rel: string): string {
   return idx === -1 ? "" : rel.slice(0, idx);
 }
 
-export function tmpRel(rel: string, runId: number): string {
+export function tmpRel(rel: string, runId: number, archiveId: number): string {
   const name = rel.slice(rel.lastIndexOf("/") + 1);
-  return `.rclone-extractor-tmp/${runId}/${stem(name)}`;
+  return `.rclone-extractor-tmp/${runId}/${archiveId}/${stem(name)}`;
 }
 
 export function trashRel(rel: string, subdir: string): string {
