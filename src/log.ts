@@ -5,6 +5,9 @@ const DASHES = "-".repeat(72);
 export type LogScope = "run" | "archive";
 export type LogKind = "main" | "errors" | "rclone" | "extract";
 
+/** Maximum lines rendered in the log views; both initial paint and polling. */
+export const LOG_TAIL_LIMIT = 300;
+
 export interface LogRef {
   scope: LogScope;
   refId: number;
@@ -52,15 +55,40 @@ export class Logger {
   }
 }
 
+export interface TailResult {
+  lines: string[];
+  lastId: number;
+}
+
+/**
+ * Last `limit` lines formatted as strings. When `afterId` is > 0 only lines
+ * newer than that id are returned, which is what the live log view polls.
+ */
 export async function tail(
   ref: LogRef,
   limit = 200,
-): Promise<string[]> {
-  const rows = await store.query<LogRow>(
-    "SELECT ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY id DESC LIMIT ?",
+  afterId = 0,
+): Promise<TailResult> {
+  type Row = LogRow & { id: number | string };
+  if (afterId > 0) {
+    const rows = await store.query<Row>(
+      "SELECT id, ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? AND id > ? ORDER BY id ASC LIMIT ?",
+      [ref.scope, ref.refId, ref.kind, afterId, limit],
+    );
+    return {
+      lines: rows.map(formatRow),
+      lastId: rows.length ? Number(rows[rows.length - 1].id) : afterId,
+    };
+  }
+  const rows = await store.query<Row>(
+    "SELECT id, ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY id DESC LIMIT ?",
     [ref.scope, ref.refId, ref.kind, limit],
   );
-  return rows.reverse().map(formatRow);
+  rows.reverse();
+  return {
+    lines: rows.map(formatRow),
+    lastId: rows.length ? Number(rows[rows.length - 1].id) : 0,
+  };
 }
 
 export async function readAll(ref: LogRef): Promise<string[]> {

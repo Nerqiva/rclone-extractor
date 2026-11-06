@@ -4,6 +4,9 @@ import { layout, esc } from "../ui";
 import { configForm } from "./actions";
 import { encryptionEnabled } from "../crypto";
 import { engineState } from "../engine";
+import { checkRclone } from "../rclone";
+import { tail, LOG_TAIL_LIMIT } from "../log";
+import { readErrorRows, renderErrorRows } from "../errorrows";
 
 export const pages = new Hono();
 
@@ -23,7 +26,20 @@ pages.get("/", (c) =>
 );
 
 pages.get("/config", async (c) => {
+  const runtime = await checkRclone();
+  const runtimeRow = runtime.ok
+    ? `<dt>rclone</dt><dd><code>${esc(runtime.detail)}</code><br><span class="muted">${esc(runtime.bin)}</span></dd>`
+    : `<dt>rclone</dt><dd><span class="note err">not runnable</span><br><code>${esc(runtime.detail)}</code></dd>`;
   const extra = `<div class="card">
+    <h2 class="section-title" style="margin-top:0">Runtime</h2>
+    <dl class="detail-grid">${runtimeRow}</dl>
+    ${
+      runtime.ok
+        ? ""
+        : `<p class="muted">The extractor cannot run rclone. Install the build matching your CPU architecture (arm64 vs amd64) or set <code>RCLONE_BIN</code>, then redeploy.</p>`
+    }
+  </div>
+  <div class="card">
     <h2 class="section-title" style="margin-top:0">Backup</h2>
     <form id="export-form" method="post" action="/export">
       <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, database_url)</label>
@@ -191,6 +207,14 @@ pages.get("/logs", async (c) => {
   const selected = runs.find((r) => Number(r.id) === selectedId) ?? runs[0];
   const isLive = running && Number(selected.id) === engineState.runId;
 
+  const tap = await tail(
+    { scope: "run", refId: Number(selected.id), kind },
+    LOG_TAIL_LIMIT,
+  );
+  const logText = tap.lines.join("\n");
+  const hasLog = tap.lines.length > 0;
+  const showLog = isLive || hasLog;
+
   const options = runs
     .map(
       (r) =>
@@ -217,7 +241,7 @@ pages.get("/logs", async (c) => {
   </div>`;
 
   const statusPill = isLive
-    ? `<span class="pill warn">live</span>`
+    ? `<span class="pill warn" id="livePill">live</span>`
     : `<span class="pill ${selected.finished_at ? "ok" : "warn"}">${
         selected.finished_at ? "finished" : "incomplete"
       }</span>`;
@@ -228,27 +252,62 @@ pages.get("/logs", async (c) => {
     <span class="muted">${esc(selected.started_at)}${
       selected.finished_at ? ` → ${esc(selected.finished_at)}` : ""
     }</span>
-    <a class="btn small" href="/download/run/${selected.id}?kind=${kind}">Download ${
-      kind === "errors" ? "errors" : "log"
-    }</a>
+    ${
+      isLive
+        ? `<span class="muted live-note" id="liveNote">live — polling every 2s</span>`
+        : ""
+    }
   </div>`;
 
+  // Copy toolbar lives outside the scrolling <pre>, so nothing re-renders
+  // while polling and the buttons stay reachable.
+  const downloadHref = `/download/run/${selected.id}?kind=${kind}`;
+  const copyToolbar = `<div class="log-actions" role="toolbar" aria-label="Log actions">
+      <button class="btn small" type="button" data-copy-url="${esc(downloadHref)}">Copy all</button>
+      <button class="btn small" type="button" data-copy-selection="#logTail">Copy selection</button>
+      <button class="btn small" type="button" data-select="#logTail">Select all</button>
+      <a class="btn small ghost" href="${esc(downloadHref)}">Download ${
+        kind === "errors" ? "errors" : "log"
+      }</a>
+    </div>`;
+
+  const logBlock = showLog
+    ? `<pre class="tail" id="logTail" data-run="${selected.id}" data-kind="${kind}" data-live="${
+        isLive ? "1" : "0"
+      }" data-last-id="${tap.lastId}">${esc(logText)}</pre>`
+    : `<p class="muted">${
+        kind === "errors"
+          ? "No errors in this session."
+          : "No log lines yet."
+      }</p>`;
+
+  const toastRegion = `<div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>`;
   const body = `<div class="log-toolbar">
       ${picker}
       ${tabs}
     </div>
     ${meta}
-    <div id="log-output" hx-get="/logs/fragment?run=${selected.id}&amp;kind=${kind}" hx-trigger="load, every 2s" hx-swap="innerHTML">
-      <p class="muted">Loading…</p>
-    </div>`;
+    ${showLog ? copyToolbar : ""}
+    ${logBlock}
+    ${toastRegion}
+    <script src="/public/copy.js" defer></script>`;
   return c.html(layout("Logs", body, "logs"));
 });
 
-pages.get("/errors", (c) => {
-  const body = `<div class="table-wrap"><table>
-      <thead><tr><th>Archive</th><th>Kind</th><th>Updated</th><th></th></tr></thead>
-      <tbody hx-get="/errors/fragment" hx-trigger="load, every 5s" hx-swap="innerHTML">
-        <tr><td colspan="4" class="muted">Loading…</td></tr>
-      </tbody></table></div>`;
+pages.get("/errors", async (c) => {
+  const running = engineState.running && engineState.runId > 0;
+  const rows = await readErrorRows(store);
+  const body = `<div class="log-actions" role="toolbar" aria-label="Error actions">
+      ${running ? `<span class="pill warn" id="livePill">live</span>` : ""}
+      <button class="btn small" type="button" data-copy-table="#errorsTable">Copy all errors</button>
+      <span class="muted">Row “Copy” grabs that archive's extract log.</span>
+    </div>
+    <div class="table-wrap"><table id="errorsTable">
+      <thead><tr><th>Archive</th><th>Kind</th><th>Updated</th><th>Log</th></tr></thead>
+      <tbody id="errorsBody" data-live="${running ? "1" : "0"}">${renderErrorRows(
+        rows,
+      )}</tbody></table></div>
+    <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
+    <script src="/public/copy.js" defer></script>`;
   return c.html(layout("Errors", body, "errors"));
 });

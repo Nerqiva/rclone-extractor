@@ -3,6 +3,7 @@ import { serveStatic } from "hono/bun";
 import { APP_PASSWORD, BIND, PORT } from "./config";
 import { initDb, store, getSetting } from "./db";
 import { recoverStale } from "./engine";
+import { checkRclone } from "./rclone";
 import { auth, authMiddleware } from "./routes/auth";
 import { pages } from "./routes/pages";
 import { dashboard } from "./routes/dashboard";
@@ -14,6 +15,13 @@ await initDb();
 
 if (!APP_PASSWORD) {
   console.warn("APP_PASSWORD is not set; login is disabled.");
+}
+
+const rcloneHealth = await checkRclone();
+if (rcloneHealth.ok) {
+  console.log(`rclone ok: ${rcloneHealth.detail} (${rcloneHealth.bin})`);
+} else {
+  console.warn(`rclone not runnable: ${rcloneHealth.detail}`);
 }
 
 const resume = (await getSetting("resume", "1")) === "1";

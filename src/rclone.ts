@@ -1,8 +1,69 @@
 import { getSetting, store } from "./db";
 import { isSupported } from "./archive";
-import { RCLONE_CONF, RCLONE_CONF_PATH, ensureDataDir } from "./config";
+import { RCLONE_CONF, RCLONE_CONF_PATH, ensureDataDir, RCLONE_BIN } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
 import type { Logger } from "./log";
+
+type SpawnError = Error & { code?: string };
+
+/**
+ * Map Bun's raw posix_spawn errors onto a single actionable message. The raw
+ * ENOEXEC ("unknown error, posix_spawn 'rclone'") is unusable in a deploy log,
+ * so callers get the probable cause and the fix (matching arch, or RCLONE_BIN).
+ */
+export function describeSpawnError(e: unknown, bin: string): string {
+  const err = (e ?? {}) as SpawnError;
+  const code = err.code ?? "";
+  let hint: string;
+  switch (code) {
+    case "ENOEXEC":
+      hint =
+        "the binary is built for a different CPU architecture or is corrupt (e.g. an arm64 container holding an amd64 rclone)";
+      break;
+    case "ENOENT":
+      hint = "the binary is not installed or not on PATH";
+      break;
+    case "EACCES":
+      hint = "the binary is not executable";
+      break;
+    case "ENOTDIR":
+      hint = "a path component of the binary is not a directory";
+      break;
+    default:
+      hint = String(err.message ?? e ?? "unknown error");
+  }
+  return (
+    `could not start rclone (${code || "unknown error"}): ${hint}. ` +
+    `bin=${bin}. Install the rclone build matching this CPU or set RCLONE_BIN to a full path.`
+  );
+}
+
+function spawnBinary(
+  bin: string,
+  args: string[],
+  options: {
+    stdout: "pipe";
+    stderr: "pipe";
+    stdin?: "pipe" | "inherit" | "ignore";
+    env?: Record<string, string | undefined>;
+    cwd?: string;
+  },
+) {
+  try {
+    return Bun.spawn([bin, ...args], {
+      ...options,
+      env: { ...process.env, ...(options.env ?? {}) },
+    });
+  } catch (e) {
+    const wrapped = new Error(describeSpawnError(e, bin)) as Error & {
+      code?: string;
+    };
+    // Keep the original posix_spawn code so callers can format it without
+    // nesting the already-friendly message inside itself.
+    wrapped.code = (e as { code?: string } | undefined)?.code;
+    throw wrapped;
+  }
+}
 
 export type Outcome = {
   code: number;
@@ -68,6 +129,51 @@ function parseListLine(line: string): { rel: string; size: number } | null {
   return { rel, size: Number.isFinite(size) ? size : 0 };
 }
 
+export interface RcloneHealth {
+  ok: boolean;
+  bin: string;
+  detail: string;
+}
+
+let healthCache: Promise<RcloneHealth> | null = null;
+
+/**
+ * Probe the configured rclone once per process. Used at boot (so a broken
+ * binary is visible in the deploy logs) and on the config page. Never throws.
+ */
+export function checkRclone(): Promise<RcloneHealth> {
+  healthCache ??= probeRclone();
+  return healthCache;
+}
+
+async function probeRclone(): Promise<RcloneHealth> {
+  const bin = RCLONE_BIN;
+  try {
+    const proc = spawnBinary(bin, ["version"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const killer = setTimeout(() => proc.kill(), 4000);
+    const [out, err, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    clearTimeout(killer);
+    if (code === 0) {
+      const detail = out.split("\n").map((l) => l.trim()).find(Boolean);
+      return { ok: true, bin, detail: detail ?? "rclone" };
+    }
+    return {
+      ok: false,
+      bin,
+      detail: (err || out || `exit ${code}`).trim(),
+    };
+  } catch (e) {
+    return { ok: false, bin, detail: describeSpawnError(e, bin) };
+  }
+}
+
 export class Rclone {
   onCommand?: (command: string) => void;
 
@@ -105,7 +211,7 @@ export class Rclone {
       }
     }
 
-    return new Rclone("rclone", root, flags, runLog);
+    return new Rclone(RCLONE_BIN, root, flags, runLog);
   }
 
   private announce(args: string[]): string {
@@ -155,10 +261,9 @@ export class Rclone {
       ...this.flags,
     ];
     const command = this.announce(args);
-    const proc = Bun.spawn([this.bin, ...args], {
+    const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
     });
 
     const stderrPromise = new Response(proc.stderr).text();
@@ -216,10 +321,9 @@ export class Rclone {
     await this.appendArchiveLines(ref, [`$ ${command}`], seq);
     seq++;
 
-    const proc = Bun.spawn([this.bin, ...full], {
+    const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
     });
     const [out, err, code] = await Promise.all([
       new Response(proc.stdout).text(),

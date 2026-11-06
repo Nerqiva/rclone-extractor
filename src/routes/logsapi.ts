@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
-import { tail, readAll } from "../log";
+import { tail, readAll, LOG_TAIL_LIMIT } from "../log";
 import { engineState } from "../engine";
-import { esc } from "../ui";
+import { readErrorRows, renderErrorRows } from "../errorrows";
 
 export const logsapi = new Hono();
 
@@ -10,7 +10,9 @@ async function latestRunId(): Promise<number> {
   if (engineState.running && engineState.runId > 0) return engineState.runId;
   const setting = Number((await getSetting("last_run_id", "0")) ?? "0");
   if (setting > 0) return setting;
-  const row = await store.get1<{ id: number }>("SELECT id FROM runs ORDER BY id DESC LIMIT 1");
+  const row = await store.get1<{ id: number | string }>(
+    "SELECT id FROM runs ORDER BY id DESC LIMIT 1",
+  );
   return Number(row?.id ?? 0);
 }
 
@@ -18,52 +20,58 @@ function kindOf(value: string | undefined): "main" | "errors" {
   return value === "errors" ? "errors" : "main";
 }
 
+function noStore(c: { header: (name: string, value: string) => void }): void {
+  c.header("Cache-Control", "no-store");
+}
+
 logsapi.get("/logs/fragment", async (c) => {
-  const latest = await latestRunId();
-  let runId = Number(c.req.query("run") ?? "");
-  if (!Number.isFinite(runId) || runId <= 0) runId = latest;
-  // While a task is running only the live session is available.
-  if (engineState.running && engineState.runId > 0) runId = engineState.runId;
-
   const kind = kindOf(c.req.query("kind"));
+  noStore(c);
+
+  // The page always sends its selected run. Only fall back to the latest run
+  // when no usable id was supplied, so polling a finished session does not
+  // cost an extra database round-trip.
+  let runId = Number(c.req.query("run") ?? "");
+  if (!Number.isFinite(runId) || runId <= 0) runId = await latestRunId();
+  if (runId > 0 && engineState.running && engineState.runId > 0) {
+    runId = engineState.runId;
+  }
+  const afterId = Number(c.req.query("after") ?? "0");
+  const cursor = Number.isFinite(afterId) && afterId > 0 ? afterId : 0;
+
   if (!runId) {
-    return c.html(`<p class="muted">No runs yet.</p>`);
+    return c.json({
+      runId: 0,
+      lines: [],
+      lastId: cursor,
+      live: false,
+      finishedAt: "",
+      message: "No runs yet.",
+    });
   }
 
-  const lines = await tail({ scope: "run", refId: runId, kind }, 300);
-  if (lines.length === 0) {
-    return c.html(
-      `<p class="muted">${
-        kind === "errors" ? "No errors in this session." : "No log lines yet."
-      }</p>`,
+  const { lines, lastId } = await tail(
+    { scope: "run", refId: runId, kind },
+    LOG_TAIL_LIMIT,
+    cursor,
+  );
+  const live = engineState.running && engineState.runId === runId;
+  let finishedAt = "";
+  if (!live) {
+    const row = await store.get1<{ finished_at: string | null }>(
+      "SELECT finished_at FROM runs WHERE id = ?",
+      [runId],
     );
+    finishedAt = row?.finished_at ?? "";
   }
-  return c.html(`<pre class="tail">${esc(lines.join("\n"))}</pre>`);
+  return c.json({ runId, lines, lastId, live, finishedAt });
 });
 
 logsapi.get("/errors/fragment", async (c) => {
-  const rows = await store.query<{
-    id: number;
-    path: string;
-    error_kind: string;
-    updated_at: string;
-  }>(
-    "SELECT id, path, error_kind, updated_at FROM archives WHERE error_kind IS NOT NULL ORDER BY updated_at DESC",
-  );
-  if (rows.length === 0) {
-    return c.html(`<tr><td colspan="4" class="muted">No errors.</td></tr>`);
-  }
-  const html = rows
-    .map(
-      (r) => `<tr>
-      <td>${esc(r.path)}</td>
-      <td><span class="pill warn">${esc(r.error_kind)}</span></td>
-      <td class="muted">${esc(r.updated_at)}</td>
-      <td><a href="/download/archive/${r.id}?kind=extract">extract log</a></td>
-    </tr>`,
-    )
-    .join("");
-  return c.html(html);
+  noStore(c);
+  c.header("X-Engine-Live", engineState.running ? "1" : "0");
+  const rows = await readErrorRows(store);
+  return c.html(renderErrorRows(rows));
 });
 
 logsapi.get("/download/run/:id", async (c) => {

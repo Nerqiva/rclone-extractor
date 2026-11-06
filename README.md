@@ -25,6 +25,8 @@ scan  →  extract  →  promote  →  trash
 - **Live progress page** — KPI cards, a segmented progress bar, stage text,
   per-run rate/ETA, the active rclone command, and done/failed/skipped counters
   update every second without a page reload.
+- **Mobile-friendly logs** — the log and error views are selectable text with
+  Copy all / Copy selection / Select all / Download controls.
 - **Continue previous task** — resumable runs. If the app crashes or is
   restarted mid-job, archives stuck in *extracting* are automatically re-queued.
 - **Choose your database** — SQLite by default, or a remote **PostgreSQL**
@@ -67,6 +69,32 @@ docker run -d --name rclone-extractor \
 When `DATABASE_URL` is set, Postgres is used and the schema is created
 automatically on first boot.
 
+### Deploy on SnapDeploy (containers)
+
+SnapDeploy deploys the Docker image from your GitHub repository; no manifest
+file is needed.
+
+1. Push this repository to GitHub.
+2. In SnapDeploy open **Containers → Deploy → Deploy from GitHub** and select
+   the repo and branch.
+3. SnapDeploy scans the repo and shows the variables listed in
+   **`.env.example`**. Fill in `APP_PASSWORD` and `SECRET_KEY`.
+4. **`DATABASE_URL` is optional**: leave it empty for local SQLite, or attach a
+   SnapDeploy **PostgreSQL add-on** (its connection string is injected as
+   `DATABASE_URL`) / paste an **external** Postgres string (Neon, Supabase,
+   RDS, Aiven). Data stored in SQLite lives on the container filesystem and is
+   lost on redeploy; Postgres persists.
+5. The image is multi-arch (`linux/amd64` and `linux/arm64`) and picks the
+   matching `rclone` at build time, so the same image runs everywhere.
+6. If something is wrong, check **Configuration → Runtime** for the rclone
+   check — it reports whether the binary runs, and shows the underlying error
+   (including the exact CPU-architecture message for a wrong rclone build).
+
+SnapDeploy injects its own managed `PORT` (replacing the one in the image) and
+scans `Dockerfile`, `.env.example` and framework config for the variable
+list, so `DATABASE_URL` appears on the **Environment Variables** screen before
+the first deploy.
+
 ### From source
 
 ```bash
@@ -98,8 +126,10 @@ writable path or configure `DATABASE_URL`.
 
 ### All environment variables (copy-paste)
 
-Every variable in one block, one per line. Comment out or delete what you don't
-need, then paste into your `.env`, Render "Environment", or Docker `--env-file`.
+Every variable in one block, one per line — the same list as
+**`.env.example`** (which container PaaS deployments read automatically).
+Comment out or delete what you don't need, then paste into your `.env`,
+SnapDeploy, Render "Environment", or Docker `--env-file`.
 
 ```bash
 # --- required ---
@@ -108,10 +138,11 @@ SECRET_KEY=change-me-too               # passphrase for encrypting stored secret
 
 # --- database (leave DATABASE_URL empty to use local SQLite) ---
 DATABASE_URL=                          # e.g. postgres://user:pass@host:5432/db?sslmode=require
-DATA_DIR=/app/data                      # SQLite file + working rclone.conf (only used for SQLite)
+DATA_DIR=/app/data                     # SQLite file + working rclone.conf (only used for SQLite)
 
-# --- rclone config (optional; base64-encoded rclone.conf) ---
-RCLONE_CONF=                            # generate with: base64 -w0 rclone.conf
+# --- rclone ---
+RCLONE_CONF=                           # generate with: base64 -w0 rclone.conf
+RCLONE_BIN=rclone                      # full path to rclone (arch-matching build, for hosts without /usr/local/bin/rclone)
 
 # --- http ---
 BIND=0.0.0.0                           # bind address
@@ -136,6 +167,7 @@ database. They can also be seeded from environment variables.
 | `APP_PASSWORD` | *(empty)* | Login password. Required for login; never stored in the database. When empty, login is disabled. |
 | `SECRET_KEY` | *(empty)* | Passphrase for encrypting stored secrets. **Omit to disable encryption.** |
 | `RCLONE_CONF` | *(empty)* | Base64-encoded `rclone.conf`, used as a fallback when the stored `rclone_conf` setting is empty. Generate with `base64 -w0 rclone.conf`. |
+| `RCLONE_BIN` | `rclone` | Path to the rclone binary. Set this to a full path if your host does not have rclone on `PATH`, or if you must install the build that matches your CPU (arm64 vs amd64). |
 | `DATABASE_URL` | *(empty)* | Postgres connection string. When empty, SQLite at `DATA_DIR/app.db` is used. |
 | `DATA_DIR` | `/app/data` | Directory for the SQLite file and the working `rclone.conf`. Only needed when using SQLite. |
 | `BIND` | `0.0.0.0` | HTTP bind address. |
@@ -263,8 +295,21 @@ This makes an interrupted run safe to resume by simply restarting the app.
 The **Logs** page opens on the current (latest) session. While a task is
 running, only that live session is shown. When the app is idle, the same log
 window has a session picker so older runs can be viewed without leaving the
-page, plus tabs for the run log and the errors log. The download button exports
-the selected session and tab.
+page, plus tabs for the run log and the errors log.
+
+- Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
+  and appended, and polling stops as soon as the run finishes — finished
+  sessions render statically, so they don't poll at all.
+- The log view is **mobile-friendly and selectable**: every line is real text,
+  you can tap and hold to select parts of it, or use the toolbar buttons
+  **Copy all**, **Copy selection**, **Select all** and **Download**.
+- **Copy all**/**Download** export the session and tab; **Copy selection**
+  copies whatever you have selected; **Select all** selects the whole log for
+  partial manual copying. Clipboard fallbacks work on plain-HTTP self-hosted
+  deployments too.
+- The **Errors** page has a **Copy all** button for a tab-separated summary
+  and a per-row **Copy** button that fetches that archive's extract log
+  (the failure and the command that produced it).
 
 ### Backend adapter
 
@@ -302,6 +347,7 @@ src/
 public/
   styles.css       design system
   htmx.min.js      vendored htmx
+  copy.js          clipboard copy + incremental live-log polling
   fonts/           self-hosted JetBrains Mono
 ```
 
@@ -314,7 +360,7 @@ GET  /logs  /errors        log & error pages    (auth)
 GET  /login  POST /login  POST /logout
 GET  /dashboard/fragment   live progress panel  (auth)
 GET  /dashboard/controls   run controls         (auth)
-GET  /logs/fragment        live log tail        (auth)
+GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
 POST /run/start  /run/stop                     (auth)
 POST /config  /rclone-conf                     (auth)

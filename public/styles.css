@@ -637,6 +637,35 @@ tbody tr:hover {
   flex-wrap: wrap;
   margin-bottom: 4px;
 }
+.log-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 10px 0 8px;
+}
+.log-actions .btn {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.btn.ghost:hover {
+  background: rgba(91, 140, 255, 0.08);
+}
+.nowrap {
+  white-space: nowrap;
+}
+td.path {
+  overflow-wrap: anywhere;
+}
+.live-note {
+  font-size: 11px;
+}
 .session-picker {
   display: flex;
   align-items: flex-end;
@@ -699,9 +728,15 @@ tbody tr:hover {
   font-size: 12px;
   line-height: 1.5;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
   max-height: 520px;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+  tab-size: 2;
+  touch-action: pan-x pan-y;
   margin: 0;
 }
 
@@ -880,6 +915,17 @@ tbody tr:hover {
   .log-meta .btn {
     margin-left: 0;
   }
+  .log-actions {
+    margin: 8px 0 6px;
+  }
+  .log-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 44px;
+  }
+  .live-note {
+    width: 100%;
+  }
   .session-picker,
   .session-picker .field,
   .session-picker select {
@@ -894,7 +940,7 @@ tbody tr:hover {
   .tail {
     padding: 10px;
     font-size: 11px;
-    max-height: 60vh;
+    max-height: 60dvh;
   }
   .field-row {
     flex-direction: column !important;

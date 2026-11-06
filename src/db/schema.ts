@@ -47,6 +47,10 @@ CREATE INDEX IF NOT EXISTS idx_log_lines_scope
 
 CREATE INDEX IF NOT EXISTS idx_log_lines_scope_id
   ON log_lines(scope, ref_id, kind, id);
+
+CREATE INDEX IF NOT EXISTS idx_archives_error
+  ON archives(error_kind, updated_at DESC)
+  WHERE error_kind IS NOT NULL;
 `;
 
 export const PG_SCHEMA = `
@@ -98,6 +102,10 @@ CREATE INDEX IF NOT EXISTS idx_log_lines_scope
 
 CREATE INDEX IF NOT EXISTS idx_log_lines_scope_id
   ON log_lines(scope, ref_id, kind, id);
+
+CREATE INDEX IF NOT EXISTS idx_archives_error
+  ON archives(error_kind, updated_at DESC)
+  WHERE error_kind IS NOT NULL;
 `;
 
 /**

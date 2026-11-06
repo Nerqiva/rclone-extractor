@@ -9,6 +9,7 @@ export const APP_PASSWORD = process.env.APP_PASSWORD ?? ""; // login password (e
 export const SECRET_KEY = process.env.SECRET_KEY ?? ""; // at-rest encryption passphrase
 export const DATABASE_URL = process.env.DATABASE_URL ?? ""; // remote postgres, optional
 export const RCLONE_CONF = process.env.RCLONE_CONF ?? ""; // base64-encoded rclone.conf fallback
+export const RCLONE_BIN = process.env.RCLONE_BIN ?? "rclone"; // path to the rclone binary
 
 // The local filesystem is only needed for the SQLite database and the
 // transient rclone.conf working copy. On hosts with a read-only or
