@@ -78,6 +78,16 @@ export type ListOutcome = Outcome & {
   streamError?: string;
 };
 
+export type ArchiveListOutcome = Outcome & {
+  files: number;
+  streamError?: string;
+};
+
+export type ArchiveEntry = {
+  path: string;
+  size: number;
+};
+
 export type RcloneRef = {
   scope: "archive";
   refId: number;
@@ -128,6 +138,22 @@ function parseListLine(line: string): { rel: string; size: number } | null {
   const name = rel.slice(rel.lastIndexOf("/") + 1);
   if (!isSupported(name)) return null;
   return { rel, size: Number.isFinite(size) ? size : 0 };
+}
+
+/**
+ * Parse one line of `rclone archive list --files-only` output, which is
+ * `<right-aligned size> <path>`. Returns null for blank/malformed lines and
+ * for directories (they should not appear with --files-only, but guard
+ * anyway). Paths keep any `./` prefix; callers only care about basenames.
+ */
+export function parseArchiveListLine(line: string): ArchiveEntry | null {
+  const m = /^\s*(\d+)\s+(\S.*)$/.exec(line);
+  if (!m) return null;
+  const path = m[2].trimEnd();
+  if (!path || path.endsWith("/")) return null;
+  const size = Number(m[1]);
+  if (!Number.isFinite(size)) return null;
+  return { path, size };
 }
 
 export interface RcloneHealth {
@@ -335,6 +361,92 @@ export class Rclone {
     const stderr = await stderrPromise;
     const code = await proc.exited;
     return { code, tail: [], stderr, command, stopped, streamError };
+  }
+
+  /**
+   * List the contents of an archive with `rclone archive list --files-only`.
+   * Read-only, so no --dry-run is added even when dry-run mode is on; the
+   * whole purpose is to inspect an archive before any extraction happens.
+   * Entries are streamed to `onEntry` (O(1) memory); the caller aggregates
+   * counts. The command and, on failure, stderr are appended to the archive
+   * log. Never throws for listing failures; spawn failures propagate.
+   */
+  async archiveList(
+    rel: string,
+    ref: RcloneRef,
+    onEntry: (entry: ArchiveEntry) => void,
+  ): Promise<ArchiveListOutcome> {
+    const args = [
+      "archive",
+      "list",
+      `${this.root}/${rel}`,
+      "--files-only",
+      ...this.confArgs(),
+      ...this.flags,
+    ];
+    const command = this.announce(args);
+
+    let seq = await this.nextSeq(ref);
+    await this.appendArchiveLines(ref, [`$ ${command}`], seq);
+    seq++;
+
+    const proc = spawnBinary(this.bin, args, {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stderrPromise = new Response(proc.stderr).text();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let files = 0;
+    let streamError: string | undefined;
+
+    const consume = (line: string): void => {
+      const parsed = parseArchiveListLine(line.replace(/\r$/, ""));
+      if (!parsed) return;
+      files++;
+      onEntry(parsed);
+    };
+
+    try {
+      for await (const chunk of proc.stdout as unknown as ReadableStream<Uint8Array>) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let idx = buffer.indexOf("\n");
+        while (idx !== -1) {
+          const line = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 1);
+          if (line) consume(line);
+          idx = buffer.indexOf("\n");
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer) consume(buffer);
+    } catch (e) {
+      streamError = String(e);
+      console.warn("archive list stream failed:", streamError);
+      proc.kill();
+    }
+
+    const stderr = await stderrPromise;
+    const code = await proc.exited;
+
+    if (streamError || code !== 0) {
+      const lines = [`archive list failed (exit ${code})`];
+      const tail = [stderr, streamError ?? ""].filter(Boolean).join("\n").trim();
+      if (tail) lines.push(tail);
+      await this.appendArchiveLines(ref, lines, seq);
+    }
+
+    return { code, tail: [], stderr, command, files, streamError };
+  }
+
+  /** Append informational lines to an archive's log. Never throws. */
+  async note(ref: RcloneRef, lines: string[]): Promise<void> {
+    try {
+      const seq = await this.nextSeq(ref);
+      await this.appendArchiveLines(ref, lines, seq);
+    } catch (e) {
+      console.warn("could not write archive note:", e);
+    }
   }
 
   async run(args: string[], dry: boolean, ref: RcloneRef): Promise<Outcome> {

@@ -45,6 +45,14 @@ to `main`.
   `YYYY.MM.DD.<counter>-alpha`, syncs the version into `VERSION` and
   `package.json`, and publishes a GitHub prerelease.
 - `bunfig.toml` test preload configuration.
+- **Content filters before extraction.** Every archive is inspected with
+  `rclone archive list --files-only`; archives that are `empty` (no files),
+  `torrent` (≥60% `.torrent`), `website` (≥1 website marker and ≥20% of files
+  <100KB), `tiny` (≥60% of files <20KB), or `unreadable` (listing fails) are
+  skipped and never extracted. Matching is case-insensitive, sizes use 1024-byte
+  KB, and directories are excluded. Skipped archives stay skipped on later runs.
+- Archives under `trash_subdir` are ignored while building the queue and when a
+  run selects queued rows, preventing re-processing of already-trashed files.
 
 ### Changed
 - **Login uses the `APP_PASSWORD` environment variable only.** The stored

@@ -24,9 +24,31 @@ beforeAll(async () => {
 
   const script = `#!/bin/sh
 if [ "$1" = "lsf" ]; then
-  echo "./a/b.zip;1000"
-  echo "./a/c.zip;1000"
+  echo "./a/b.zip;100000"
+  echo "./a/c.zip;100000"
+  echo "./torrent.zip;100000"
+  echo "./website.zip;100000"
+  echo "./tiny.zip;100000"
+  echo "./empty.zip;100000"
+  echo "./corrupt.zip;100000"
+  echo "./trash/old.zip;100000"
   exit 0
+fi
+if [ "$1" = "archive" ] && [ "$2" = "list" ]; then
+  case "$*" in
+    *torrent.zip*)
+      printf '100 ./a.torrent\\n100 ./b.torrent\\n100 ./c.torrent\\n100 ./d.torrent\\n30720 ./big.bin\\n'
+      exit 0 ;;
+    *website.zip*)
+      printf '100 ./index.html\\n100 ./style.css\\n100 ./app.js\\n30000 ./a.bin\\n30000 ./b.bin\\n30000 ./c.bin\\n30000 ./d.bin\\n'
+      exit 0 ;;
+    *tiny.zip*)
+      printf '100 ./a\\n100 ./b\\n100 ./c\\n100 ./d\\n100 ./e\\n100 ./f\\n40000 ./g\\n40000 ./h\\n40000 ./i\\n40000 ./j\\n'
+      exit 0 ;;
+    *empty.zip*) exit 0 ;;
+    *corrupt.zip*) echo 'not an archive' 1>&2; exit 1 ;;
+    *) printf '40000 ./big.bin\\n'; exit 0 ;;
+  esac
 fi
 if [ "$1" = "archive" ] && [ "$2" = "extract" ]; then
   case "$3" in
@@ -67,12 +89,38 @@ test("engine processes archives", async () => {
   const skipped = rows.filter((r) => r.status === "skipped");
   expect(done.length).toBe(1);
   expect(done[0].path).toBe("a/b.zip");
-  expect(skipped.length).toBe(1);
-  expect(skipped[0].path).toBe("a/c.zip");
-  expect(skipped[0].error_kind).toBe("password");
+  expect(skipped.length).toBe(6);
+  const kindByPath = new Map(skipped.map((r) => [r.path, r.error_kind]));
+  expect(kindByPath.get("a/c.zip")).toBe("password");
+  expect(kindByPath.get("torrent.zip")).toBe("torrent");
+  expect(kindByPath.get("website.zip")).toBe("website");
+  expect(kindByPath.get("tiny.zip")).toBe("tiny");
+  expect(kindByPath.get("empty.zip")).toBe("empty");
+  expect(kindByPath.get("corrupt.zip")).toBe("unreadable");
+  // Archives under the trash subdir are never queued
+  expect(rows.some((r) => r.path.startsWith("trash/"))).toBe(false);
   expect(engineState.done).toBe(1);
-  expect(engineState.skipped).toBe(1);
+  expect(engineState.skipped).toBe(6);
   expect(await getSetting("scan_root")).toBeTruthy();
+});
+
+test("skipped archives are not extracted", async () => {
+  const skipped = await db!.store.query<{ id: number; path: string }>(
+    // c.zip fails during extraction (password); the content filters must not
+    // invoke extract at all.
+    "SELECT id, path FROM archives WHERE status='skipped' AND error_kind <> 'password'",
+  );
+  for (const row of skipped) {
+    const lines = await readAll({
+      scope: "archive",
+      refId: Number(row.id),
+      kind: "extract",
+    });
+    expect(
+      lines.some((line) => line.includes("$ rclone archive extract")),
+      `${row.path} should not have been extracted`,
+    ).toBe(false);
+  }
 });
 
 test("run log and error log include the active rclone command", async () => {
@@ -125,6 +173,21 @@ test("dry-run does not re-queue done paths", async () => {
   await runEngine();
   expect(engineState.total).toBe(0);
   await setSetting("dry_run", "0");
+});
+
+test("pre-existing queued rows in the trash subdir are not selected", async () => {
+  await db!.store.run(
+    "INSERT OR REPLACE INTO archives(path, size, status, created_at, updated_at) VALUES('trash/legacy.zip', 1, 'queued', 't', 't')",
+  );
+  await setSetting("dry_run", "0");
+  await runEngine();
+  // Only a/b.zip (done, re-queued) counts; the trash row stays queued and is ignored.
+  expect(engineState.total).toBe(1);
+  const row = await db!.store.get1<{ status: string }>(
+    "SELECT status FROM archives WHERE path='trash/legacy.zip'",
+  );
+  expect(row?.status).toBe("queued");
+  await db!.store.run("DELETE FROM archives WHERE path='trash/legacy.zip'");
 });
 
 test("resume recovers stale extracting rows", async () => {

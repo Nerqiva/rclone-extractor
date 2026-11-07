@@ -1,7 +1,17 @@
 import { Logger } from "./log";
 import { store, getSetting, setSetting } from "./db";
 import { Rclone } from "./rclone";
-import { tmpRel } from "./archive";
+import {
+  tmpRel,
+  isTrashPath,
+  normalizeRel,
+  escapeLike,
+  createArchiveStats,
+  addArchiveEntry,
+  classifyArchive,
+  describeArchiveStats,
+  type SkipReason,
+} from "./archive";
 
 export const engineState = {
   running: false,
@@ -122,6 +132,8 @@ export async function runEngine(): Promise<void> {
 
     const queueMax = clampQueueMax(await getSetting("queue_max", "500"));
     const dryRun = (await getSetting("dry_run", "0")) === "1";
+    const trashSubdir = (await getSetting("trash_subdir", "trash")) ?? "trash";
+    const trashDir = normalizeRel(trashSubdir);
     const existing = new Map(
       (
         await store.query<{ path: string; status: string }>(
@@ -134,6 +146,9 @@ export async function runEngine(): Promise<void> {
     const createdAt = now();
     const listed = await rc.list(async (rel, size) => {
       if ((await getSetting("cancel", "0")) === "1") return false;
+      // Archives already sitting in the trash subdir are not queued again;
+      // otherwise a done path there would be re-queued on every run.
+      if (isTrashPath(rel, trashSubdir)) return;
       if (queued >= queueMax) return false;
 
       const prev = existing.get(rel);
@@ -182,9 +197,17 @@ export async function runEngine(): Promise<void> {
     engineState.stage = "queueing";
     const sortBy = (await getSetting("sort_by", "path")) === "size" ? "size" : "path";
     const sortDir = (await getSetting("sort_dir", "asc")) === "desc" ? "DESC" : "ASC";
+    // Exclude pre-existing queued rows that live in the trash subdir (e.g.
+    // enqueued by an older version), so they are never processed.
+    const queueWhere = trashDir
+      ? "WHERE status='queued' AND path <> ? AND path NOT LIKE ? ESCAPE '\\'"
+      : "WHERE status='queued'";
+    const queueParams: unknown[] = trashDir
+      ? [trashDir, `${escapeLike(trashDir)}/%`]
+      : [];
     const rows = await store.query<{ id: number; path: string; size: number }>(
-      `SELECT id, path, size FROM archives WHERE status='queued' ORDER BY ${sortBy} ${sortDir} LIMIT ?`,
-      [queueMax],
+      `SELECT id, path, size FROM archives ${queueWhere} ORDER BY ${sortBy} ${sortDir} LIMIT ?`,
+      [...queueParams, queueMax],
     );
 
     await store.run("UPDATE runs SET total=? WHERE id=?", [rows.length, runRowId]);
@@ -192,7 +215,6 @@ export async function runEngine(): Promise<void> {
     logger.info(`queue size ${rows.length}`);
 
     engineState.stage = "extracting";
-    const trashSubdir = (await getSetting("trash_subdir", "trash")) ?? "trash";
 
     for (const row of rows) {
       if ((await getSetting("cancel", "0")) === "1") {
@@ -212,12 +234,42 @@ export async function runEngine(): Promise<void> {
       const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
       let result: "done" | "failed" | "skipped" = "failed";
 
+      await store.run(
+        "INSERT OR REPLACE INTO logs(archive_id, kind, rel_path) VALUES(?, 'extract', ?)",
+        [row.id, `archive-${row.id}-extract.log`],
+      );
+
       try {
-        const ex = await rc.extract(rel, tmp, dryRun, ref);
-        await store.run(
-          "INSERT OR REPLACE INTO logs(archive_id, kind, rel_path) VALUES(?, 'extract', ?)",
-          [row.id, `archive-${row.id}-extract.log`],
+        // Inspect the archive before any extraction happens. Archives that
+        // match the skip rules (empty, torrent, website, tiny) or cannot be
+        // read are skipped and never extracted.
+        const stats = createArchiveStats();
+        const listOut = await rc.archiveList(rel, ref, (entry) =>
+          addArchiveEntry(stats, entry.path, entry.size),
         );
+        const listFailed = Boolean(listOut.streamError) || listOut.code !== 0;
+        let skipReason: SkipReason | "unreadable" | "password" | null = null;
+        if (listFailed) {
+          skipReason = /password/i.test(listOut.stderr) ? "password" : "unreadable";
+        } else {
+          skipReason = classifyArchive(stats);
+        }
+
+        if (skipReason) {
+          const detail = listFailed
+            ? `listing failed (exit ${listOut.code})`
+            : describeArchiveStats(stats);
+          if (!listFailed) {
+            await rc.note(ref, [`archive list: ${detail}`, `skip reason: ${skipReason}`]);
+          }
+          await store.run(
+            "UPDATE archives SET status='skipped', error_kind=?, updated_at=? WHERE id=?",
+            [skipReason, now(), row.id],
+          );
+          warn(`skipped (${skipReason}): ${rel} [${detail}]`);
+          result = "skipped";
+        } else {
+        const ex = await rc.extract(rel, tmp, dryRun, ref);
 
         if (ex.code !== 0) {
           const all = `${ex.tail.join("\n")}\n${ex.stderr}`;
@@ -278,6 +330,7 @@ export async function runEngine(): Promise<void> {
               result = "done";
             }
           }
+        }
         }
       } catch (e) {
         await store.run(

@@ -22,6 +22,10 @@ scan  →  extract  →  promote  →  trash
   .tz2 .tar.lz .tar.lz4 .tar.xz .txz .tar.zst .tzst .tar.br .tar.sz .tar.mz`
 - **Extract → promote → trash** pipeline, one archive at a time, fully
   cancellable mid-run.
+- **Content filters before extraction** — every archive is inspected with
+  `rclone archive list --files-only`; torrent/website/tiny/empty or
+  unreadable archives are skipped, never extracted. Archives in `trash_subdir`
+  are not queued.
 - **Live progress page** — KPI cards, a segmented progress bar, stage text,
   per-run rate/ETA, the active rclone command, and done/failed/skipped counters
   update every second without a page reload.
@@ -253,6 +257,7 @@ For each archive at `<ROOT>/<REL>`:
 
 ```
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";"
+inspect: rclone archive list <ROOT>/<REL> --files-only
 extract: rclone archive extract <ROOT>/<REL> <ROOT>/<TMPREL> --stats 1s --stats-one-line
 promote: rclone move <ROOT>/<TMPREL> <ROOT>/<PARENT> --delete-empty-src-dirs
 cleanup: rclone purge <ROOT>/<TMPREL>
@@ -261,15 +266,42 @@ trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 
 `<TMPREL>` is `.rclone-extractor-tmp/<runid>/<archiveid>/<stem>`, so two
 archives with the same filename cannot collide. `remote_flags` is appended to
-every command; `--dry-run` is added when `dry_run` is on. The active command is
-written to both the run log and, for per-archive work, the archive log; when a
-stage fails, the command and its output are also written to the errors log.
+every command; `--dry-run` is added when `dry_run` is on (`archive list` is
+read-only and never gets `--dry-run`). The active command is written to both
+the run log and, for per-archive work, the archive log; when a stage fails,
+the command and its output are also written to the errors log.
+
+### Content filters (before extraction)
+
+Every archive is inspected before anything is extracted, using
+`rclone archive list --files-only`. Only files are counted — directories are
+excluded — and all extension/name matching is case-insensitive. Sizes are in
+bytes, and KB means 1024 bytes.
+
+An archive is **skipped** (`status='skipped'`, never extracted) when ANY of
+these holds:
+
+| Skip reason | Rule |
+|---|---|
+| `empty` | The archive lists 0 files. |
+| `torrent` | ≥ 60% of files are `.torrent`. |
+| `website` | At least one file is a website marker (`.html .htm .xhtm .xhtml .css .js .woff .woff2 .eot`, `robots.txt`, `index.html`, `sitemap.xml`) **and** ≥ 20% of files are smaller than 100 KB. |
+| `tiny` | ≥ 60% of files are smaller than 20 KB. |
+| `unreadable` | `archive list` fails (corrupt, truncated, or otherwise unreadable/unsupported). |
+
+If the listing error mentions a password, the skip reason is `password`
+(same as a password failure during extraction). Skipped archives are never
+re-queued on later runs and stay in place; the reason is visible on the
+Errors page and in the per-archive log.
 
 ### Queue and re-runs
 
 - `queue_max` (clamped to a positive integer) caps both how many paths are
   accepted while listing and how many queued rows are selected for a run.
-- New paths are added as `queued`. A path already marked `done` that appears in
+- New paths are added as `queued`. Archives whose path lives under
+  `trash_subdir` are ignored both while listing and when the run selects
+  queued rows, so they are never (re-)processed.
+- A path already marked `done` that appears in
   the listing again is treated as a new upload and re-queued — except in
   dry-run mode, where the original archive is never moved and re-queueing would
   repeat the same work every run.
@@ -334,7 +366,7 @@ src/
   db/              Store interface + sqlite/postgres backends + schema
   log.ts           DB-backed logger + tail/read helpers
   rclone.ts        rclone command wrapper
-  archive.ts       name/path helpers + isSupported
+  archive.ts       name/path helpers, archive content filters, isSupported
   engine.ts        the extract loop, run state, resume
   ui.ts            HTML layout + escaping
   routes/
