@@ -136,7 +136,7 @@ a:hover {
   z-index: 200;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 8px 9px;
   cursor: pointer;
   flex-direction: column;
@@ -190,7 +190,7 @@ a:hover {
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: 6px;
   padding: 18px;
   margin-bottom: 16px;
 }
@@ -198,6 +198,7 @@ a:hover {
 .login-card {
   max-width: 360px;
   margin: 12vh auto 0;
+  border-radius: 8px;
 }
 
 /* ---- forms ---- */
@@ -221,7 +222,7 @@ select,
 textarea {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text);
   font-family: inherit;
   font-size: 13px;
@@ -248,7 +249,7 @@ textarea {
 .btn {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text);
   font-family: inherit;
   font-size: 13px;
@@ -316,6 +317,7 @@ textarea {
 .progress-panel {
   background: var(--panel);
   border: 1px solid var(--border);
+  border-radius: 6px;
   padding: 20px;
   margin-bottom: 16px;
 }
@@ -519,6 +521,7 @@ textarea {
 .stat-card {
   background: var(--bg);
   border: 1px solid var(--border);
+  border-radius: 6px;
   padding: 12px 14px;
 }
 .stat-label {
@@ -606,6 +609,8 @@ textarea {
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 table {
   width: 100%;
@@ -697,6 +702,7 @@ td.path {
   color: var(--muted);
   border: 1px solid transparent;
   border-bottom: 0;
+  border-radius: 6px 6px 0 0;
   font-size: 12px;
 }
 .log-tab:hover {
@@ -721,24 +727,188 @@ td.path {
   margin-left: auto;
 }
 
-/* ---- log tail ---- */
-.tail {
+/* ---- log viewer ---- */
+.log-viewer {
   background: #161c29;
   border: 1px solid var(--border);
-  padding: 14px;
+  border-radius: 6px;
+  padding: 0;
   font-size: 12px;
   line-height: 1.5;
-  overflow: auto;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  max-height: 520px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  max-height: 560px;
   user-select: text;
   -webkit-user-select: text;
   tab-size: 2;
   touch-action: pan-x pan-y;
   margin: 0;
+}
+.log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 14px;
+  border-bottom: 1px solid rgba(46, 58, 82, 0.3);
+  min-height: 24px;
+}
+.log-entry:last-child {
+  border-bottom: 0;
+}
+.log-time {
+  color: var(--muted);
+  font-size: 11px;
+  flex: 0 0 64px;
+  opacity: 0.7;
+}
+.log-chip {
+  display: inline-block;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  flex: 0 0 auto;
+  line-height: 18px;
+}
+.log-chip-info {
+  background: rgba(111, 155, 255, 0.15);
+  color: var(--accent);
+}
+.log-chip-warn {
+  background: rgba(250, 204, 21, 0.15);
+  color: var(--warn);
+}
+.log-chip-error {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--err);
+}
+.log-msg {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.log-cmd .log-msg {
+  color: var(--accent);
+  font-weight: 600;
+}
+.log-continuation {
+  padding-left: 90px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.log-detail {
+  flex-direction: column;
+  gap: 4px;
+}
+.log-detail details {
+  width: 100%;
+}
+.log-detail summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 11px;
+  padding: 2px 0;
+}
+.log-detail-pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+/* Filter: hide non-warn/error entries */
+.log-viewer.filter-warnerr .log-entry:not(.log-warn):not(.log-error):not(.log-cmd):not(.log-detail) {
+  display: none;
+}
+
+/* Session summary strip */
+.session-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.summary-counts {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* Filter chips */
+.log-filters {
+  display: flex;
+  gap: 4px;
+}
+.filter-chip {
+  opacity: 0.6;
+}
+.filter-chip.active {
+  opacity: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.log-actions-right {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ---- error cards ---- */
+.error-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+}
+.error-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.error-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.error-name {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.error-path {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.error-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 6px;
+  font-size: 11px;
+}
+.error-actions {
+  display: flex;
+  gap: 6px;
 }
 
 .note {
@@ -840,6 +1010,7 @@ td.path {
   background: var(--panel);
   border: 1px solid var(--border);
   border-left: 3px solid var(--muted);
+  border-radius: 6px;
   padding: 10px 14px;
   font-size: 12px;
   color: var(--text);
@@ -938,10 +1109,12 @@ td.path {
     padding: 7px 6px;
     font-size: 12px;
   }
-  .tail {
-    padding: 10px;
-    font-size: 11px;
+  .log-viewer {
     max-height: 60dvh;
+    font-size: 11px;
+  }
+  .error-grid {
+    grid-template-columns: 1fr;
   }
   .field-row {
     flex-direction: column !important;

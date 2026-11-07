@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
-import { tail, readAll, LOG_TAIL_LIMIT } from "../log";
+import { tail, tailRendered, readAll, LOG_TAIL_LIMIT } from "../log";
 import { engineState } from "../engine";
-import { readErrorRows, renderErrorRows } from "../errorrows";
+import { readErrorRows, renderErrorCards } from "../errorrows";
 
 export const logsapi = new Hono();
 
@@ -28,9 +28,6 @@ logsapi.get("/logs/fragment", async (c) => {
   const kind = kindOf(c.req.query("kind"));
   noStore(c);
 
-  // The page always sends its selected run. Only fall back to the latest run
-  // when no usable id was supplied, so polling a finished session does not
-  // cost an extra database round-trip.
   let runId = Number(c.req.query("run") ?? "");
   if (!Number.isFinite(runId) || runId <= 0) runId = await latestRunId();
   if (runId > 0 && engineState.running && engineState.runId > 0) {
@@ -43,6 +40,7 @@ logsapi.get("/logs/fragment", async (c) => {
     return c.json({
       runId: 0,
       lines: [],
+      entries: [],
       lastId: cursor,
       live: false,
       finishedAt: "",
@@ -51,6 +49,11 @@ logsapi.get("/logs/fragment", async (c) => {
   }
 
   const { lines, lastId } = await tail(
+    { scope: "run", refId: runId, kind },
+    LOG_TAIL_LIMIT,
+    cursor,
+  );
+  const { entries } = await tailRendered(
     { scope: "run", refId: runId, kind },
     LOG_TAIL_LIMIT,
     cursor,
@@ -64,14 +67,21 @@ logsapi.get("/logs/fragment", async (c) => {
     );
     finishedAt = row?.finished_at ?? "";
   }
-  return c.json({ runId, lines, lastId, live, finishedAt });
+  return c.json({
+    runId,
+    lines,
+    entries: entries.map((e) => e.html),
+    lastId,
+    live,
+    finishedAt,
+  });
 });
 
 logsapi.get("/errors/fragment", async (c) => {
   noStore(c);
   c.header("X-Engine-Live", engineState.running ? "1" : "0");
   const rows = await readErrorRows(store);
-  return c.html(renderErrorRows(rows));
+  return c.html(renderErrorCards(rows));
 });
 
 logsapi.get("/download/run/:id", async (c) => {

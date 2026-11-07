@@ -91,25 +91,41 @@
   }
 
   function tableAsText(selector) {
-    var table = document.querySelector(selector);
-    if (!table) return "";
-    var rows = table.querySelectorAll("tbody tr");
-    var lines = ["archive\tkind\tlast update"];
+    var container = document.querySelector(selector);
+    if (!container) return "";
+    // Card-based error grid
+    var cards = container.querySelectorAll(".error-card");
+    if (cards.length > 0) {
+      var lines = ["archive\tkind\tlast update"];
+      cards.forEach(function (card) {
+        var name = card.querySelector(".error-name");
+        var pill = card.querySelector(".pill");
+        var muted = card.querySelector(".error-card-foot .muted");
+        lines.push(
+          [
+            (name ? name.textContent : "").trim(),
+            (pill ? pill.textContent : "").trim(),
+            (muted ? muted.getAttribute("title") || muted.textContent : "").trim(),
+          ].join("\t"),
+        );
+      });
+      return lines.join("\n");
+    }
+    // Fallback: legacy table
+    var rows = container.querySelectorAll("tbody tr");
+    var tlines = ["archive\tkind\tlast update"];
     rows.forEach(function (row) {
       var cells = row.querySelectorAll("td");
       if (cells.length < 3) return;
-      var path = cells[0].textContent || "";
-      var kind = cells[1].textContent || "";
-      var updated = cells[2].textContent || "";
-      lines.push(
-        [path.trim(), kind.trim(), updated.trim()]
-          .map(function (s) {
-            return s.replace(/\s+/g, " ");
+      tlines.push(
+        [cells[0], cells[1], cells[2]]
+          .map(function (c) {
+            return (c.textContent || "").trim().replace(/\s+/g, " ");
           })
           .join("\t"),
       );
     });
-    return lines.join("\n");
+    return tlines.join("\n");
   }
 
   async function handleCopyUrl(button) {
@@ -197,68 +213,88 @@
     }
   });
 
-  /* ---- live log view ---- */
+  /* ---- log filter chips ---- */
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!(target instanceof Element)) return;
+    var chip = target.closest(".filter-chip");
+    if (!chip) return;
+    var viewer = document.getElementById("logViewer");
+    if (!viewer) return;
+    var chips = viewer.parentElement ? viewer.parentElement.querySelectorAll(".filter-chip") : [];
+    chips.forEach(function (c) { c.classList.remove("active"); });
+    chip.classList.add("active");
+    var mode = chip.getAttribute("data-filter");
+    if (mode === "warnerr") {
+      viewer.classList.add("filter-warnerr");
+    } else {
+      viewer.classList.remove("filter-warnerr");
+    }
+  });
 
-  var pre = document.getElementById("logTail");
-  if (pre && pre.dataset.live === "1") {
-    var runId = Number(pre.dataset.run);
-    var kind = pre.dataset.kind;
-    var lastId = Number(pre.dataset.lastId || "0");
+  /* ---- live log viewer ---- */
 
-    function appendLines(lines) {
-      if (!lines || !lines.length) return;
+  var viewer = document.getElementById("logViewer");
+  if (viewer && viewer.dataset.live === "1") {
+    var runId = Number(viewer.dataset.run);
+    var kind = viewer.dataset.kind;
+    var lastId = Number(viewer.dataset.lastId || "0");
+
+    function appendEntries(htmlStrings) {
+      if (!htmlStrings || !htmlStrings.length) return;
       var nearBottom =
-        pre.scrollHeight - pre.scrollTop - pre.clientHeight < 80;
-      var current = pre.textContent
-        ? pre.textContent.split("\n").filter(Boolean)
-        : [];
-      var merged = current.concat(lines);
-      // Keep the DOM bounded for long runs.
-      if (merged.length > 1500) merged = merged.slice(merged.length - 1500);
-      pre.textContent = merged.join("\n");
-      if (nearBottom) pre.scrollTop = pre.scrollHeight;
+        viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 80;
+      var current = viewer.children.length;
+      // Cap at ~1500 entries
+      if (current + htmlStrings.length > 1500) {
+        var remove = current + htmlStrings.length - 1500;
+        for (var i = 0; i < remove && viewer.firstChild; i++) {
+          viewer.removeChild(viewer.firstChild);
+        }
+      }
+      var frag = document.createDocumentFragment();
+      htmlStrings.forEach(function (html) {
+        var wrap = document.createElement("div");
+        wrap.innerHTML = html;
+        while (wrap.firstChild) frag.appendChild(wrap.firstChild);
+      });
+      viewer.appendChild(frag);
+      if (nearBottom) viewer.scrollTop = viewer.scrollHeight;
     }
 
     function markFinished() {
-      pre.dataset.live = "0";
+      viewer.dataset.live = "0";
       var pill = document.getElementById("livePill");
       if (pill) {
         pill.className = "pill ok";
-        pill.textContent = "finished";
+        pill.textContent = "Finished";
       }
       var note = document.getElementById("liveNote");
-      if (note) note.textContent = "session finished — polling stopped";
+      if (note) note.textContent = "session finished \u2014 polling stopped";
+      window.clearInterval(timer);
     }
 
     function poll() {
       if (document.hidden) return;
-      fetch(
+      var url =
         "/logs/fragment?run=" +
-          encodeURIComponent(String(runId)) +
-          "&kind=" +
-          encodeURIComponent(kind) +
-          "&after=" +
-          String(lastId),
-        { credentials: "same-origin", cache: "no-store" },
-      )
+        runId +
+        "&kind=" +
+        kind +
+        "&after=" +
+        lastId;
+      fetch(url, { credentials: "same-origin", cache: "no-store" })
         .then(function (response) {
-          if (!response.ok) return null;
-          return response.json();
-        })
-        .then(function (data) {
-          if (!data) return;
-          if (Array.isArray(data.lines) && data.lines.length) {
-            appendLines(data.lines);
-            var next = Number(data.lastId);
-            if (Number.isFinite(next) && next >= lastId) {
-              lastId = next;
-              pre.dataset.lastId = String(lastId);
+          if (!response.ok) return;
+          return response.json().then(function (data) {
+            if (data.entries && data.entries.length) {
+              appendEntries(data.entries);
             }
-          }
-          if (data.live === false) {
-            window.clearInterval(timer);
-            markFinished();
-          }
+            if (typeof data.lastId === "number" && data.lastId > 0) {
+              lastId = data.lastId;
+            }
+            if (data.finishedAt) markFinished();
+          });
         })
         .catch(function () {
           /* transient network error; retry on the next tick */
@@ -269,10 +305,10 @@
     poll();
   }
 
-  /* ---- live errors table ---- */
+  /* ---- live errors cards ---- */
 
-  var tbody = document.getElementById("errorsBody");
-  if (tbody && tbody.dataset.live === "1") {
+  var errorCards = document.getElementById("errorCards");
+  if (errorCards && errorCards.dataset.live === "1") {
     var pollErrors = function () {
       if (document.hidden) return;
       fetch("/errors/fragment", {
@@ -283,10 +319,10 @@
           if (!response.ok) return;
           var live = response.headers.get("X-Engine-Live") !== "0";
           return response.text().then(function (html) {
-            tbody.innerHTML = html;
+            errorCards.innerHTML = html;
             if (!live) {
               window.clearInterval(errorsTimer);
-              tbody.dataset.live = "0";
+              errorCards.dataset.live = "0";
               var pill = document.getElementById("livePill");
               if (pill) {
                 pill.className = "pill ok";

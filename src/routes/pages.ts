@@ -5,8 +5,8 @@ import { configForm } from "./actions";
 import { encryptionEnabled } from "../crypto";
 import { engineState } from "../engine";
 import { checkRclone } from "../rclone";
-import { tail, LOG_TAIL_LIMIT } from "../log";
-import { readErrorRows, renderErrorRows } from "../errorrows";
+import { tail, tailRendered, LOG_TAIL_LIMIT } from "../log";
+import { readErrorRows, renderErrorCards } from "../errorrows";
 
 export const pages = new Hono();
 
@@ -187,7 +187,11 @@ pages.get("/logs", async (c) => {
     id: number;
     started_at: string;
     finished_at: string | null;
-  }>("SELECT id, started_at, finished_at FROM runs ORDER BY id DESC LIMIT 50");
+    total: number;
+    done: number;
+    failed: number;
+    skipped: number;
+  }>("SELECT id, started_at, finished_at, total, done, failed, skipped FROM runs ORDER BY id DESC LIMIT 50");
 
   if (runs.length === 0) {
     return c.html(
@@ -221,17 +225,21 @@ pages.get("/logs", async (c) => {
     { scope: "run", refId: Number(selected.id), kind },
     LOG_TAIL_LIMIT,
   );
-  const logText = tap.lines.join("\n");
+  const { entries } = await tailRendered(
+    { scope: "run", refId: Number(selected.id), kind },
+    LOG_TAIL_LIMIT,
+  );
   const hasLog = tap.lines.length > 0;
   const showLog = isLive || hasLog;
 
   const options = runs
-    .map(
-      (r) =>
-        `<option value="${r.id}"${Number(r.id) === selectedId ? " selected" : ""}>Run #${r.id} · ${esc(
-          r.started_at,
-        )} · ${r.finished_at ? "finished" : "in progress"}</option>`,
-    )
+    .map((r) => {
+      const dur = r.finished_at
+        ? Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+        : 0;
+      const durStr = dur > 0 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : "…";
+      return `<option value="${r.id}"${Number(r.id) === selectedId ? " selected" : ""}>Run #${r.id} · ${esc(r.started_at).slice(11, 16)} · ${durStr} · ${r.done} done</option>`;
+    })
     .join("");
 
   const picker = running
@@ -251,52 +259,54 @@ pages.get("/logs", async (c) => {
   </div>`;
 
   const statusPill = isLive
-    ? `<span class="pill warn" id="livePill">live</span>`
+    ? `<span class="pill warn" id="livePill">Live</span>`
     : `<span class="pill ${selected.finished_at ? "ok" : "warn"}">${
-        selected.finished_at ? "finished" : "incomplete"
+        selected.finished_at ? "Finished" : "Incomplete"
       }</span>`;
 
-  const meta = `<div class="log-meta">
+  const dur = selected.finished_at
+    ? Math.round((new Date(selected.finished_at).getTime() - new Date(selected.started_at).getTime()) / 1000)
+    : 0;
+  const durStr = dur > 0 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : "running";
+
+  const summary = `<div class="session-summary">
     ${statusPill}
-    <span>Run #${selected.id}</span>
-    <span class="muted">${esc(selected.started_at)}${
-      selected.finished_at ? ` → ${esc(selected.finished_at)}` : ""
-    }</span>
-    ${
-      isLive
-        ? `<span class="muted live-note" id="liveNote">live — polling every 2s</span>`
-        : ""
-    }
+    <span>Run #${selected.id} · ${esc(selected.started_at).slice(11, 16)} · ${durStr}</span>
+    <span class="summary-counts">
+      <span class="muted">done ${selected.done}</span> ·
+      <a href="/errors" class="muted">failed ${selected.failed}</a> ·
+      <span class="muted">skipped ${selected.skipped}</span>
+    </span>
+    ${isLive ? `<span class="muted live-note" id="liveNote">polling 2s</span>` : ""}
   </div>`;
 
-  // Copy toolbar lives outside the scrolling <pre>, so nothing re-renders
-  // while polling and the buttons stay reachable.
   const downloadHref = `/download/run/${selected.id}?kind=${kind}`;
   const copyToolbar = `<div class="log-actions" role="toolbar" aria-label="Log actions">
-      <button class="btn small" type="button" data-copy-url="${esc(downloadHref)}">Copy all</button>
-      <button class="btn small" type="button" data-copy-selection="#logTail">Copy selection</button>
-      <button class="btn small" type="button" data-select="#logTail">Select all</button>
-      <a class="btn small ghost" href="${esc(downloadHref)}">Download ${
-        kind === "errors" ? "errors" : "log"
-      }</a>
+      <div class="log-filters">
+        <button class="btn small filter-chip active" data-filter="all">All</button>
+        <button class="btn small filter-chip" data-filter="warnerr">Warnings &amp; Errors</button>
+      </div>
+      <span class="log-actions-right">
+        <button class="btn small" type="button" data-copy-url="${esc(downloadHref)}">Copy all</button>
+        <a class="btn small ghost" href="${esc(downloadHref)}">Download ${kind === "errors" ? "errors" : "log"}</a>
+      </span>
     </div>`;
 
+  const entriesHtml = entries.map((e) => e.html).join("");
   const logBlock = showLog
-    ? `<pre class="tail" id="logTail" data-run="${selected.id}" data-kind="${kind}" data-live="${
+    ? `<div class="log-viewer" id="logViewer" data-run="${selected.id}" data-kind="${kind}" data-live="${
         isLive ? "1" : "0"
-      }" data-last-id="${tap.lastId}">${esc(logText)}</pre>`
-    : `<p class="muted">${
-        kind === "errors"
-          ? "No errors in this session."
-          : "No log lines yet."
-      }</p>`;
+      }" data-last-id="${tap.lastId}">${entriesHtml}</div>`
+    : `<div class="empty-state"><p class="muted">${
+        kind === "errors" ? "No errors in this session." : "No log lines yet."
+      }</p></div>`;
 
   const toastRegion = `<div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>`;
   const body = `<div class="log-toolbar">
       ${picker}
       ${tabs}
     </div>
-    ${meta}
+    ${summary}
     ${showLog ? copyToolbar : ""}
     ${logBlock}
     ${toastRegion}
@@ -309,14 +319,9 @@ pages.get("/errors", async (c) => {
   const rows = await readErrorRows(store);
   const body = `<div class="log-actions" role="toolbar" aria-label="Error actions">
       ${running ? `<span class="pill warn" id="livePill">live</span>` : ""}
-      <button class="btn small" type="button" data-copy-table="#errorsTable">Copy all errors</button>
-      <span class="muted">Row “Copy” grabs that archive's extract log.</span>
+      <button class="btn small" type="button" data-copy-table="#errorCards">Copy all errors</button>
     </div>
-    <div class="table-wrap"><table id="errorsTable">
-      <thead><tr><th>Archive</th><th>Kind</th><th>Updated</th><th>Log</th></tr></thead>
-      <tbody id="errorsBody" data-live="${running ? "1" : "0"}">${renderErrorRows(
-        rows,
-      )}</tbody></table></div>
+    <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
     <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
     <script src="/public/copy.js" defer></script>`;
   return c.html(layout("Errors", body, "errors"));

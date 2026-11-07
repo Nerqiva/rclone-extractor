@@ -1,0 +1,10 @@
+{
+  "providers": {
+    "Omniroute": {
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://localhost:20128/v1"
+      }
+    }
+  }
+}
