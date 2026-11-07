@@ -1,6 +1,6 @@
 {
   "name": "rclone-extractor",
-  "version": "2026.11.06.4-alpha",
+  "version": "2026.11.07.1-alpha",
   "type": "module",
   "scripts": {
     "start": "bun run src/server.ts",
