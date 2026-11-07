@@ -500,6 +500,13 @@ export class Rclone {
         "move",
         `${this.root}/${tmp}`,
         `${this.root}/${parent}`,
+        // rclone refuses to move when the source is nested inside the
+        // destination (OverlappingFilterCheck). The tmp dir is always inside
+        // the scan root, so exclude it from the destination traversal. The
+        // pattern is anchored to the top level so archive contents that are
+        // themselves named .rclone-extractor-tmp are still promoted.
+        "--exclude",
+        "/.rclone-extractor-tmp/**",
         "--delete-empty-src-dirs",
       ],
       dry,

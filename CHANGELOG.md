@@ -54,6 +54,15 @@ to `main`.
 - Archives under `trash_subdir` are ignored while building the queue and when a
   run selects queued rows, preventing re-processing of already-trashed files.
 
+### Fixed
+- **Promotion no longer fails on nested destinations.** `rclone move` rejects
+  moving a directory into a parent that contains it
+  ("can't sync or move files on overlapping remotes"), which is always the
+  case here because the extract temp dir lives inside `scan_root`. `promote`
+  now passes `--exclude /.rclone-extractor-tmp/**`, excluding the temp dir
+  from the destination traversal while still promoting archive contents that
+  are themselves named `.rclone-extractor-tmp`.
+
 ### Changed
 - **Login uses the `APP_PASSWORD` environment variable only.** The stored
   `password` setting was removed from the schema defaults, settings list, and

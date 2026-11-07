@@ -259,7 +259,7 @@ For each archive at `<ROOT>/<REL>`:
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";"
 inspect: rclone archive list <ROOT>/<REL> --files-only
 extract: rclone archive extract <ROOT>/<REL> <ROOT>/<TMPREL> --stats 1s --stats-one-line
-promote: rclone move <ROOT>/<TMPREL> <ROOT>/<PARENT> --delete-empty-src-dirs
+promote: rclone move <ROOT>/<TMPREL> <ROOT>/<PARENT> --exclude /.rclone-extractor-tmp/** --delete-empty-src-dirs
 cleanup: rclone purge <ROOT>/<TMPREL>
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
@@ -270,6 +270,13 @@ every command; `--dry-run` is added when `dry_run` is on (`archive list` is
 read-only and never gets `--dry-run`). The active command is written to both
 the run log and, for per-archive work, the archive log; when a stage fails,
 the command and its output are also written to the errors log.
+
+`promote` passes `--exclude /.rclone-extractor-tmp/**` because `rclone move`
+refuses to run when the source is nested inside the destination
+(`OverlappingFilterCheck`). The pattern is anchored to the top level, so
+archive contents that are themselves named `.rclone-extractor-tmp` are still
+promoted. Without it every promotion fails with
+"can't sync or move files on overlapping remotes".
 
 ### Content filters (before extraction)
 

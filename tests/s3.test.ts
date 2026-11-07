@@ -158,6 +158,26 @@ test("per-archive log records the command that ran", async () => {
   );
 });
 
+test("promote command excludes the tmp workspace from the destination", async () => {
+  const row = await db!.store.get1<{ id: number }>(
+    "SELECT id FROM archives WHERE path='a/b.zip'",
+  );
+  expect(row).toBeDefined();
+  const lines = await readAll({
+    scope: "archive",
+    refId: Number(row!.id),
+    kind: "extract",
+  });
+  expect(
+    lines.some(
+      (line) =>
+        line.includes("$ rclone move") &&
+        line.includes("--exclude") &&
+        line.includes("/.rclone-extractor-tmp/**"),
+    ),
+  ).toBe(true);
+});
+
 test("done paths are re-queued on a later non-dry run", async () => {
   await setSetting("dry_run", "0");
   await runEngine();
