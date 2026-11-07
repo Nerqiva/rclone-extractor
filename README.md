@@ -261,6 +261,7 @@ inspect: rclone archive list <ROOT>/<REL> --files-only
 extract: rclone archive extract <ROOT>/<REL> <ROOT>/<TMPREL> --stats 1s --stats-one-line
 promote: rclone move <ROOT>/<TMPREL> <ROOT>/<PARENT> --exclude /.rclone-extractor-tmp/** --delete-empty-src-dirs
 cleanup: rclone purge <ROOT>/<TMPREL>
+rmdir:   rclone rmdir <ROOT>/.rclone-extractor-tmp/<runid>/<archiveid> (then <runid>/ and .rclone-extractor-tmp/)
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
 
@@ -277,6 +278,12 @@ refuses to run when the source is nested inside the destination
 archive contents that are themselves named `.rclone-extractor-tmp` are still
 promoted. Without it every promotion fails with
 "can't sync or move files on overlapping remotes".
+
+After each archive is processed the now-empty per-archive temp directory is
+removed with `rclone rmdir`, and the run-level and global
+`.rclone-extractor-tmp` directories are removed at the end of the run, both
+best-effort. A non-empty directory (e.g. from a crashed or partially-extracting
+run) is left in place and only produces a warning/log line.
 
 ### Content filters (before extraction)
 

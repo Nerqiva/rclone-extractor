@@ -178,6 +178,30 @@ test("promote command excludes the tmp workspace from the destination", async ()
   ).toBe(true);
 });
 
+test("temp parents are removed (rmdir) after processing", async () => {
+  const row = await db!.store.get1<{ id: number }>(
+    "SELECT id FROM archives WHERE path='a/b.zip'",
+  );
+  expect(row).toBeDefined();
+  const lines = await readAll({
+    scope: "archive",
+    refId: Number(row!.id),
+    kind: "extract",
+  });
+  expect(lines.some((line) => line.includes("$ rclone rmdir"))).toBe(true);
+
+  const main = await readAll({
+    scope: "run",
+    refId: engineState.runId,
+    kind: "main",
+  });
+  expect(
+    main.some(
+      (line) => line.includes("$ rclone rmdir") && line.includes(".rclone-extractor-tmp"),
+    ),
+  ).toBe(true);
+});
+
 test("done paths are re-queued on a later non-dry run", async () => {
   await setSetting("dry_run", "0");
   await runEngine();

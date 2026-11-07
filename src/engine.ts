@@ -231,8 +231,10 @@ export async function runEngine(): Promise<void> {
       );
 
       const tmp = tmpRel(rel, runRowId, row.id);
+      const tmpArchiveDir = `.rclone-extractor-tmp/${runRowId}/${row.id}`;
       const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
       let result: "done" | "failed" | "skipped" = "failed";
+      let tmpAttempted = false;
 
       await store.run(
         "INSERT OR REPLACE INTO logs(archive_id, kind, rel_path) VALUES(?, 'extract', ?)",
@@ -269,6 +271,7 @@ export async function runEngine(): Promise<void> {
           warn(`skipped (${skipReason}): ${rel} [${detail}]`);
           result = "skipped";
         } else {
+        tmpAttempted = true;
         const ex = await rc.extract(rel, tmp, dryRun, ref);
 
         if (ex.code !== 0) {
@@ -349,6 +352,25 @@ export async function runEngine(): Promise<void> {
           engineState.skipped,
           runRowId,
         ]);
+        // Best effort: drop the now-empty per-archive temp dir. It stays
+        // around (and failing rmdir is only a warning) when extraction did
+        // not finish, so any partial data is kept.
+        if (tmpAttempted) {
+          const rmdir = await rc.rmdir(tmpArchiveDir, dryRun, ref);
+          if (rmdir.code !== 0) {
+            warn(
+              `rmdir failed: ${tmpArchiveDir} [$ ${rmdir.command}] ${rmdir.stderr.trim() || "not empty"}`,
+            );
+          }
+        }
+      }
+    }
+
+    // Best effort: drop the now-empty run-level and global temp dirs.
+    for (const p of [`.rclone-extractor-tmp/${runRowId}`, ".rclone-extractor-tmp"]) {
+      const res = await rc.rmdir(p, dryRun);
+      if (res.code !== 0) {
+        logger.info(`left ${p} in place (${res.stderr.trim() || "not empty"})`);
       }
     }
 

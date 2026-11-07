@@ -449,14 +449,21 @@ export class Rclone {
     }
   }
 
-  async run(args: string[], dry: boolean, ref: RcloneRef): Promise<Outcome> {
+  /**
+   * Run a command. When `ref` is given, the command and its output are
+   * appended to that archive's log; without a ref the command still goes to
+   * the run log via `announce()`.
+   */
+  async run(args: string[], dry: boolean, ref?: RcloneRef): Promise<Outcome> {
     const full = [...this.confArgs(), ...args, ...this.flags];
     if (dry) full.push("--dry-run");
     const command = this.announce(full);
 
-    let seq = await this.nextSeq(ref);
-    await this.appendArchiveLines(ref, [`$ ${command}`], seq);
-    seq++;
+    let seq = ref ? await this.nextSeq(ref) : 0;
+    if (ref) {
+      await this.appendArchiveLines(ref, [`$ ${command}`], seq);
+      seq++;
+    }
 
     const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
@@ -471,7 +478,7 @@ export class Rclone {
     const combined = `${out}\n${err}`
       .split("\n")
       .filter((line) => line.length > 0);
-    await this.appendArchiveLines(ref, combined, seq);
+    if (ref) await this.appendArchiveLines(ref, combined, seq);
 
     return { code, tail: combined.slice(-40), stderr: err, command };
   }
@@ -516,6 +523,11 @@ export class Rclone {
 
   async cleanup(tmp: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
     return this.run(["purge", `${this.root}/${tmp}`], dry, ref);
+  }
+
+  /** Remove an empty directory. Non-empty directories fail with code != 0. */
+  async rmdir(path: string, dry: boolean, ref?: RcloneRef): Promise<Outcome> {
+    return this.run(["rmdir", `${this.root}/${path}`], dry, ref);
   }
 
   async trash(rel: string, subdir: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {

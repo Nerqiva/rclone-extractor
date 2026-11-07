@@ -53,6 +53,10 @@ to `main`.
   KB, and directories are excluded. Skipped archives stay skipped on later runs.
 - Archives under `trash_subdir` are ignored while building the queue and when a
   run selects queued rows, preventing re-processing of already-trashed files.
+- After each processed archive the now-empty per-archive temp directory is
+  removed (`rclone rmdir`), and the run-level and global `.rclone-extractor-tmp`
+  directories are removed at the end of the run, best-effort. Non-empty
+  directories (crashes, partial extracts) are left in place.
 
 ### Fixed
 - **Promotion no longer fails on nested destinations.** `rclone move` rejects
