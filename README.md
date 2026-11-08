@@ -193,6 +193,7 @@ database. They can also be seeded from environment variables.
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
 | `dry_run` | When on, rclone runs with `--dry-run`; nothing is moved or deleted. |
 | `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
+| `tmp_dir` | Where rclone extracts archives temporarily (default `.rclone-extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start. |
 | `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. |
 
@@ -263,25 +264,31 @@ For each archive at `<ROOT>/<REL>`:
 ```
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";"
 inspect: rclone archive list <ROOT>/<REL> --files-only
-extract: rclone archive extract <ROOT>/<REL> <ROOT>/<TMPREL> --stats 1s --stats-one-line --log-level INFO
-promote: rclone move <ROOT>/<TMPREL> <ROOT>/<PARENT> --exclude /.rclone-extractor-tmp/** --delete-empty-src-dirs
-cleanup: rclone purge <ROOT>/<TMPREL>
-rmdir:   rclone rmdir <ROOT>/.rclone-extractor-tmp/<runid>/<archiveid> (then <runid>/ and .rclone-extractor-tmp/)
+extract: rclone archive extract <ROOT>/<REL> <TMPDIR>/<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
+promote: rclone move <TMPDIR>/<runid>/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
+cleanup: rclone purge <TMPDIR>/<runid>/<archiveid>/<stem>
+rmdir:   rclone rmdir <TMPDIR>/<runid>/<archiveid> (then <runid>/ and the tmp root; falls back to purge when not empty)
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
 
-`<TMPREL>` is `.rclone-extractor-tmp/<runid>/<archiveid>/<stem>`, so two
-archives with the same filename cannot collide. `remote_flags` is appended to
+`<TMPDIR>` is the configured `tmp_dir` (default `.rclone-extractor-tmp`):
+a relative path is resolved under `<ROOT>`, while `remote:path/to/dir` or
+`/abs/local/path` are used as-is. `<TMPDIR>/<runid>/<archiveid>/<stem>` so two
+archives with the same filename cannot collide.
+
+`remote_flags` is appended to
 every command; `--dry-run` is added when `dry_run` is on (`archive list` is
 read-only and never gets `--dry-run`). The active command is written to both
 the run log and, for per-archive work, the archive log; when a stage fails,
 the command and its output are also written to the errors log.
 
-`promote` passes `--exclude /.rclone-extractor-tmp/**` because `rclone move`
-refuses to run when the source is nested inside the destination
+`promote` passes `--exclude /<tmp-top-segment>/**` (only when `tmp_dir` is a
+relative path nested inside the scan root) because `rclone move` refuses to
+run when the source is nested inside the destination
 (`OverlappingFilterCheck`). The pattern is anchored to the top level, so
-archive contents that are themselves named `.rclone-extractor-tmp` are still
-promoted. Without it every promotion fails with
+archive contents that are themselves named like the temp dir are still
+promoted, and an absolute `tmp_dir` needs no exclusion. Without the exclusion,
+when tmp is nested, every promotion fails with
 "can't sync or move files on overlapping remotes".
 
 The `extract` step streams its output: rclone prints single-line transfer
@@ -291,11 +298,13 @@ of the archive log, so a long extract does not spam the log with one line per
 second. The command line and everything rclone reports besides stats lines are
 still logged.
 
-After each archive is processed the now-empty per-archive temp directory is
-removed with `rclone rmdir`, and the run-level and global
-`.rclone-extractor-tmp` directories are removed at the end of the run, both
-best-effort. A non-empty directory (e.g. from a crashed or partially-extracting
-run) is left in place and only produces a warning/log line.
+Directories matching the app's run layout (`<runid>/` with numeric names, as
+created under `tmp_dir`) are purged automatically at boot, at the start of
+every run, and at the end of a run; the last cleanup of a non-empty directory
+falls back from `rclone rmdir` to `rclone purge`. Non-app entries inside
+`tmp_dir` are never deleted — they are left alone and only logged. The
+Configuration page also has a **Purge temp directory** maintenance action.
+`dry_run` disables destructive cleanup entirely.
 
 ### Content filters (before extraction)
 
@@ -432,7 +441,7 @@ GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
 POST /run/start  /run/stop                     (auth)
 POST /config  /rclone-conf  /config/rclone-clear  (auth)
-POST /maintenance/archives  /maintenance/runs  /maintenance/all  (auth)
+POST /maintenance/archives  /maintenance/runs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)
 POST /export  /import                          (auth)
 GET  /healthz              "ok" (no auth)

@@ -70,6 +70,19 @@ to `main`.
   child processes the app tracks); the interrupted archive is reset to `queued`
   instead of being counted as done/failed/skipped, and the run ends in the
   `cancelled` stage.
+- **Configurable temporary extraction directory (`tmp_dir`).** A new
+  Configuration setting controls where rclone extracts archives before
+  promotion. A relative path resolves inside `scan_root` (unchanged default
+  `.rclone-extractor-tmp`); absolute paths (`remote:path/to/dir` or
+  `/abs/local/path`) are supported for extracts elsewhere. The engine now
+  validates the setting up front and refuses to overlap it with the scan root
+  or the trash directory.
+- **Automatic stale-temp cleanup.** App-owned stale directories (numeric
+  run/archive dirs inside `tmp_dir`) are purged at boot, at the start of every
+  run, and at the end of a run (old `rmdir` now falls back to `purge` for
+  non-empty dirs). Non-app entries are left alone. `dry_run` disables
+  destructive cleanup entirely, and a **Purge temp directory** button on the
+  Configuration page runs the same sweep on demand.
 - **Uniform button feedback.** Every server-action button shows a spinner and
   disabled state while its request is in flight, and server responses raise a
   toast via the `HX-Trigger` response header (`{"appToast":{message,kind}}`).

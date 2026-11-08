@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { rmSync } from "node:fs";
-import { store, setSetting, allSettings } from "../db";
+import { store, setSetting, allSettings, getSetting } from "../db";
 import { engineState, runEngine, stopEngine, forceStopEngine } from "../engine";
 import { esc } from "../ui";
 import { encryptionEnabled } from "../crypto";
 import { APP_PASSWORD, RCLONE_CONF, RCLONE_CONF_PATH } from "../config";
 import { normalizeRcloneConf } from "../rcloneconf";
+import { Rclone } from "../rclone";
+import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "../tmpdir";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
@@ -89,6 +91,7 @@ const SETTING_KEYS = [
   "sort_by",
   "sort_dir",
   "trash_subdir",
+  "tmp_dir",
 ];
 
 actions.post("/config", async (c) => {
@@ -110,6 +113,29 @@ actions.post("/config", async (c) => {
       : confField === null
         ? ""
         : String(confField);
+  const scanRootNew = form.get("scan_root") !== null
+    ? String(form.get("scan_root"))
+    : ((await getSetting("scan_root", "")) ?? "");
+  const trashNew = form.get("trash_subdir") !== null
+    ? String(form.get("trash_subdir"))
+    : ((await getSetting("trash_subdir", "trash")) ?? "trash");
+  let storedTmpDir: string | undefined;
+  const tmpRaw = form.get("tmp_dir") === null ? undefined : String(form.get("tmp_dir") ?? "").trim();
+  if (tmpRaw !== undefined) {
+    const spec = tmpRaw
+      ? parseTmpDir(tmpRaw, scanRootNew, trashNew)
+      : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
+    if (!spec) {
+      return c.html(
+        await configForm(
+          `<p class="note err">tmp_dir is not a usable location (check for &quot;..&quot;, empty segments, or that it does not overlap the trash dir).</p>`,
+        ),
+        200,
+        toastHeaders("tmp_dir is not usable", "err"),
+      );
+    }
+    storedTmpDir = spec.value;
+  }
   if (source.trim()) {
     const parsed = normalizeRcloneConf(source);
     if (!parsed.ok) {
@@ -124,9 +150,11 @@ actions.post("/config", async (c) => {
 
   for (const key of SETTING_KEYS) {
     if (key === "rclone_conf") continue;
+    if (key === "tmp_dir") continue; // stored normalized below
     const value = form.get(key);
     if (value !== null) await setSetting(key, String(value));
   }
+  if (storedTmpDir !== undefined) await setSetting("tmp_dir", storedTmpDir);
   if (normalizedConf !== null) await setSetting("rclone_conf", normalizedConf);
   await setSetting("dry_run", form.get("dry_run") !== null ? "1" : "0");
   await setSetting("resume", form.get("resume") !== null ? "1" : "0");
@@ -178,6 +206,50 @@ actions.post("/maintenance/runs", async (c) => {
     200,
     toastHeaders("Cleared run history and logs."),
   );
+});
+
+/** Manual purge of stale temp dirs (boot/sweep parity). */
+actions.post("/maintenance/tmp-purge", async (c) => {
+  const dryRun = (await getSetting("dry_run", "0")) === "1";
+  const scanRoot = (await getSetting("scan_root", "")) ?? "";
+  const trash = (await getSetting("trash_subdir", "trash")) ?? "trash";
+  const raw = ((await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT).trim();
+  const spec = raw
+    ? parseTmpDir(raw, scanRoot, trash)
+    : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
+  if (!spec) {
+    return c.html(
+      `<p class="note err">tmp_dir is invalid; nothing purged.</p>`,
+      200,
+      toastHeaders("tmp_dir is invalid", "err"),
+    );
+  }
+  try {
+    const rc = await Rclone.fromSettings();
+    const res = await rc.purgeStaleTemp(tmpRootPath(scanRoot, spec), dryRun);
+    const purged = res.purged.length;
+    const failed = res.failed.length;
+    const none = purged === 0 && failed === 0;
+    const msg = dryRun
+      ? none
+        ? "Dry run: temp directory is tidy"
+        : `Dry run: would purge ${purged} stale item(s)`
+      : none
+        ? "Temp directory is tidy"
+        : `Purged ${purged} stale item(s)`;
+    const detail = failed ? ` ${failed} could not be purged.` : "";
+    return c.html(
+      `<p class="note${failed ? " err" : ""}">${esc(msg)}.${esc(detail)}</p>`,
+      200,
+      toastHeaders(msg + detail, failed ? "err" : "ok"),
+    );
+  } catch (e) {
+    return c.html(
+      `<p class="note err">Purge failed: ${esc(String(e))}</p>`,
+      200,
+      toastHeaders("Purge failed", "err"),
+    );
+  }
 });
 
 actions.post("/maintenance/all", async (c) => {
@@ -278,6 +350,13 @@ export async function configForm(note = ""): Promise<string> {
     `<label class="field"><span>trash_subdir</span>
       <input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? "trash")}"></label>`,
   )}
+  ${settingRow(
+    "tmp_dir",
+    s.tmp_dir || TMP_DIR_DEFAULT,
+    `<label class="field"><span>tmp_dir</span>
+      <input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}"></label>`,
+  )}
+  <p class="muted">Where rclone extracts archives temporarily. A relative path resolves inside <strong>scan_root</strong>; use <code>remote:path/to/dir</code> or <code>/abs/local/path</code> to extract elsewhere. Contents matching the app&apos;s run layout (numeric run/archive dirs) are purged automatically at boot, at the start of every run, and at the end of a run; other files in this directory are left alone. <code>dry_run</code> disables destructive cleanup.</p>
   ${settingRow(
     "sort_by",
     s.sort_by ?? "path",

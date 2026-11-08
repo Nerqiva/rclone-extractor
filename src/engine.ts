@@ -2,7 +2,15 @@ import { Logger } from "./log";
 import { store, getSetting, setSetting } from "./db";
 import { Rclone, killActiveProcs, type ExtractStats } from "./rclone";
 import {
-  tmpRel,
+  tmpRootPath,
+  tmpRunDir,
+  tmpArchiveDir,
+  tmpStemDir,
+  tmpTopSegment,
+  parseTmpDir,
+  TMP_DIR_DEFAULT,
+} from "./tmpdir";
+import {
   isTrashPath,
   normalizeRel,
   escapeLike,
@@ -10,6 +18,7 @@ import {
   addArchiveEntry,
   classifyArchive,
   describeArchiveStats,
+  stem,
   type SkipReason,
 } from "./archive";
 
@@ -110,6 +119,19 @@ export async function runEngine(): Promise<void> {
     engineState.running = false;
     return;
   }
+  // Validate tmp_dir up front so misconfiguration fails fast instead of
+  // producing a half-extracted archive outside the expected tree.
+  const tmpRawValue = (await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT;
+  const tmpRaw = tmpRawValue.trim();
+  const tmpSpec = tmpRaw
+    ? parseTmpDir(tmpRaw, scanRoot, (await getSetting("trash_subdir", "trash")) ?? "trash")
+    : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
+  if (!tmpSpec) {
+    engineState.stage = "error";
+    engineState.lastError = `tmp_dir is invalid: ${tmpRawValue}`;
+    engineState.running = false;
+    return;
+  }
 
   await setSetting("cancel", "0");
 
@@ -152,6 +174,28 @@ export async function runEngine(): Promise<void> {
     rc.onCommand = (command) => {
       engineState.currentCommand = command;
     };
+
+    // Absolute when tmp_dir is a remote/local path; inside root otherwise.
+    const tmpRoot = tmpRootPath(scanRoot, tmpSpec);
+    const tmpTop = tmpTopSegment(tmpSpec);
+    const dryRunNow = (await getSetting("dry_run", "0")) === "1";
+    try {
+      const res = await rc.purgeStaleTemp(tmpRoot, dryRunNow);
+      if (res.purged.length) {
+        const verb = dryRunNow ? "would purge (dry run)" : "purged";
+        logger.info(
+          `${verb} ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`,
+        );
+      }
+      if (res.failed.length) {
+        logger.warn(`could not purge temp dir(s): ${res.failed.join(", ")}`);
+      }
+      if (res.skipped.length) {
+        logger.info(`kept non-app temp entries: ${res.skipped.join(", ")}`);
+      }
+    } catch (e) {
+      logger.warn(`temp sweep failed: ${e}`);
+    }
 
     const queueMax = clampQueueMax(await getSetting("queue_max", "500"));
     const dryRun = (await getSetting("dry_run", "0")) === "1";
@@ -260,8 +304,9 @@ export async function runEngine(): Promise<void> {
         [now(), row.id],
       );
 
-      const tmp = tmpRel(rel, runRowId, row.id);
-      const tmpArchiveDir = `.rclone-extractor-tmp/${runRowId}/${row.id}`;
+      const baseName = rel.slice(rel.lastIndexOf("/") + 1);
+      const tmp = tmpStemDir(tmpRoot, runRowId, row.id, stem(baseName));
+      const archiveTmpDir = tmpArchiveDir(tmpRoot, runRowId, row.id);
       const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
       let result: "done" | "failed" | "skipped" = "failed";
       let tmpAttempted = false;
@@ -328,7 +373,7 @@ export async function runEngine(): Promise<void> {
             );
           }
         } else {
-          const promoted = await rc.promote(rel, tmp, dryRun, ref);
+          const promoted = await rc.promote(rel, tmp, dryRun, ref, tmpTop);
           if (promoted.code !== 0) {
             await rc.cleanup(tmp, dryRun, ref);
             await store.run(
@@ -402,21 +447,28 @@ export async function runEngine(): Promise<void> {
         // around (and failing rmdir is only a warning) when extraction did
         // not finish, so any partial data is kept.
         if (tmpAttempted) {
-          const rmdir = await rc.rmdir(tmpArchiveDir, dryRun, ref);
+          const rmdir = await rc.rmdir(archiveTmpDir, dryRun, ref);
           if (rmdir.code !== 0) {
             warn(
-              `rmdir failed: ${tmpArchiveDir} [$ ${rmdir.command}] ${rmdir.stderr.trim() || "not empty"}`,
+              `rmdir failed: ${archiveTmpDir} [$ ${rmdir.command}] ${rmdir.stderr.trim() || "not empty"}`,
             );
           }
         }
       }
     }
 
-    // Best effort: drop the now-empty run-level and global temp dirs.
-    for (const p of [`.rclone-extractor-tmp/${runRowId}`, ".rclone-extractor-tmp"]) {
+    // Best effort: drop the now-empty run-level and global temp dirs. If a
+    // directory is not empty (e.g. an archive was force-stopped mid-flight),
+    // purge it instead of leaving junk behind.
+    for (const p of [tmpRunDir(tmpRoot, runRowId), tmpRoot]) {
       const res = await rc.rmdir(p, dryRun);
       if (res.code !== 0) {
-        logger.info(`left ${p} in place (${res.stderr.trim() || "not empty"})`);
+        const purged = await rc.purge(p, dryRun);
+        if (purged.code === 0) {
+          logger.info(`purged ${p} (not empty)`);
+        } else {
+          logger.info(`left ${p} in place (${purged.stderr.trim() || "not empty"})`);
+        }
       }
     }
 

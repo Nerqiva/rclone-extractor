@@ -3,7 +3,8 @@ import { serveStatic } from "hono/bun";
 import { APP_PASSWORD, BIND, PORT } from "./config";
 import { initDb, store, getSetting } from "./db";
 import { recoverStale } from "./engine";
-import { checkRclone } from "./rclone";
+import { checkRclone, Rclone } from "./rclone";
+import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "./tmpdir";
 import { auth, authMiddleware } from "./routes/auth";
 import { pages } from "./routes/pages";
 import { dashboard } from "./routes/dashboard";
@@ -27,6 +28,34 @@ if (rcloneHealth.ok) {
 const resume = (await getSetting("resume", "1")) === "1";
 const recovered = await recoverStale(resume);
 if (recovered > 0) console.log(`boot: recovered ${recovered} stale archive(s)`);
+
+// Best-effort cleanup of temp dirs left behind by previous runs (e.g. after
+// a crash). Only app-owned numeric directories inside the configured
+// tmp_dir are purged; anything else is left alone. Honors dry_run.
+const dryRunBoot = (await getSetting("dry_run", "0")) === "1";
+const scanRootBoot = (await getSetting("scan_root", "")) ?? "";
+const trashBoot = (await getSetting("trash_subdir", "trash")) ?? "trash";
+const tmpRawBoot = ((await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT).trim();
+const tmpSpecBoot = tmpRawBoot
+  ? parseTmpDir(tmpRawBoot, scanRootBoot, trashBoot)
+  : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
+if (tmpSpecBoot) {
+  try {
+    const rcBoot = await Rclone.fromSettings();
+    const res = await rcBoot.purgeStaleTemp(tmpRootPath(scanRootBoot, tmpSpecBoot), dryRunBoot);
+    if (res.purged.length) {
+      const verb = dryRunBoot ? "would purge (dry run)" : "purged";
+      console.log(`boot: ${verb} ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`);
+    }
+    if (res.failed.length) {
+      console.warn(`boot: could not purge temp dir(s): ${res.failed.join(", ")}`);
+    }
+  } catch (e) {
+    console.warn(`boot: temp sweep failed: ${e}`);
+  }
+} else {
+  console.warn(`boot: invalid tmp_dir setting (${tmpRawBoot}); skipping temp sweep`);
+}
 
 const app = new Hono();
 

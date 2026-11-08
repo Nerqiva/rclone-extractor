@@ -1,6 +1,7 @@
 import { getSetting, store } from "./db";
 import { existsSync } from "node:fs";
 import { isSupported } from "./archive";
+import { isAbsoluteTmpPath, type SweepResult } from "./tmpdir";
 import { RCLONE_CONF, RCLONE_CONF_PATH, ensureDataDir, RCLONE_BIN } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
 import type { Logger } from "./log";
@@ -362,6 +363,11 @@ export class Rclone {
     }
   }
 
+  /** Absolute paths (and `remote:` paths) are used as-is; relative ones are resolved against the scan root. */
+  private fullPath(p: string): string {
+    return isAbsoluteTmpPath(p) ? p : `${this.root}/${p}`;
+  }
+
   async list(
     onFile: (
       rel: string,
@@ -569,7 +575,7 @@ export class Rclone {
       "archive",
       "extract",
       `${this.root}/${rel}`,
-      `${this.root}/${tmp}`,
+      this.fullPath(tmp),
       "--stats",
       "1s",
       "--stats-one-line",
@@ -627,35 +633,89 @@ export class Rclone {
     return { code, tail: kept.slice(-40), stderr: kept.join("\n"), command };
   }
 
-  async promote(rel: string, tmp: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
+  async promote(
+    rel: string,
+    tmp: string,
+    dry: boolean,
+    ref: RcloneRef,
+    tmpTopSegment: string | null,
+  ): Promise<Outcome> {
     const idx = rel.lastIndexOf("/");
     const parent = idx === -1 ? "" : rel.slice(0, idx);
-    return this.run(
-      [
-        "move",
-        `${this.root}/${tmp}`,
-        `${this.root}/${parent}`,
-        // rclone refuses to move when the source is nested inside the
-        // destination (OverlappingFilterCheck). The tmp dir is always inside
-        // the scan root, so exclude it from the destination traversal. The
-        // pattern is anchored to the top level so archive contents that are
-        // themselves named .rclone-extractor-tmp are still promoted.
-        "--exclude",
-        "/.rclone-extractor-tmp/**",
-        "--delete-empty-src-dirs",
-      ],
-      dry,
-      ref,
-    );
+    const args = [
+      "move",
+      this.fullPath(tmp),
+      `${this.root}/${parent}`,
+      // rclone refuses to move when the source is nested inside the
+      // destination (OverlappingFilterCheck). The tmp dir is inside the
+      // scan root whenever it is configured as a relative path, so exclude
+      // it from the destination traversal. The pattern is anchored to the
+      // top level so archive contents that are themselves named like the
+      // temp dir are still promoted. Absolute temp dirs need no exclusion.
+      "--delete-empty-src-dirs",
+    ];
+    if (tmpTopSegment) args.push("--exclude", `/${tmpTopSegment}/**`);
+    return this.run(args, dry, ref);
   }
 
-  async cleanup(tmp: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
-    return this.run(["purge", `${this.root}/${tmp}`], dry, ref);
+  async cleanup(tmp: string, dry: boolean, ref?: RcloneRef): Promise<Outcome> {
+    return this.run(["purge", this.fullPath(tmp)], dry, ref);
   }
 
   /** Remove an empty directory. Non-empty directories fail with code != 0. */
   async rmdir(path: string, dry: boolean, ref?: RcloneRef): Promise<Outcome> {
-    return this.run(["rmdir", `${this.root}/${path}`], dry, ref);
+    return this.run(["rmdir", this.fullPath(path)], dry, ref);
+  }
+
+  /** Recursively delete a tree. */
+  async purge(path: string, dry: boolean): Promise<Outcome> {
+    return this.run(["purge", this.fullPath(path)], dry);
+  }
+
+  /** Top-level directory names of a remote path (no trailing slashes). Missing dir yields []. */
+  async listTopDirs(path: string): Promise<string[]> {
+    const args = [
+      "lsf",
+      ...this.confArgs(),
+      this.fullPath(path),
+      "--dirs-only",
+      "--format",
+      "p",
+      ...this.flags,
+    ];
+    this.announce(args);
+    const proc = spawnBinary(this.bin, args, {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    if (code !== 0) return [];
+    return out
+      .split("\n")
+      .map((l) => l.trim().replace(/\/+$/, ""))
+      .filter(Boolean);
+  }
+
+  /**
+   * Delete stale app-owned entries (`<digits>` run dirs) inside the temp
+   * root. Anything else is left untouched. Returns what was purged.
+   */
+  async purgeStaleTemp(tmpRoot: string, dry: boolean): Promise<SweepResult> {
+    const tops = await this.listTopDirs(tmpRoot);
+    const result: SweepResult = { purged: [], skipped: [], failed: [] };
+    for (const name of tops) {
+      if (!/^\d+$/.test(name)) {
+        result.skipped.push(name);
+        continue;
+      }
+      const res = await this.purge(`${tmpRoot}/${name}`, dry);
+      if (res.code === 0) result.purged.push(name);
+      else result.failed.push(name);
+    }
+    return result;
   }
 
   async trash(rel: string, subdir: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
