@@ -36,6 +36,10 @@ export interface RenderedEntry {
   level: string;
 }
 
+// Detail ids must be unique across the initial render and every live poll
+// (each render restarts its local counter), so use one process-wide counter.
+let detailIdSeq = 0;
+
 /**
  * Render raw DB rows into structured HTML log entries.
  * Groups 72-dash blocks into collapsible <details>.
@@ -44,7 +48,6 @@ export function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
   const entries: RenderedEntry[] = [];
   let inDetail = false;
   let detailLines: string[] = [];
-  let detailIdx = 0;
 
   for (const row of rows) {
     const time = fmtTime(row.ts);
@@ -56,7 +59,7 @@ export function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
         inDetail = true;
         detailLines = [];
       } else {
-        const id = `log-det-${detailIdx++}`;
+        const id = `log-det-${detailIdSeq++}`;
         const content = detailLines.map((l) => esc(l)).join("\n");
         entries.push({
           level: "DETAIL",
@@ -107,72 +110,62 @@ export function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
 
 export class Logger {
   private seq = 0;
+  // Writes are serialized through this chain so the order they hit the
+  // database matches call order. With a Postgres pool, concurrent inserts
+  // can otherwise land out of order and polls cursoring on `id` permanently
+  // skip lines.
+  private chain: Promise<void> = Promise.resolve();
+  private static pending = new Set<Promise<void>>();
 
   constructor(private ref: LogRef) {}
 
   info(msg: string): void {
-    void this.write("INFO", msg);
+    this.write("INFO", msg);
   }
 
   warn(msg: string): void {
-    void this.write("WARN", msg);
+    this.write("WARN", msg);
   }
 
   error(msg: string, detail?: string): void {
     const body = detail !== undefined ? `${DASHES}\n${detail}\n${DASHES}` : msg;
-    void this.write("ERROR", detail !== undefined ? `${msg}\n${body}` : msg);
+    this.write("ERROR", detail !== undefined ? `${msg}\n${body}` : msg);
   }
 
-  private async write(level: string, line: string): Promise<void> {
+  /** Resolves once every write queued so far has landed (or failed). */
+  flush(): Promise<void> {
+    return this.chain;
+  }
+
+  /** Flush every live Logger; call before closing the database on shutdown. */
+  static async flushAll(): Promise<void> {
+    await Promise.allSettled([...Logger.pending]);
+  }
+
+  private write(level: string, line: string): void {
+    const seq = this.seq++;
     const ts = new Date().toISOString();
-    try {
-      await store.run(
-        "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        [this.ref.scope, this.ref.refId, this.ref.kind, this.seq++, ts, level, line],
-      );
-    } catch (e) {
-      console.error("log write failed:", String(e));
-    }
+    const insert = this.chain.then(async () => {
+      try {
+        await store.run(
+          "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
+          [this.ref.scope, this.ref.refId, this.ref.kind, seq, ts, level, line],
+        );
+      } catch (e) {
+        console.error("log write failed:", String(e));
+      }
+    });
+    this.chain = insert;
+    Logger.pending.add(insert);
+    void insert.finally(() => Logger.pending.delete(insert));
   }
-}
-
-export interface TailResult {
-  lines: string[];
-  lastId: number;
 }
 
 /**
- * Last `limit` lines formatted as strings. When `afterId` is > 0 only lines
- * newer than that id are returned, which is what the live log view polls.
+ * Last `limit` lines rendered as HTML entries. When `afterId` is > 0 only
+ * lines newer than that id are returned, which is what the live log view
+ * polls. Rows come back in `id` order; callers cursor on `lastId`.
  */
-export async function tail(
-  ref: LogRef,
-  limit = 200,
-  afterId = 0,
-): Promise<TailResult> {
-  type Row = LogRow & { id: number | string };
-  if (afterId > 0) {
-    const rows = await store.query<Row>(
-      "SELECT id, ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? AND id > ? ORDER BY id ASC LIMIT ?",
-      [ref.scope, ref.refId, ref.kind, afterId, limit],
-    );
-    return {
-      lines: rows.map(formatRow),
-      lastId: rows.length ? Number(rows[rows.length - 1].id) : afterId,
-    };
-  }
-  const rows = await store.query<Row>(
-    "SELECT id, ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY id DESC LIMIT ?",
-    [ref.scope, ref.refId, ref.kind, limit],
-  );
-  rows.reverse();
-  return {
-    lines: rows.map(formatRow),
-    lastId: rows.length ? Number(rows[rows.length - 1].id) : 0,
-  };
-}
-
-/** Same as tail but returns rendered HTML entries for the log viewer. */
 export async function tailRendered(
   ref: LogRef,
   limit = 200,
@@ -194,6 +187,26 @@ export async function tailRendered(
   }
   const lastId = rows.length ? Number(rows[rows.length - 1].id) : afterId || 0;
   return { entries: renderLogEntries(rows), lastId };
+}
+
+/** Insert log lines in one transaction; returns the next free seq. */
+export async function insertLogLines(
+  ref: LogRef,
+  lines: string[],
+  seqStart: number,
+  level: string | null = null,
+): Promise<number> {
+  if (lines.length === 0) return seqStart;
+  const ts = new Date().toISOString();
+  await store.transaction(async (tx) => {
+    for (let i = 0; i < lines.length; i++) {
+      await tx.run(
+        "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        [ref.scope, ref.refId, ref.kind, seqStart + i, ts, level, lines[i]],
+      );
+    }
+  });
+  return seqStart + lines.length;
 }
 
 export async function readAll(ref: LogRef): Promise<string[]> {

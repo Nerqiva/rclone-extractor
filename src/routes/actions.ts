@@ -58,7 +58,8 @@ actions.post("/run/start", async (c) => {
       [new Date().toISOString()],
     );
     await setSetting("cancel", "0");
-    void runEngine();
+    // runEngine never rejects (it handles errors internally); log defensively.
+    void runEngine().catch((e) => console.error("engine crashed:", String(e)));
     return c.html(controlsFragment(), 200, toastHeaders("Task started."));
   }
   return c.html(controlsFragment(), 200, toastHeaders("A task is already running.", "err"));
@@ -386,7 +387,7 @@ export async function configForm(note = ""): Promise<string> {
     `<label class="field"><span>tmp_dir</span>
       <input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}"></label>`,
   )}
-  <p class="muted">Where rclone extracts archives temporarily. A relative path resolves inside <strong>scan_root</strong>; use <code>remote:path/to/dir</code> or <code>/abs/local/path</code> to extract elsewhere. Contents matching the app&apos;s run layout (numeric run/archive dirs) are purged automatically at boot, at the start of every run, and at the end of a run; other files in this directory are left alone. <code>dry_run</code> disables destructive cleanup.</p>
+  <p class="muted">Where rclone extracts archives. Relative paths resolve inside <strong>scan_root</strong>; <code>remote:path</code> or <code>/abs/path</code> extract elsewhere. App-owned run dirs are purged automatically; other files are kept. <code>dry_run</code> disables cleanup.</p>
   ${settingRow(
     "sort_by",
     s.sort_by ?? "path",

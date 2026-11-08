@@ -43,6 +43,12 @@ const GLOBAL_SCRIPT = `<script>
     button.classList.toggle("is-loading", busy);
   }
 
+  document.body.addEventListener("htmx:configRequest", function (event) {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta && meta.content) {
+      event.detail.headers["X-CSRF-Token"] = meta.content;
+    }
+  });
   document.body.addEventListener("htmx:beforeRequest", function (event) {
     actionButtons(event.detail && event.detail.elt).forEach(function (b) { mark(b, true); });
   });
@@ -65,13 +71,16 @@ const NAV: { href: string; label: string; key: string }[] = [
   { href: "/errors", label: "Errors", key: "errors" },
 ];
 
-export function rail(active: string): string {
+export function rail(active: string, csrf: string | null = null): string {
   const links = NAV.map(
     (n) =>
       `<a class="nav-link${n.key === active ? " active" : ""}" href="${n.href}">${esc(
         n.label,
       )}</a>`,
   ).join("");
+  const csrfInput = csrf
+    ? `<input type="hidden" name="csrf_token" value="${esc(csrf)}">`
+    : "";
   return `<aside class="rail" id="rail">
     <div class="brand">rclone<span>/</span>extractor</div>
     <nav class="nav">${links}</nav>
@@ -79,7 +88,12 @@ export function rail(active: string): string {
       <span class="dot" id="status-dot" title="status"></span>
       <span class="dot-label">authed</span>
       <form method="post" action="/logout" class="rail-logout">
+        ${csrfInput}
         <button class="btn" type="submit">Sign out</button>
+      </form>
+      <form method="post" action="/logout-all" class="rail-logout">
+        ${csrfInput}
+        <button class="btn ghost" type="submit" title="Revoke every session">Sign out everywhere</button>
       </form>
     </div>
   </aside>`;
@@ -89,8 +103,9 @@ export function layout(
   title: string,
   body: string,
   active = "",
+  csrf: string | null = null,
 ): string {
-  const railHtml = active !== "" ? `<button class="rail-toggle" id="rail-toggle" aria-label="Toggle navigation" aria-controls="rail" aria-expanded="false"><span></span><span></span><span></span></button>${rail(active)}<div class="rail-overlay" id="rail-overlay"></div>` : "";
+  const railHtml = active !== "" ? `<button class="rail-toggle" id="rail-toggle" aria-label="Toggle navigation" aria-controls="rail" aria-expanded="false"><span></span><span></span><span></span></button>${rail(active, csrf)}<div class="rail-overlay" id="rail-overlay"></div>` : "";
   const script = active !== "" ? `<script>
 var btn = document.getElementById("rail-toggle");
 var overlay = document.getElementById("rail-overlay");
@@ -118,6 +133,7 @@ overlay.addEventListener("click", function () {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+${csrf ? `<meta name="csrf-token" content="${esc(csrf)}">` : ""}
 <title>${esc(title)} · rclone-extractor</title>
 <link rel="stylesheet" href="/public/styles.css">
 <script src="/public/htmx.min.js" defer></script>

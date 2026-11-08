@@ -224,7 +224,7 @@ export async function progressPanel(): Promise<string> {
       : "";
   const interruptedNote =
     s.stage === "interrupted"
-      ? `<p class="warn-line">This run did not finish — the app restarted mid-task. In-progress archives are re-queued on the next start when resume is enabled.</p>`
+      ? `<p class="warn-line">This run did not finish — it restarted mid-task. In-progress archives resume on the next start when resume is enabled.</p>`
       : "";
   const extractBlock =
     s.stage === "extracting" && s.extractStats

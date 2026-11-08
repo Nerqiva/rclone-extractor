@@ -5,6 +5,7 @@ import { isSupported, isSafeRel, parseTrashSubdir } from "./archive";
 import { isAbsoluteTmpPath, type SweepResult } from "./tmpdir";
 import { RCLONE_CONF, RCLONE_CONF_PATH, ensureDataDir, RCLONE_BIN } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
+import { insertLogLines } from "./log";
 import type { Logger } from "./log";
 
 type SpawnError = Error & { code?: string };
@@ -368,13 +369,7 @@ export class Rclone {
     lines: string[],
     seq: number,
   ): Promise<void> {
-    const ts = new Date().toISOString();
-    for (const line of lines) {
-      await store.run(
-        "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        [ref.scope, ref.refId, ref.kind, seq++, ts, null, line],
-      );
-    }
+    await insertLogLines(ref, lines, seq);
   }
 
   /** Absolute paths (and `remote:` paths) are used as-is; relative ones are resolved against the scan root. */
@@ -614,7 +609,26 @@ export class Rclone {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const kept: string[] = [];
+    // Output is streamed to the archive log in bounded batches instead of
+    // buffered whole; only the tail is kept for the returned Outcome.
+    const LOG_BATCH = 100;
+    let nextSeq = seq;
+    let pending: string[] = [];
+    let flushChain: Promise<void> = Promise.resolve();
+    const flush = (force = false): void => {
+      if (!ref || pending.length === 0) return;
+      if (!force && pending.length < LOG_BATCH) return;
+      const batch = pending;
+      pending = [];
+      const start = nextSeq;
+      nextSeq += batch.length;
+      flushChain = flushChain.then(() =>
+        insertLogLines(ref, batch, start).catch((e) => {
+          console.warn("archive log write failed:", String(e));
+        }),
+      );
+    };
+    const tailLines: string[] = [];
     const handleLine = (raw: string) => {
       const line = raw.replace(/\r$/, "");
       const stats = parseStatsLine(line);
@@ -622,7 +636,12 @@ export class Rclone {
         onStats?.(stats);
         return; // per-second stats lines are not logged
       }
-      if (line.length > 0) kept.push(line);
+      if (line.length > 0) {
+        tailLines.push(line);
+        if (tailLines.length > 40) tailLines.shift();
+        pending.push(line);
+        flush();
+      }
     };
     const pump = async (
       stream: ReadableStream<Uint8Array> | null,
@@ -643,10 +662,16 @@ export class Rclone {
       if (buffer) handleLine(buffer);
     };
     await Promise.all([pump(proc.stdout), pump(proc.stderr)]);
-    if (ref && kept.length > 0) await this.appendArchiveLines(ref, kept, seq);
+    flush(true);
+    await flushChain;
     const code = await proc.exited;
 
-    return { code, tail: kept.slice(-40), stderr: kept.join("\n"), command };
+    return {
+      code,
+      tail: tailLines,
+      stderr: tailLines.slice(-20).join("\n"),
+      command,
+    };
   }
 
   async promote(

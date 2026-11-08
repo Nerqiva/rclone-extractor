@@ -5,7 +5,8 @@ import { initDb, store, getSetting } from "./db";
 import { recoverStale } from "./engine";
 import { checkRclone, Rclone } from "./rclone";
 import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "./tmpdir";
-import { auth, authMiddleware } from "./routes/auth";
+import { auth, authMiddleware, csrfMiddleware } from "./routes/auth";
+import { Logger } from "./log";
 import { pages } from "./routes/pages";
 import { dashboard } from "./routes/dashboard";
 import { actions } from "./routes/actions";
@@ -27,7 +28,13 @@ if (rcloneHealth.ok) {
 
 const resume = (await getSetting("resume", "1")) === "1";
 const recovered = await recoverStale(resume);
-if (recovered > 0) console.log(`boot: recovered ${recovered} stale archive(s)`);
+if (recovered > 0) {
+  console.log(
+    resume
+      ? `boot: recovered ${recovered} stale archive(s)`
+      : `boot: marked ${recovered} interrupted archive(s) as failed`,
+  );
+}
 
 // Best-effort cleanup of temp dirs left behind by previous runs (e.g. after
 // a crash). Only app-owned numeric directories inside the configured
@@ -68,6 +75,11 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`received ${signal}; closing database connections`);
   try {
+    await Logger.flushAll();
+  } catch (e) {
+    console.warn(`error flushing logs: ${String(e)}`);
+  }
+  try {
     await store.close();
   } catch (e) {
     console.warn(`error closing database: ${String(e)}`);
@@ -82,6 +94,7 @@ app.get("/healthz", (c) => c.text("ok"));
 app.use("/public/*", serveStatic({ root: "./" }));
 
 app.use("*", authMiddleware);
+app.use("*", csrfMiddleware);
 
 app.route("/", auth);
 app.route("/", pages);
@@ -95,5 +108,8 @@ console.log(`rclone-extractor listening on http://${BIND}:${PORT} (db=${store.ba
 export default {
   port: PORT,
   hostname: BIND,
-  fetch: app.fetch,
+  // Expose the socket IP to handlers (login throttling) without trusting
+  // spoofable proxy headers unless TRUST_PROXY=1 is set.
+  fetch: (req: Request, server?: { requestIP?: (r: Request) => { address: string } | null }) =>
+    app.fetch(req, { ip: server?.requestIP?.(req)?.address }),
 };

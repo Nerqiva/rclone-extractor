@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { store } from "../db";
 import { layout, esc } from "../ui";
+import { csrfFor } from "./auth";
 import { configForm } from "./actions";
 import { encryptionEnabled } from "../crypto";
 import { engineState } from "../engine";
 import { checkRclone } from "../rclone";
-import { tail, tailRendered, LOG_TAIL_LIMIT } from "../log";
+import { tailRendered, LOG_TAIL_LIMIT } from "../log";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 
 export const pages = new Hono();
@@ -21,11 +22,13 @@ pages.get("/", (c) =>
         <p class="muted">Loading…</p>
       </div>`,
       "dashboard",
+      csrfFor(c),
     ),
   ),
 );
 
 pages.get("/config", async (c) => {
+  const csrf = csrfFor(c);
   const runtime = await checkRclone();
   const runtimeRow = runtime.ok
     ? `<dt>rclone</dt><dd><code>${esc(runtime.detail)}</code><br><span class="muted">${esc(runtime.bin)}</span></dd>`
@@ -42,10 +45,12 @@ pages.get("/config", async (c) => {
   <div class="card">
     <h2 class="section-title" style="margin-top:0">Backup</h2>
     <form id="export-form" method="post" action="/export">
+      <input type="hidden" name="csrf_token" value="${esc(csrf ?? "")}">
       <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, database_url)</label>
       <button class="btn" type="submit" data-loading-label="Exporting…"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Export JSON</span></button>
     </form>
     <form id="import-form" style="margin-top:14px" method="post" action="/import" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="${esc(csrf ?? "")}">
       <label class="field"><span>Import backup (.json)</span><input type="file" name="archive" accept=".json,application/json"></label>
       <button class="btn danger" type="submit" data-loading-label="Importing…"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Import (replaces data)</span></button>
     </form>
@@ -174,7 +179,7 @@ pages.get("/config", async (c) => {
     }
   })();
   </script>`;
-  return c.html(layout("Configuration", (await configForm()) + extra, "config"));
+  return c.html(layout("Configuration", (await configForm()) + extra, "config", csrf));
 });
 
 pages.get("/logs", async (c) => {
@@ -197,6 +202,7 @@ pages.get("/logs", async (c) => {
         "Logs",
         `<div class="card"><p class="muted">No runs yet. Start a task from the Progress page.</p></div>`,
         "logs",
+        csrfFor(c),
       ),
     );
   }
@@ -219,15 +225,11 @@ pages.get("/logs", async (c) => {
   const selected = runs.find((r) => Number(r.id) === selectedId) ?? runs[0];
   const isLive = running && Number(selected.id) === engineState.runId;
 
-  const tap = await tail(
+  const { entries, lastId } = await tailRendered(
     { scope: "run", refId: Number(selected.id), kind },
     LOG_TAIL_LIMIT,
   );
-  const { entries } = await tailRendered(
-    { scope: "run", refId: Number(selected.id), kind },
-    LOG_TAIL_LIMIT,
-  );
-  const hasLog = tap.lines.length > 0;
+  const hasLog = lastId > 0;
   const showLog = isLive || hasLog;
 
   const options = runs
@@ -295,7 +297,7 @@ pages.get("/logs", async (c) => {
   const logBlock = showLog
     ? `<div class="log-viewer" id="logViewer" data-run="${selected.id}" data-kind="${kind}" data-live="${
         isLive ? "1" : "0"
-      }" data-last-id="${tap.lastId}">${entriesHtml}</div>`
+      }" data-last-id="${lastId}">${entriesHtml}</div>`
     : `<div class="empty-state"><p class="muted">${
         kind === "errors" ? "No errors in this session." : "No log lines yet."
       }</p></div>`;
@@ -308,7 +310,7 @@ pages.get("/logs", async (c) => {
     ${showLog ? copyToolbar : ""}
     ${logBlock}
     <script src="/public/copy.js" defer></script>`;
-  return c.html(layout("Logs", body, "logs"));
+  return c.html(layout("Logs", body, "logs", csrfFor(c)));
 });
 
 pages.get("/errors", async (c) => {
@@ -320,5 +322,5 @@ pages.get("/errors", async (c) => {
     </div>
     <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
     <script src="/public/copy.js" defer></script>`;
-  return c.html(layout("Errors", body, "errors"));
+  return c.html(layout("Errors", body, "errors", csrfFor(c)));
 });

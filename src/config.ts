@@ -15,6 +15,7 @@ export const RCLONE_BIN = process.env.RCLONE_BIN ?? "rclone"; // path to the rcl
 const pgPoolMax = Number(process.env.PG_POOL_MAX ?? 4);
 export const PG_POOL_MAX =
   Number.isFinite(pgPoolMax) && pgPoolMax >= 1 ? Math.min(Math.floor(pgPoolMax), 32) : 4;
+export const TRUST_PROXY = process.env.TRUST_PROXY === "1"; // trust proxy headers (X-Forwarded-For)
 // Session cookie is marked Secure (HTTPS only) by default. Set
 // COOKIE_SECURE=0 when serving the app over plain HTTP (e.g. LAN/testing).
 export const COOKIE_SECURE = process.env.COOKIE_SECURE !== "0";

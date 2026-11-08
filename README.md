@@ -180,6 +180,7 @@ database. They can also be seeded from environment variables.
 | `DATABASE_URL` | *(empty)* | Postgres connection string. When empty, SQLite at `DATA_DIR/app.db` is used. |
 | `PG_POOL_MAX` | `4` | Max connections this app opens to Postgres (keep small; see below). |
 | `COOKIE_SECURE` | `1` | Session cookie is `Secure` (HTTPS only). Set `0` only when serving over plain HTTP. |
+| `TRUST_PROXY` | `0` | Trust `X-Forwarded-For`/`X-Real-IP` for the login throttle. Set `1` only behind a reverse proxy that sets them. |
 | `DATA_DIR` | `/app/data` | Directory for the SQLite file and the working `rclone.conf`. Only needed when using SQLite. |
 | `BIND` | `0.0.0.0` | HTTP bind address. |
 | `PORT` | `8080` | HTTP port. |
@@ -196,7 +197,7 @@ database. They can also be seeded from environment variables.
 | `dry_run` | When on, rclone runs with `--dry-run`; nothing is moved or deleted. |
 | `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
 | `tmp_dir` | Where rclone extracts archives temporarily (default `.rclone-extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
-| `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start. |
+| `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`interrupted`. |
 | `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. |
 
 Most settings are shown as compact rows on the Configuration page. Click **Edit**
@@ -366,8 +367,8 @@ Errors page and in the per-archive log.
   dry-run mode, where the original archive is never moved and re-queueing would
   repeat the same work every run.
 - **Start** re-queues archives in the `failed` state and clears their
-  `error_kind`. `resume` also recovers archives stuck in `extracting` after a
-  crash.
+  `error_kind`. Stale `extracting` rows are also recovered on boot/Start
+  (re-queued with `resume` on, marked `interrupted` with it off).
 - **Stop** is a soft stop: the button becomes **Force stop**, the panel shows a
   persistent "Stop requested" message, and the current archive finishes before
   the run stops (ending with the `cancelled` stage). A second click on
@@ -385,12 +386,30 @@ Errors page and in the per-archive log.
 
 ### Continue previous task (resume)
 
-- On **boot**, if `resume` is on, archives left in `extracting` by a crash are
-  reset to `queued`.
-- On **Start**, failed archives are re-queued, and stale `extracting` rows are
-  recovered again (when `resume` is on).
+- On **boot** and on **Start**, archives left in `extracting` by a crash are
+  handled again (when `resume` is on): they are reset to `queued`.
+- When `resume` is off, those archives are instead marked `failed` with
+  `error_kind = interrupted`, so they never sit in `extracting` forever. They
+  show up on the Errors page and are re-queued on the next **Start** like any
+  other failed archive.
 
 This makes an interrupted run safe to resume by simply restarting the app.
+
+### Authentication & sessions
+
+- Sign-in is password-only (`APP_PASSWORD`); sessions are stored server-side
+  in the `sessions` table and the cookie holds a signed session id.
+- **Sign out** revokes the current session immediately; **Sign out
+  everywhere** (Configuration sidebar) revokes all sessions.
+- Sessions expire after 7 days; expired rows are purged on login.
+- All mutating routes require a CSRF token (derived from the session, sent as
+  `X-CSRF-Token` from htmx or a hidden `csrf_token` field in plain forms).
+  `SameSite=Lax` remains as a second layer.
+- The login throttle is best-effort and per-IP (5 failures / 10 minutes). It
+  uses the socket IP unless `TRUST_PROXY=1`, in which case it trusts the
+  first `X-Forwarded-For` entry — set that only behind a proxy that sets it.
+- Note: sessions did not exist as server-side rows before this; upgrading
+  signs everyone out once.
 
 ### Logs
 
@@ -441,7 +460,7 @@ src/
   ui.ts            HTML layout + escaping
   routes/
     pages.ts       GET /  /config  /logs  /errors
-    auth.ts        login/logout + signed-cookie middleware
+    auth.ts        login/logout/logout-all, DB sessions, CSRF middleware
     dashboard.ts   GET /dashboard/fragment (progress panel poll target)
     actions.ts     POST /run/start  /run/stop  /config  /rclone-conf
     logsapi.ts     GET /logs/fragment  /errors/fragment  + downloads
@@ -459,7 +478,7 @@ public/
 GET  /                     task progress        (auth)
 GET  /config               configuration        (auth)
 GET  /logs  /errors        log & error pages    (auth)
-GET  /login  POST /login  POST /logout
+GET  /login  POST /login  POST /logout  POST /logout-all
 GET  /dashboard/fragment   live progress panel  (auth)
 GET  /dashboard/controls   run controls         (auth)
 GET  /logs/fragment        incremental log tail  (auth)
@@ -480,9 +499,10 @@ GET  /public/*             static files (no auth)
 On the Configuration page:
 
 - **Export JSON** downloads `settings`, `archives`, `runs`, `logs`, and
-  `log_lines`. Secrets (`rclone.conf`, `database_url`) are included only if you
-  tick *include secrets*; they are re-encrypted with the current key on import.
-  A legacy `password` setting in an old export is ignored on import.
+  `log_lines` (capped at 50,000 rows; the export notes `log_lines_truncated`
+  when capped). Secrets (`rclone.conf`, `database_url`) are included only if
+  you tick *include secrets*; they are re-encrypted with the current key on
+  import. A legacy `password` setting in an old export is ignored on import.
 - **Import** reads a previously exported JSON and merges it into the active
   database.
 - Both actions run in place: a spinner shows progress and a toast reports the

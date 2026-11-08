@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS log_lines(
   line TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sessions(
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
 CREATE INDEX IF NOT EXISTS idx_log_lines_scope
   ON log_lines(scope, ref_id, kind, seq);
 
@@ -98,6 +106,14 @@ CREATE TABLE IF NOT EXISTS log_lines(
   level TEXT,
   line TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sessions(
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_log_lines_scope
   ON log_lines(scope, ref_id, kind, seq);

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
-import { tail, tailRendered, readAll, LOG_TAIL_LIMIT } from "../log";
+import { tailRendered, readAll, LOG_TAIL_LIMIT } from "../log";
 import { engineState } from "../engine";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 
@@ -39,7 +39,6 @@ logsapi.get("/logs/fragment", async (c) => {
   if (!runId) {
     return c.json({
       runId: 0,
-      lines: [],
       entries: [],
       lastId: cursor,
       live: false,
@@ -48,12 +47,7 @@ logsapi.get("/logs/fragment", async (c) => {
     });
   }
 
-  const { lines, lastId } = await tail(
-    { scope: "run", refId: runId, kind },
-    LOG_TAIL_LIMIT,
-    cursor,
-  );
-  const { entries } = await tailRendered(
+  const { entries, lastId } = await tailRendered(
     { scope: "run", refId: runId, kind },
     LOG_TAIL_LIMIT,
     cursor,
@@ -69,7 +63,6 @@ logsapi.get("/logs/fragment", async (c) => {
   }
   return c.json({
     runId,
-    lines,
     entries: entries.map((e) => e.html),
     lastId,
     live,

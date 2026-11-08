@@ -6,6 +6,7 @@ export const data = new Hono();
 
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024; // 50 MB of JSON is already absurd
 const LOG_LINES_PER_ARCHIVE_IMPORT_LIMIT = 100_000;
+const EXPORT_LOG_LINES_LIMIT = 50_000;
 
 data.post("/export", async (c) => {
   const form = await c.req.formData().catch(() => null);
@@ -13,6 +14,10 @@ data.post("/export", async (c) => {
 
   const settings = await allSettings();
   // Deterministic ORDER BY id so a restore replays in stable order.
+  const logLines = await store.query(
+    "SELECT * FROM log_lines ORDER BY id LIMIT ?",
+    [EXPORT_LOG_LINES_LIMIT],
+  );
   const payload: Record<string, unknown> = {
     version: 1,
     exported_at: new Date().toISOString(),
@@ -20,7 +25,8 @@ data.post("/export", async (c) => {
     archives: await store.query("SELECT * FROM archives ORDER BY id"),
     runs: await store.query("SELECT * FROM runs ORDER BY id"),
     logs: await store.query("SELECT * FROM logs ORDER BY archive_id, kind"),
-    log_lines: await store.query("SELECT * FROM log_lines ORDER BY id"),
+    log_lines: logLines,
+    log_lines_truncated: logLines.length >= EXPORT_LOG_LINES_LIMIT,
   };
 
   return new Response(JSON.stringify(payload, null, 2), {

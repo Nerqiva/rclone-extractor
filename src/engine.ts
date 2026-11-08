@@ -50,7 +50,9 @@ export const engineState = {
 export function stopEngine(): void {
   if (!engineState.running) return;
   engineState.stopRequested = true;
-  void setSetting("cancel", "1");
+  void setSetting("cancel", "1").catch((e) =>
+    console.warn("could not persist cancel flag:", String(e)),
+  );
 }
 
 /** Hard stop: kill the in-flight rclone process immediately. */
@@ -58,7 +60,9 @@ export function forceStopEngine(): void {
   if (!engineState.running) return;
   engineState.stopRequested = true;
   engineState.forceStop = true;
-  void setSetting("cancel", "1");
+  void setSetting("cancel", "1").catch((e) =>
+    console.warn("could not persist cancel flag:", String(e)),
+  );
   killActiveProcs();
 }
 
@@ -94,18 +98,27 @@ async function cancelRequestedCached(): Promise<boolean> {
 }
 
 /**
- * Close runs left unfinished by a crash and, when `recoverArchives` is on,
- * reset archives left mid-extraction back to the queue.
+ * Close runs left unfinished by a crash and settle archives left mid-extraction.
+ * With `recoverArchives` (resume on) they go back to the queue; otherwise they
+ * are marked failed/interrupted so they never sit in 'extracting' forever —
+ * they stay visible, re-runnable via Start, and count as failed for the run.
  */
 export async function recoverStale(recoverArchives = true): Promise<number> {
-  let n = 0;
-  if (recoverArchives) {
-    const before = await store.query<{ c: number }>(
-      "SELECT COUNT(*) AS c FROM archives WHERE status='extracting'",
-    );
-    n = Number(before[0]?.c ?? 0);
-    if (n > 0) {
-      await store.run("UPDATE archives SET status='queued' WHERE status='extracting'");
+  const before = await store.query<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM archives WHERE status='extracting'",
+  );
+  const n = Number(before[0]?.c ?? 0);
+  if (n > 0) {
+    if (recoverArchives) {
+      await store.run(
+        "UPDATE archives SET status='queued', updated_at=? WHERE status='extracting'",
+        [now()],
+      );
+    } else {
+      await store.run(
+        "UPDATE archives SET status='failed', error_kind='interrupted', updated_at=? WHERE status='extracting'",
+        [now()],
+      );
     }
   }
   // A run row with no finish time is a run from a previous process. Close it so
@@ -181,9 +194,14 @@ export async function runEngine(): Promise<void> {
   };
 
   try {
-    if ((await getSetting("resume", "1")) === "1") {
-      const recovered = await recoverStale();
-      if (recovered > 0) console.log(`resumed ${recovered} stale archive(s)`);
+    const resumeEnabled = (await getSetting("resume", "1")) === "1";
+    const recovered = await recoverStale(resumeEnabled);
+    if (recovered > 0) {
+      console.log(
+        resumeEnabled
+          ? `resumed ${recovered} stale archive(s)`
+          : `marked ${recovered} interrupted archive(s) as failed`,
+      );
     }
 
     const startedAt = now();
@@ -436,7 +454,7 @@ export async function runEngine(): Promise<void> {
             );
             fail(
               `extract failed: ${rel}`,
-              `$ ${ex.command}\n${ex.tail.join("\n")}\n${ex.stderr}`.trim(),
+              `$ ${ex.command}\n${ex.tail.join("\n")}`.trim(),
             );
           }
         } else {
@@ -449,7 +467,7 @@ export async function runEngine(): Promise<void> {
             );
             fail(
               `promote failed: ${rel}`,
-              `$ ${promoted.command}\n${promoted.tail.join("\n")}\n${promoted.stderr}`.trim(),
+              `$ ${promoted.command}\n${promoted.tail.join("\n")}`.trim(),
             );
           } else {
             const cleaned = await rc.cleanup(tmp, dryRun, ref);
@@ -467,7 +485,7 @@ export async function runEngine(): Promise<void> {
               );
               fail(
                 `trash failed: ${rel}`,
-                `$ ${trashed.command}\n${trashed.tail.join("\n")}\n${trashed.stderr}`.trim(),
+                `$ ${trashed.command}\n${trashed.tail.join("\n")}`.trim(),
               );
             } else {
               await store.run(
@@ -581,6 +599,10 @@ export async function runEngine(): Promise<void> {
       ]);
     }
   } finally {
+    // Let queued log writes land before the run state resets and (on
+    // shutdown) the database closes.
+    await logger?.flush();
+    await errorLog?.flush();
     engineState.running = false;
     engineState.currentRel = "";
     engineState.currentCommand = "";

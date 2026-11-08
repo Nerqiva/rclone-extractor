@@ -10,3 +10,6 @@ if (!process.env.DATA_DIR) {
 if (!process.env.SECRET_KEY) {
   process.env.SECRET_KEY = "test-secret-key";
 }
+if (!process.env.APP_PASSWORD) {
+  process.env.APP_PASSWORD = "test-pw";
+}

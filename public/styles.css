@@ -1208,3 +1208,6 @@ td.path {
     overflow: hidden;
   }
 }
+.rail-logout + .rail-logout {
+  margin-left: 0;
+}
