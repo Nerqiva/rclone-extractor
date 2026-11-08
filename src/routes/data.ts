@@ -78,8 +78,8 @@ data.post("/import", async (c) => {
   if (Array.isArray(runs)) {
     for (const r of runs) {
       await store.run(
-        "INSERT OR REPLACE INTO runs(id, started_at, finished_at, total, done, failed, skipped) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped],
+        "INSERT OR REPLACE INTO runs(id, started_at, finished_at, total, done, failed, skipped, interrupted) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped, r.interrupted ?? 0],
       );
     }
     counts.push(`${runs.length} runs`);

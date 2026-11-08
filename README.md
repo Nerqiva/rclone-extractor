@@ -27,12 +27,15 @@ scan  →  extract  →  promote  →  trash
   unreadable archives are skipped, never extracted. Archives in `trash_subdir`
   are not queued.
 - **Live progress page** — KPI cards, a segmented progress bar, stage text,
-  per-run rate/ETA, the active rclone command, and done/failed/skipped counters
+  per-run rate/ETA, the active rclone command, done/failed/skipped counters,
+  and a slim live bar with the current extraction's progress, speed and ETA
   update every second without a page reload.
 - **Mobile-friendly logs** — the log and error views are selectable text with
   Copy all / Copy selection / Select all / Download controls.
 - **Continue previous task** — resumable runs. If the app crashes or is
   restarted mid-job, archives stuck in *extracting* are automatically re-queued.
+  Runs closed by crash recovery are shown as **Interrupted** (not *Completed*)
+  on the progress and logs pages.
 - **Choose your database** — SQLite by default, or a remote **PostgreSQL**
   server (e.g. Aiven, Supabase, RDS). Everything persists in the DB, so an
   ephemeral container filesystem loses nothing.
@@ -71,7 +74,9 @@ docker run -d --name rclone-extractor \
 ```
 
 When `DATABASE_URL` is set, Postgres is used and the schema is created
-automatically on first boot.
+automatically on first boot. Existing databases are migrated automatically on
+boot as well (currently: the `runs.interrupted` flag used to show crashed-but-
+closed runs as **Interrupted**).
 
 ### Deploy on SnapDeploy (containers)
 
@@ -258,7 +263,7 @@ For each archive at `<ROOT>/<REL>`:
 ```
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";"
 inspect: rclone archive list <ROOT>/<REL> --files-only
-extract: rclone archive extract <ROOT>/<REL> <ROOT>/<TMPREL> --stats 1s --stats-one-line
+extract: rclone archive extract <ROOT>/<REL> <ROOT>/<TMPREL> --stats 1s --stats-one-line --log-level INFO
 promote: rclone move <ROOT>/<TMPREL> <ROOT>/<PARENT> --exclude /.rclone-extractor-tmp/** --delete-empty-src-dirs
 cleanup: rclone purge <ROOT>/<TMPREL>
 rmdir:   rclone rmdir <ROOT>/.rclone-extractor-tmp/<runid>/<archiveid> (then <runid>/ and .rclone-extractor-tmp/)
@@ -278,6 +283,13 @@ refuses to run when the source is nested inside the destination
 archive contents that are themselves named `.rclone-extractor-tmp` are still
 promoted. Without it every promotion fails with
 "can't sync or move files on overlapping remotes".
+
+The `extract` step streams its output: rclone prints single-line transfer
+stats once per second (`--stats-one-line`); the app parses those lines to drive
+the live "Current extraction" meter on the progress page and filters them out
+of the archive log, so a long extract does not spam the log with one line per
+second. The command line and everything rclone reports besides stats lines are
+still logged.
 
 After each archive is processed the now-empty per-archive temp directory is
 removed with `rclone rmdir`, and the run-level and global
@@ -322,10 +334,20 @@ Errors page and in the per-archive log.
 - **Start** re-queues archives in the `failed` state and clears their
   `error_kind`. `resume` also recovers archives stuck in `extracting` after a
   crash.
+- **Stop** is a soft stop: the button becomes **Force stop**, the panel shows a
+  persistent "Stop requested" message, and the current archive finishes before
+  the run stops (ending with the `cancelled` stage). A second click on
+  **Force stop** kills the in-flight rclone process immediately; the interrupted
+  archive is re-queued (never counted as done/failed/skipped) and the run ends
+  as `cancelled`.
+- All action buttons share the same feedback: a spinner and disabled state
+  while the request is in flight, then a toast (via the `HX-Trigger` response
+  header) reporting the outcome.
 - An archive becomes `done` only when extract, promote, cleanup, and trash all
   succeed. Cleanup failure is logged as a warning; extract, promote, or trash
   failure marks the archive `failed`. A run stopped by the user ends with the
-  `cancelled` stage, and unfinished runs are closed on the next boot.
+  `cancelled` stage, and unfinished runs are closed on the next boot and marked
+  `interrupted`, so the UI shows them as **Interrupted** rather than *Completed*.
 
 ### Continue previous task (resume)
 

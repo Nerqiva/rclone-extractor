@@ -7,6 +7,57 @@ export function esc(s: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+// Shared toast + busy-state behaviour for every page. htmx buttons show a
+// spinner and disable while their request is in flight; server responses
+// toast through the HX-Trigger response header ({"appToast":{message,kind}}).
+// `window.appToast(message, kind)` is also available for inline scripts.
+const GLOBAL_SCRIPT = `<script>
+(function () {
+  "use strict";
+
+  function toast(message, kind) {
+    var region = document.getElementById("toast-region");
+    if (!region) return;
+    var el = document.createElement("div");
+    el.className = "toast " + (kind || "ok");
+    el.textContent = message;
+    region.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add("show"); });
+    window.setTimeout(function () { el.classList.remove("show"); }, 3200);
+    window.setTimeout(function () { el.remove(); }, 3600);
+  }
+  window.appToast = toast;
+
+  function actionButtons(elt) {
+    if (!elt || !elt.querySelectorAll) return [];
+    // The controls fragment polls itself every second while stopping; those
+    // polling requests must not flash the buttons as busy.
+    var trigger = elt.getAttribute && elt.getAttribute("hx-trigger");
+    if (trigger && trigger.indexOf("every") !== -1) return [];
+    if (elt.matches && elt.matches("button.btn")) return [elt];
+    return Array.prototype.slice.call(elt.querySelectorAll("button.btn"));
+  }
+
+  function mark(button, busy) {
+    button.disabled = busy;
+    button.classList.toggle("is-loading", busy);
+  }
+
+  document.body.addEventListener("htmx:beforeRequest", function (event) {
+    actionButtons(event.detail && event.detail.elt).forEach(function (b) { mark(b, true); });
+  });
+  document.body.addEventListener("htmx:afterRequest", function (event) {
+    actionButtons(event.detail && event.detail.elt).forEach(function (b) { mark(b, false); });
+  });
+
+  document.body.addEventListener("appToast", function (event) {
+    var detail = event.detail || {};
+    if (typeof detail === "string") { toast(detail, "ok"); return; }
+    toast(detail.message || "", detail.kind || "ok");
+  });
+})();
+</script>`;
+
 const NAV: { href: string; label: string; key: string }[] = [
   { href: "/", label: "Progress", key: "dashboard" },
   { href: "/config", label: "Configuration", key: "config" },
@@ -77,6 +128,8 @@ ${railHtml}
 <h1 class="page-title">${esc(title)}</h1>
 ${body}
 </main>
+<div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
+${GLOBAL_SCRIPT}
 ${script}
 </body>
 </html>`;

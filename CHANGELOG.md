@@ -57,8 +57,44 @@ to `main`.
   removed (`rclone rmdir`), and the run-level and global `.rclone-extractor-tmp`
   directories are removed at the end of the run, best-effort. Non-empty
   directories (crashes, partial extracts) are left in place.
+- **Live per-extraction progress** on the Progress page. The
+  `--stats-one-line` output of `rclone archive extract` is parsed as it streams:
+  under the overall progress bar a slim "Current extraction" meter shows bytes
+  done/total, percent, transfer speed, and rclone's ETA. The once-per-second
+  stats lines are filtered out of the archive log; the command line and all
+  other output are still logged.
+- **Two-step Stop.** **Stop** is now an explicit soft stop: the button flips to
+  **Force stop** and a persistent message shows that the current archive will
+  finish first (in the controls and in the polling progress panel). Clicking
+  **Force stop** kills the in-flight rclone process immediately (SIGKILL of all
+  child processes the app tracks); the interrupted archive is reset to `queued`
+  instead of being counted as done/failed/skipped, and the run ends in the
+  `cancelled` stage.
+- **Uniform button feedback.** Every server-action button shows a spinner and
+  disabled state while its request is in flight, and server responses raise a
+  toast via the `HX-Trigger` response header (`{"appToast":{message,kind}}`).
+  Toasts and the loading state are wired up once globally for all pages
+  (`src/ui.ts`).
+- **Crashed runs are marked as interrupted.** The `runs` table gained an
+  `interrupted` flag (migrated automatically on boot, SQLite and PostgreSQL) set
+  by crash recovery; the Progress and Logs pages show such runs as
+  **Interrupted** instead of *Completed* / *Finished*.
 
 ### Fixed
+- **Stage section cleanup.** The unreachable `searching` stage (assigned and
+  then overwritten before any I/O) was removed; the detail-grid "Stage" row
+  (identical to the header badge) was removed; the `error` stage badge is now
+  labelled "Error" rather than "Failed" to avoid clashing with the per-archive
+  counter; the run-level Rate/ETA rows carry tooltips describing what they
+  measure; the redundant running/finished elapsed-time branch in the panel was
+  simplified; and interrupted runs restored from the database no longer render
+  as "Completed".
+- **Runs cancelled while the last archive was being processed ended as
+  "Completed".** The stop decision is now taken after the loop, so any run that
+  exits because the user asked to stop (soft or forced) is marked `cancelled`.
+- **Stop button gave no feedback.** The controls fragment now re-renders for as
+  long as a stop is pending (auto-polling), disabling the action and restoring
+  **Start** automatically when the run actually exits.
 - **Promotion no longer fails on nested destinations.** `rclone move` rejects
   moving a directory into a parent that contains it
   ("can't sync or move files on overlapping remotes"), which is always the

@@ -274,6 +274,20 @@ textarea {
   border-color: var(--err);
   color: var(--err);
 }
+.btn.danger.solid {
+  background: var(--err);
+  border-color: var(--err);
+  color: #1a0d0d;
+  font-weight: 600;
+}
+.btn.danger.solid:hover {
+  filter: brightness(1.08);
+  color: #1a0d0d;
+}
+.stop-note {
+  margin: 0;
+  max-width: 420px;
+}
 .btn-row {
   display: flex;
   gap: 10px;
@@ -333,6 +347,9 @@ textarea {
 .progress-panel.is-cancelled {
   border-color: rgba(250, 204, 21, 0.4);
 }
+.progress-panel.is-interrupted {
+  border-color: rgba(250, 204, 21, 0.4);
+}
 
 .run-header {
   display: flex;
@@ -387,6 +404,12 @@ textarea {
   color: var(--warn);
 }
 .status-badge.is-cancelled .dot {
+  background: var(--warn);
+}
+.status-badge.is-interrupted {
+  color: var(--warn);
+}
+.status-badge.is-interrupted .dot {
   background: var(--warn);
 }
 .run-id {
@@ -510,6 +533,42 @@ textarea {
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+.extract-mini {
+  margin-top: 12px;
+}
+.extract-mini-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+.extract-mini-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.extract-mini-value {
+  font-size: 11px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+.minibar {
+  height: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.minibar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
 }
 
 .stat-grid {

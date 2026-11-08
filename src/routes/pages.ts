@@ -59,29 +59,15 @@ pages.get("/config", async (c) => {
     <h2 class="section-title" style="margin-top:0">Maintenance</h2>
     <p class="muted">Remove task data from the database. This cannot be undone.</p>
     <div class="btn-row">
-      <button class="btn" hx-post="/maintenance/archives" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear the archive queue?">Clear archives</button>
-      <button class="btn" hx-post="/maintenance/runs" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear run history and logs?">Clear runs</button>
-      <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear ALL task data and logs?">Clear everything</button>
+      <button class="btn" hx-post="/maintenance/archives" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear the archive queue?"><span class="spinner" aria-hidden="true"></span>Clear archives</button>
+      <button class="btn" hx-post="/maintenance/runs" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear run history and logs?"><span class="spinner" aria-hidden="true"></span>Clear runs</button>
+      <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear ALL task data and logs?"><span class="spinner" aria-hidden="true"></span>Clear everything</button>
     </div>
     <div id="maintenance-result"></div>
   </div>
-  <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
   <script>
   (function () {
-    var toastRegion = document.getElementById("toast-region");
-
-    function toast(message, kind) {
-      if (!toastRegion) return;
-      var el = document.createElement("div");
-      el.className = "toast " + (kind || "ok");
-      el.textContent = message;
-      toastRegion.appendChild(el);
-      requestAnimationFrame(function () { el.classList.add("show"); });
-      setTimeout(function () {
-        el.classList.remove("show");
-        setTimeout(function () { el.remove(); }, 200);
-      }, 4200);
-    }
+    var toast = function (message, kind) { window.appToast(message, kind); };
 
     function setLoading(btn, loading) {
       if (!btn) return;
@@ -191,7 +177,10 @@ pages.get("/logs", async (c) => {
     done: number;
     failed: number;
     skipped: number;
-  }>("SELECT id, started_at, finished_at, total, done, failed, skipped FROM runs ORDER BY id DESC LIMIT 50");
+    interrupted: number | null;
+  }>(
+    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted FROM runs ORDER BY id DESC LIMIT 50",
+  );
 
   if (runs.length === 0) {
     return c.html(
@@ -258,10 +247,11 @@ pages.get("/logs", async (c) => {
     <a class="log-tab${kind === "errors" ? " active" : ""}" href="/logs?run=${selectedId}&amp;kind=errors">Errors</a>
   </div>`;
 
+  const interrupted = Number(selected.interrupted ?? 0) === 1;
   const statusPill = isLive
     ? `<span class="pill warn" id="livePill">Live</span>`
-    : `<span class="pill ${selected.finished_at ? "ok" : "warn"}">${
-        selected.finished_at ? "Finished" : "Incomplete"
+    : `<span class="pill ${selected.finished_at && !interrupted ? "ok" : "warn"}">${
+        interrupted ? "Interrupted" : selected.finished_at ? "Finished" : "Incomplete"
       }</span>`;
 
   const dur = selected.finished_at
@@ -301,7 +291,6 @@ pages.get("/logs", async (c) => {
         kind === "errors" ? "No errors in this session." : "No log lines yet."
       }</p></div>`;
 
-  const toastRegion = `<div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>`;
   const body = `<div class="log-toolbar">
       ${picker}
       ${tabs}
@@ -309,7 +298,6 @@ pages.get("/logs", async (c) => {
     ${summary}
     ${showLog ? copyToolbar : ""}
     ${logBlock}
-    ${toastRegion}
     <script src="/public/copy.js" defer></script>`;
   return c.html(layout("Logs", body, "logs"));
 });
@@ -322,7 +310,6 @@ pages.get("/errors", async (c) => {
       <button class="btn small" type="button" data-copy-table="#errorCards">Copy all errors</button>
     </div>
     <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
-    <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
     <script src="/public/copy.js" defer></script>`;
   return c.html(layout("Errors", body, "errors"));
 });

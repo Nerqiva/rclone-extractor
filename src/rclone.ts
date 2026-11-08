@@ -51,10 +51,15 @@ function spawnBinary(
   },
 ) {
   try {
-    return Bun.spawn([bin, ...args], {
+    const proc = Bun.spawn([bin, ...args], {
       ...options,
       env: { ...process.env, ...(options.env ?? {}) },
     });
+    activeProcs.add(proc);
+    void proc.exited.finally(() => {
+      activeProcs.delete(proc);
+    });
+    return proc;
   } catch (e) {
     const wrapped = new Error(describeSpawnError(e, bin)) as Error & {
       code?: string;
@@ -88,6 +93,55 @@ export type ArchiveEntry = {
   size: number;
 };
 
+export type ExtractStats = {
+  bytesDone: number;
+  bytesTotal: number;
+  /** 0-100, or null when rclone reports the percentage as "-". */
+  percent: number | null;
+  /** Bytes per second, or null when the rate cannot be determined. */
+  speedBytesPerSec: number | null;
+  /** Raw rclone ETA string ("43s", "1m30s"), or "" when unknown/"-". */
+  etaText: string;
+};
+
+const SIZE_UNITS: Record<string, number> = {
+  b: 1,
+  kib: 1024,
+  mib: 1024 ** 2,
+  gib: 1024 ** 3,
+  tib: 1024 ** 4,
+  pib: 1024 ** 5,
+  eib: 1024 ** 6,
+};
+
+function sizeToBytes(value: string, unit: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return n * (SIZE_UNITS[unit.toLowerCase()] ?? 1);
+}
+
+/**
+ * Parse one line of rclone's `--stats-one-line` output, e.g.
+ *   "2026/11/08 12:00:00 INFO  :   512.345 MiB / 1.000 GiB, 50%, 12.3 MiB/s, ETA 43s"
+ * The line may or may not carry rclone's usual date/level prefix, and may end
+ * with an "(xfr#1/1)" suffix. Returns null for anything that is not a stats line.
+ */
+export function parseStatsLine(line: string): ExtractStats | null {
+  const m =
+    /([\d.]+)\s*(EiB|PiB|TiB|GiB|MiB|KiB|B)\s*\/\s*([\d.]+)\s*(EiB|PiB|TiB|GiB|MiB|KiB|B),\s*(?:(\d+)%|-(?:%)?),\s*([\d.]+)\s*(EiB|PiB|TiB|GiB|MiB|KiB|B)\/s,\s*ETA\s+([^\s,("']+)/i.exec(
+      line,
+    );
+  if (!m) return null;
+  const eta = m[8] === "-" ? "" : m[8];
+  return {
+    bytesDone: sizeToBytes(m[1], m[2]),
+    bytesTotal: sizeToBytes(m[3], m[4]),
+    percent: m[5] === undefined ? null : Number(m[5]),
+    speedBytesPerSec: sizeToBytes(m[6], m[7]),
+    etaText: eta,
+  };
+}
+
 export type RcloneRef = {
   scope: "archive";
   refId: number;
@@ -100,6 +154,21 @@ function quoteArg(arg: string): string {
 }
 
 const SENSITIVE_FLAG = /(pass|secret|token|credential|api[-_]?key|access[-_]?key)/i;
+
+// Every rclone process spawned by this module, tracked so a hard stop can
+// kill whatever is currently running (extract/listing/archive list).
+const activeProcs = new Set<Bun.Subprocess>();
+
+/** SIGKILL every rclone process this module currently has in flight. */
+export function killActiveProcs(): void {
+  for (const proc of activeProcs) {
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      // already exited
+    }
+  }
+}
 
 function redactArgs(args: string[]): string[] {
   const out: string[] = [];
@@ -483,20 +552,79 @@ export class Rclone {
     return { code, tail: combined.slice(-40), stderr: err, command };
   }
 
-  async extract(rel: string, tmp: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
-    return this.run(
-      [
-        "archive",
-        "extract",
-        `${this.root}/${rel}`,
-        `${this.root}/${tmp}`,
-        "--stats",
-        "1s",
-        "--stats-one-line",
-      ],
-      dry,
-      ref,
-    );
+  /**
+   * Extract an archive. Unlike `run()`, stderr/stdout are streamed line by
+   * line so `--stats-one-line` progress (printed once per second) can be
+   * forwarded live via `onStats` and filtered out of the archive log. The
+   * log gets the command line and every non-stats line, same as before.
+   */
+  async extract(
+    rel: string,
+    tmp: string,
+    dry: boolean,
+    ref: RcloneRef,
+    onStats?: (stats: ExtractStats) => void,
+  ): Promise<Outcome> {
+    const args = [
+      "archive",
+      "extract",
+      `${this.root}/${rel}`,
+      `${this.root}/${tmp}`,
+      "--stats",
+      "1s",
+      "--stats-one-line",
+      // rclone logs --stats output at INFO, which the default NOTICE log
+      // level suppresses; without this the flags above produce no output.
+      "--log-level",
+      "INFO",
+    ];
+    const full = [...this.confArgs(), ...args, ...this.flags];
+    if (dry) full.push("--dry-run");
+    const command = this.announce(full);
+
+    let seq = ref ? await this.nextSeq(ref) : 0;
+    if (ref) {
+      await this.appendArchiveLines(ref, [`$ ${command}`], seq);
+      seq++;
+    }
+
+    const proc = spawnBinary(this.bin, full, {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const kept: string[] = [];
+    const handleLine = (raw: string) => {
+      const line = raw.replace(/\r$/, "");
+      const stats = parseStatsLine(line);
+      if (stats) {
+        onStats?.(stats);
+        return; // per-second stats lines are not logged
+      }
+      if (line.length > 0) kept.push(line);
+    };
+    const pump = async (
+      stream: ReadableStream<Uint8Array> | null,
+    ): Promise<void> => {
+      if (!stream) return;
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for await (const chunk of stream as unknown as ReadableStream<Uint8Array>) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let idx = buffer.indexOf("\n");
+        while (idx !== -1) {
+          handleLine(buffer.slice(0, idx));
+          buffer = buffer.slice(idx + 1);
+          idx = buffer.indexOf("\n");
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer) handleLine(buffer);
+    };
+    await Promise.all([pump(proc.stdout), pump(proc.stderr)]);
+    if (ref && kept.length > 0) await this.appendArchiveLines(ref, kept, seq);
+    const code = await proc.exited;
+
+    return { code, tail: kept.slice(-40), stderr: kept.join("\n"), command };
   }
 
   async promote(rel: string, tmp: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {

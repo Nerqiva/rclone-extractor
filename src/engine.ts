@@ -1,6 +1,6 @@
 import { Logger } from "./log";
 import { store, getSetting, setSetting } from "./db";
-import { Rclone } from "./rclone";
+import { Rclone, killActiveProcs, type ExtractStats } from "./rclone";
 import {
   tmpRel,
   isTrashPath,
@@ -16,7 +16,7 @@ import {
 export const engineState = {
   running: false,
   runId: 0,
-  stage: "idle", // idle|searching|listing|queueing|extracting|finished|cancelled|error
+  stage: "idle", // idle|listing|queueing|extracting|finished|cancelled|error
   currentRel: "",
   currentCommand: "",
   total: 0,
@@ -27,10 +27,28 @@ export const engineState = {
   finishedAt: "",
   lastError: "",
   scanRoot: "",
+  extractStats: null as ExtractStats | null,
+  // UI state for the stop button: stopRequested = soft stop asked (current
+  // archive finishes first), forceStop = hard stop asked (rclone killed
+  // immediately). Set/reset by stopEngine/forceStopEngine and runEngine.
+  stopRequested: false,
+  forceStop: false,
 };
 
+/** Soft stop: finish the current archive, then stop. */
 export function stopEngine(): void {
+  if (!engineState.running) return;
+  engineState.stopRequested = true;
   void setSetting("cancel", "1");
+}
+
+/** Hard stop: kill the in-flight rclone process immediately. */
+export function forceStopEngine(): void {
+  if (!engineState.running) return;
+  engineState.stopRequested = true;
+  engineState.forceStop = true;
+  void setSetting("cancel", "1");
+  killActiveProcs();
 }
 
 function now(): string {
@@ -60,7 +78,10 @@ export async function recoverStale(recoverArchives = true): Promise<number> {
   }
   // A run row with no finish time is a run from a previous process. Close it so
   // the logs page and progress panel do not show it as indefinitely running.
-  await store.run("UPDATE runs SET finished_at=? WHERE finished_at IS NULL", [now()]);
+  await store.run(
+    "UPDATE runs SET finished_at=?, interrupted=1 WHERE finished_at IS NULL",
+    [now()],
+  );
   return n;
 }
 
@@ -77,6 +98,9 @@ export async function runEngine(): Promise<void> {
   engineState.skipped = 0;
   engineState.startedAt = "";
   engineState.finishedAt = "";
+  engineState.extractStats = null;
+  engineState.stopRequested = false;
+  engineState.forceStop = false;
 
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
   engineState.scanRoot = scanRoot;
@@ -121,9 +145,8 @@ export async function runEngine(): Promise<void> {
 
     engineState.runId = runRowId;
     engineState.startedAt = startedAt;
-    engineState.stage = "searching";
-    logger.info(`scan_root=${scanRoot}`);
     engineState.stage = "listing";
+    logger.info(`scan_root=${scanRoot}`);
 
     const rc = await Rclone.fromSettings(logger);
     rc.onCommand = (command) => {
@@ -176,12 +199,18 @@ export async function runEngine(): Promise<void> {
     });
 
     if (listed.streamError) {
-      const msg = "listing stream failed";
-      fail(
-        msg,
-        `$ ${listed.command}\n${listed.streamError}\n${listed.stderr}`.trim(),
-      );
-      throw new Error(`${msg}: ${listed.streamError}`);
+      const cancelRequested =
+        engineState.forceStop || (await getSetting("cancel", "0")) === "1";
+      // A force-stopped listing is an intentional stop, not a failure.
+      if (!cancelRequested) {
+        const msg = "listing stream failed";
+        fail(
+          msg,
+          `$ ${listed.command}\n${listed.streamError}\n${listed.stderr}`.trim(),
+        );
+        throw new Error(`${msg}: ${listed.streamError}`);
+      }
+      logger.info("listing stopped by user");
     } else if (listed.stopped) {
       logger.info("listing stopped early (queue limit or cancel)");
     } else if (listed.code !== 0) {
@@ -225,6 +254,7 @@ export async function runEngine(): Promise<void> {
 
       const rel = row.path;
       engineState.currentRel = rel;
+      engineState.extractStats = null;
       await store.run(
         "UPDATE archives SET status='extracting', updated_at=? WHERE id=?",
         [now(), row.id],
@@ -272,7 +302,10 @@ export async function runEngine(): Promise<void> {
           result = "skipped";
         } else {
         tmpAttempted = true;
-        const ex = await rc.extract(rel, tmp, dryRun, ref);
+        const ex = await rc.extract(rel, tmp, dryRun, ref, (stats) => {
+          engineState.extractStats = stats;
+        });
+        engineState.extractStats = null;
 
         if (ex.code !== 0) {
           const all = `${ex.tail.join("\n")}\n${ex.stderr}`;
@@ -342,16 +375,29 @@ export async function runEngine(): Promise<void> {
         );
         fail(`archive error: ${rel}`, String(e));
       } finally {
-        if (result === "done") engineState.done++;
-        else if (result === "skipped") engineState.skipped++;
-        else engineState.failed++;
-        engineState.currentCommand = "";
-        await store.run("UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?", [
-          engineState.done,
-          engineState.failed,
-          engineState.skipped,
-          runRowId,
-        ]);
+        if (engineState.forceStop) {
+          // Hard stop while the archive was mid-flight: put it back in the
+          // queue instead of counting it as done/failed/skipped, so it is
+          // picked up again on the next run.
+          await store.run(
+            "UPDATE archives SET status='queued', updated_at=? WHERE id=?",
+            [now(), row.id],
+          );
+          engineState.currentCommand = "";
+          engineState.extractStats = null;
+        } else {
+          if (result === "done") engineState.done++;
+          else if (result === "skipped") engineState.skipped++;
+          else engineState.failed++;
+          engineState.currentCommand = "";
+          engineState.extractStats = null;
+          await store.run("UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?", [
+            engineState.done,
+            engineState.failed,
+            engineState.skipped,
+            runRowId,
+          ]);
+        }
         // Best effort: drop the now-empty per-archive temp dir. It stays
         // around (and failing rmdir is only a warning) when extraction did
         // not finish, so any partial data is kept.
@@ -374,7 +420,11 @@ export async function runEngine(): Promise<void> {
       }
     }
 
-    if (engineState.stage !== "cancelled") engineState.stage = "finished";
+    // A stop requested while the last archive was being processed never gets
+    // another loop iteration to notice it, so decide here.
+    if (engineState.stage !== "cancelled") {
+      engineState.stage = engineState.stopRequested ? "cancelled" : "finished";
+    }
     engineState.finishedAt = now();
     await store.run("UPDATE runs SET finished_at=? WHERE id=?", [
       engineState.finishedAt,
@@ -398,5 +448,8 @@ export async function runEngine(): Promise<void> {
     engineState.running = false;
     engineState.currentRel = "";
     engineState.currentCommand = "";
+    engineState.extractStats = null;
+    engineState.stopRequested = false;
+    engineState.forceStop = false;
   }
 }

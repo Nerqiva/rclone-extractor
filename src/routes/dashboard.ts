@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { engineState } from "../engine";
 import { store, getSetting } from "../db";
 import { esc } from "../ui";
+import type { ExtractStats } from "../rclone";
 import { controlsFragment } from "./actions";
 
 export const dashboard = new Hono();
@@ -20,17 +21,18 @@ interface Snapshot {
   finishedAt: string;
   lastError: string;
   scanRoot: string;
+  extractStats: ExtractStats | null;
 }
 
 const STAGE_LABEL: Record<string, string> = {
   idle: "Idle",
-  searching: "Scanning remote",
   listing: "Listing archives",
   queueing: "Building queue",
   extracting: "Extracting",
   finished: "Completed",
   cancelled: "Cancelled",
-  error: "Failed",
+  error: "Error",
+  interrupted: "Interrupted",
 };
 
 function stageLabel(stage: string): string {
@@ -40,6 +42,7 @@ function stageLabel(stage: string): string {
 function stateClass(stage: string, running: boolean): string {
   if (stage === "error") return "is-error";
   if (stage === "cancelled") return "is-cancelled";
+  if (stage === "interrupted") return "is-interrupted";
   if (running) return "is-running";
   if (stage === "finished") return "is-done";
   return "is-idle";
@@ -61,6 +64,23 @@ function duration(ms: number): string {
     return `${h}h ${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`;
   }
   return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${i === 0 ? Math.round(v) : v.toFixed(v >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
+function fmtRate(bytesPerSec: number | null): string {
+  if (bytesPerSec == null || !Number.isFinite(bytesPerSec)) return "—";
+  return `${fmtBytes(bytesPerSec)}/s`;
 }
 
 function rateLabel(processed: number, elapsedMs: number): string {
@@ -95,6 +115,7 @@ async function snapshot(): Promise<Snapshot> {
       finishedAt: engineState.finishedAt,
       lastError: engineState.lastError,
       scanRoot,
+      extractStats: engineState.extractStats,
     };
   }
 
@@ -106,8 +127,9 @@ async function snapshot(): Promise<Snapshot> {
     done: number;
     failed: number;
     skipped: number;
+    interrupted: number | null;
   }>(
-    "SELECT id, started_at, finished_at, total, done, failed, skipped FROM runs ORDER BY id DESC LIMIT 1",
+    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted FROM runs ORDER BY id DESC LIMIT 1",
   );
   if (!row) {
     return {
@@ -124,13 +146,14 @@ async function snapshot(): Promise<Snapshot> {
       finishedAt: "",
       lastError: "",
       scanRoot,
+      extractStats: null,
     };
   }
 
   return {
     running: false,
     runId: Number(row.id),
-    stage: row.finished_at ? "finished" : "idle",
+    stage: Number(row.interrupted ?? 0) === 1 ? "interrupted" : row.finished_at ? "finished" : "idle",
     currentRel: "",
     currentCommand: "",
     total: Number(row.total),
@@ -141,6 +164,7 @@ async function snapshot(): Promise<Snapshot> {
     finishedAt: row.finished_at ?? "",
     lastError: "",
     scanRoot,
+    extractStats: null,
   };
 }
 
@@ -183,7 +207,7 @@ export async function progressPanel(): Promise<string> {
   const end = s.finishedAt ? Date.parse(s.finishedAt) : Date.now();
   const elapsedMs =
     Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : 0;
-  const elapsed = s.running ? duration(Date.now() - start) : duration(elapsedMs);
+  const elapsed = duration(elapsedMs);
   const cls = stateClass(s.stage, s.running);
   const label = stageLabel(s.stage);
   const current = s.currentRel || "—";
@@ -191,6 +215,33 @@ export async function progressPanel(): Promise<string> {
   const mutedNote =
     s.total === 0 && s.stage === "finished"
       ? `<p class="muted">No matching archives were found in this run.</p>`
+      : "";
+  const stopNote =
+    s.running && engineState.stopRequested
+      ? engineState.forceStop
+        ? `<p class="warn-line">Stopping immediately — the in-flight archive was aborted.</p>`
+        : `<p class="warn-line">Stop requested — the current archive will finish, then the task stops. Click <strong>Force stop</strong> to stop immediately.</p>`
+      : "";
+  const interruptedNote =
+    s.stage === "interrupted"
+      ? `<p class="warn-line">This run did not finish — the app restarted mid-task. In-progress archives are re-queued on the next start when resume is enabled.</p>`
+      : "";
+  const extractBlock =
+    s.stage === "extracting" && s.extractStats
+      ? (() => {
+          const st = s.extractStats;
+          const pctText = st.percent === null ? "—" : `${Math.round(st.percent)}%`;
+          const width = st.percent === null ? 0 : Math.max(0, Math.min(100, st.percent));
+          const eta = st.etaText ? st.etaText : "—";
+          return `
+    <div class="extract-mini">
+      <div class="extract-mini-head">
+        <span class="extract-mini-label">Current extraction</span>
+        <span class="extract-mini-value">${esc(fmtBytes(st.bytesDone))} / ${esc(fmtBytes(st.bytesTotal))} · ${esc(pctText)} · ${esc(fmtRate(st.speedBytesPerSec))} · ETA ${esc(eta)}</span>
+      </div>
+      <div class="minibar" aria-hidden="true"><span style="width:${width.toFixed(1)}%"></span></div>
+    </div>`;
+        })()
       : "";
 
   return `<section class="progress-panel ${cls}">
@@ -224,6 +275,7 @@ export async function progressPanel(): Promise<string> {
         <span><i class="legend-dot remain"></i>Remaining ${remaining}</span>
       </div>
       <div class="progress-count">${processed} of ${s.total} processed</div>
+      ${extractBlock}
     </div>
 
     <div class="stat-grid">
@@ -247,20 +299,18 @@ export async function progressPanel(): Promise<string> {
         <dd class="cmd" title="${esc(command)}">${esc(command)}</dd>
       </div>
       <div>
-        <dt>Stage</dt>
-        <dd>${esc(label)}</dd>
-      </div>
-      <div>
         <dt>Rate</dt>
-        <dd>${esc(rateLabel(processed, elapsedMs))}</dd>
+        <dd title="Archives processed per minute (done + failed + skipped)">${esc(rateLabel(processed, elapsedMs))}</dd>
       </div>
       <div>
         <dt>ETA</dt>
-        <dd>${esc(etaLabel(processed, s.total, elapsedMs))}</dd>
+        <dd title="Estimated time to finish the remaining queue">${esc(etaLabel(processed, s.total, elapsedMs))}</dd>
       </div>
     </dl>
 
     ${mutedNote}
+    ${interruptedNote}
+    ${stopNote}
     ${s.lastError ? `<p class="err-line">${esc(s.lastError)}</p>` : ""}
   </section>`;
 }

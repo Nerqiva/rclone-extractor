@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { rmSync } from "node:fs";
 import { store, setSetting, allSettings } from "../db";
-import { engineState, runEngine, stopEngine } from "../engine";
+import { engineState, runEngine, stopEngine, forceStopEngine } from "../engine";
 import { esc } from "../ui";
 import { encryptionEnabled } from "../crypto";
 import { APP_PASSWORD, RCLONE_CONF, RCLONE_CONF_PATH } from "../config";
@@ -9,17 +9,42 @@ import { normalizeRcloneConf } from "../rcloneconf";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
+/** HX-Trigger response header: ask the client to show a toast. */
+function toastHeaders(message: string, kind: "ok" | "err" = "ok"): HeadersInit {
+  // Header values must be ISO-8859-1; strip anything else (e.g. em-dashes).
+  const safe = message
+    .replace(/[^\x20-\x7e]/g, "-")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+  return { "HX-Trigger": JSON.stringify({ appToast: { message: safe, kind } }) };
+}
+
 export const actions = new Hono();
 
 export function controlsFragment(): string {
   const running = engineState.running;
+  if (!running) {
+    return `<div id="controls" class="btn-row">
+    <button class="btn primary" hx-post="/run/start" hx-target="#controls" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Start</button>
+  </div>`;
+  }
+  if (engineState.forceStop) {
+    return `<div id="controls" class="btn-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
+    <button class="btn danger solid is-loading" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
+    <span class="note warn-line stop-note">Stopping immediately — the current archive was aborted…</span>
+  </div>`;
+  }
+  if (engineState.stopRequested) {
+    return `<div id="controls" class="btn-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
+    <button class="btn danger solid" hx-post="/run/stop" hx-target="#controls" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Force stop</button>
+    <span class="note warn-line stop-note">Stop requested — finishing the current archive. Click Force stop to stop immediately.</span>
+  </div>`;
+  }
   return `<div id="controls" class="btn-row">
-    ${
-      running
-        ? `<button class="btn danger" hx-post="/run/stop" hx-target="#controls" hx-swap="outerHTML">Stop</button>
-           <span class="muted">run in progress…</span>`
-        : `<button class="btn primary" hx-post="/run/start" hx-target="#controls" hx-swap="outerHTML">Start</button>`
-    }
+    <button class="btn danger" hx-post="/run/stop" hx-target="#controls" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Stop</button>
+    <span class="muted">run in progress…</span>
   </div>`;
 }
 
@@ -31,13 +56,29 @@ actions.post("/run/start", async (c) => {
     );
     await setSetting("cancel", "0");
     void runEngine();
+    return c.html(controlsFragment(), 200, toastHeaders("Task started."));
   }
-  return c.html(controlsFragment());
+  return c.html(controlsFragment(), 200, toastHeaders("A task is already running.", "err"));
 });
 
 actions.post("/run/stop", async (c) => {
+  if (!engineState.running) {
+    return c.html(controlsFragment());
+  }
+  if (engineState.stopRequested) {
+    forceStopEngine();
+    return c.html(
+      controlsFragment(),
+      200,
+      toastHeaders("Stopping immediately — current archive aborted."),
+    );
+  }
   stopEngine();
-  return c.html(controlsFragment());
+  return c.html(
+    controlsFragment(),
+    200,
+    toastHeaders("Stop requested — the current archive will finish first."),
+  );
 });
 
 const SETTING_KEYS = [
@@ -57,7 +98,11 @@ actions.post("/config", async (c) => {
   const confField = form.get("rclone_conf");
   let normalizedConf: string | null = null;
   if (confFile instanceof File && confFile.size > MAX_CONF_BYTES) {
-    return c.html(await configForm(`<p class="note err">rclone.conf is too large</p>`));
+    return c.html(
+      await configForm(`<p class="note err">rclone.conf is too large</p>`),
+      200,
+      toastHeaders("rclone.conf is too large", "err"),
+    );
   }
   const source =
     confFile instanceof File && confFile.size > 0
@@ -70,6 +115,8 @@ actions.post("/config", async (c) => {
     if (!parsed.ok) {
       return c.html(
         await configForm(`<p class="note err">rclone_conf: ${esc(parsed.error)}</p>`),
+        200,
+        toastHeaders(`rclone_conf: ${parsed.error}`, "err"),
       );
     }
     normalizedConf = parsed.base64;
@@ -83,7 +130,11 @@ actions.post("/config", async (c) => {
   if (normalizedConf !== null) await setSetting("rclone_conf", normalizedConf);
   await setSetting("dry_run", form.get("dry_run") !== null ? "1" : "0");
   await setSetting("resume", form.get("resume") !== null ? "1" : "0");
-  return c.html(await configForm(`<p class="note">Saved.</p>`));
+  return c.html(
+    await configForm(`<p class="note">Saved.</p>`),
+    200,
+    toastHeaders("Settings saved."),
+  );
 });
 
 actions.post("/rclone-conf", async (c) => {
@@ -101,20 +152,32 @@ actions.post("/config/rclone-clear", async (c) => {
   try {
     rmSync(RCLONE_CONF_PATH, { force: true });
   } catch {}
-  return c.html(await configForm(`<p class="note">rclone.conf cleared.</p>`));
+  return c.html(
+    await configForm(`<p class="note">rclone.conf cleared.</p>`),
+    200,
+    toastHeaders("Stored rclone.conf cleared."),
+  );
 });
 
 actions.post("/maintenance/archives", async (c) => {
   await store.run("DELETE FROM log_lines WHERE scope='archive'");
   await store.run("DELETE FROM logs");
   await store.run("DELETE FROM archives");
-  return c.html(`<p class="note">Cleared archive queue.</p>`);
+  return c.html(
+    `<p class="note">Cleared archive queue.</p>`,
+    200,
+    toastHeaders("Cleared archive queue."),
+  );
 });
 
 actions.post("/maintenance/runs", async (c) => {
   await store.run("DELETE FROM log_lines WHERE scope='run'");
   await store.run("DELETE FROM runs");
-  return c.html(`<p class="note">Cleared run history and logs.</p>`);
+  return c.html(
+    `<p class="note">Cleared run history and logs.</p>`,
+    200,
+    toastHeaders("Cleared run history and logs."),
+  );
 });
 
 actions.post("/maintenance/all", async (c) => {
@@ -122,7 +185,11 @@ actions.post("/maintenance/all", async (c) => {
   await store.run("DELETE FROM logs");
   await store.run("DELETE FROM runs");
   await store.run("DELETE FROM archives");
-  return c.html(`<p class="note">Cleared all task data and logs.</p>`);
+  return c.html(
+    `<p class="note">Cleared all task data and logs.</p>`,
+    200,
+    toastHeaders("Cleared all task data and logs."),
+  );
 });
 
 function settingRow(
@@ -142,7 +209,7 @@ function settingRow(
     <div class="setting-editor">
       ${editor}
       <div class="btn-row">
-        <button class="btn primary" type="submit">Save</button>
+        <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>
         <button class="btn" type="button" data-cancel>Cancel</button>
       </div>
     </div>
@@ -196,7 +263,7 @@ export async function configForm(note = ""): Promise<string> {
     confLabel,
     `<label class="field"><span>rclone.conf</span>
       <input type="file" name="rclone_conf_file" accept=".conf,text/plain"></label>
-    <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML">Clear stored config</button>`,
+    <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Clear stored config</button>`,
     { unset: !effectiveConf },
   )}
   ${settingRow(
@@ -238,7 +305,7 @@ export async function configForm(note = ""): Promise<string> {
   <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run</label>
   <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> Continue previous task (resume after crash/failure)</label>
   <div class="btn-row">
-    <button class="btn primary" type="submit">Save</button>
+    <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>
   </div>
 </form>`;
 }

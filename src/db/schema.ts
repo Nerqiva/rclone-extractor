@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS runs(
   total INTEGER NOT NULL DEFAULT 0,
   done INTEGER NOT NULL DEFAULT 0,
   failed INTEGER NOT NULL DEFAULT 0,
-  skipped INTEGER NOT NULL DEFAULT 0
+  skipped INTEGER NOT NULL DEFAULT 0,
+  interrupted INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS logs(
@@ -76,7 +77,8 @@ CREATE TABLE IF NOT EXISTS runs(
   total INTEGER NOT NULL DEFAULT 0,
   done INTEGER NOT NULL DEFAULT 0,
   failed INTEGER NOT NULL DEFAULT 0,
-  skipped INTEGER NOT NULL DEFAULT 0
+  skipped INTEGER NOT NULL DEFAULT 0,
+  interrupted INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS logs(
@@ -137,7 +139,7 @@ export function toPgInsert(sql: string): string {
       return `${body} ON CONFLICT(id) DO UPDATE SET path=excluded.path, size=excluded.size, status=excluded.status, error_kind=excluded.error_kind, created_at=excluded.created_at, updated_at=excluded.updated_at`;
     }
     if (table === "runs") {
-      return `${body} ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, finished_at=excluded.finished_at, total=excluded.total, done=excluded.done, failed=excluded.failed, skipped=excluded.skipped`;
+      return `${body} ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, finished_at=excluded.finished_at, total=excluded.total, done=excluded.done, failed=excluded.failed, skipped=excluded.skipped, interrupted=excluded.interrupted`;
     }
     if (table === "logs") {
       return `${body} ON CONFLICT(archive_id, kind) DO UPDATE SET rel_path=excluded.rel_path`;

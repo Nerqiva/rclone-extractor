@@ -36,6 +36,7 @@ const defaults: Record<string, string> = {
 
 export async function initDb(): Promise<void> {
   await store.init();
+  await migrateRunsInterrupted();
 
   const seen = new Set<string>();
   const existing = await store.query<{ key: string; value: string }>(
@@ -53,6 +54,25 @@ export async function initDb(): Promise<void> {
 
   await removeLegacyPassword();
   await migratePlaintextSecrets();
+}
+
+/**
+ * Add the `runs.interrupted` flag (1 = the run was closed by crash recovery,
+ * not finished normally). Idempotent; the fresh-install schema in schema.ts
+ * already includes the column, so only pre-existing databases hit the ALTER.
+ */
+async function migrateRunsInterrupted(): Promise<void> {
+  try {
+    await store.run(
+      "ALTER TABLE runs ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0",
+    );
+    console.log("migrated: added runs.interrupted");
+  } catch (e) {
+    const msg = String(e).toLowerCase();
+    if (!msg.includes("duplicate") && !msg.includes("already exists")) {
+      throw e;
+    }
+  }
 }
 
 async function removeLegacyPassword(): Promise<void> {
