@@ -158,7 +158,8 @@ BIND=0.0.0.0                           # bind address
 PORT=8080                              # listen port
 ```
 
-> The remaining settings (`scan_root`, `remote_flags`, `queue_max`, `sort_by`,
+> The remaining settings (`scan_root`, `remote_flags`, `queue_max`,
+> `max_archive_size`, `sort_by`,
 > `sort_dir`, `trash_subdir`, `dry_run`, `resume`) are configured on the
 > **Configuration** page and stored in the database. See the tables below.
 
@@ -191,8 +192,8 @@ database. They can also be seeded from environment variables.
 |---|---|
 | `scan_root` | rclone remote or path to scan, e.g. `s3:bucket/archives` or `/data/in`. |
 | `remote_flags` | Extra flags appended to every rclone command, e.g. `--config /data/rclone.conf`. |
-| `database_url` | Read-only view of the Postgres URL the app started with. Set the `DATABASE_URL` env var and restart to change it. |
 | `queue_max` | Maximum archives queued per run (default `500`). |
+| `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
 | `dry_run` | When on, rclone runs with `--dry-run`; nothing is moved or deleted. |
 | `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
@@ -200,9 +201,9 @@ database. They can also be seeded from environment variables.
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`interrupted`. |
 | `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. |
 
-Most settings are shown as compact rows on the Configuration page. Click **Edit**
-to unfold a field, then **Save**. `remote_flags` stays permanently visible, and
-`database_url` is read-only because it is controlled by the environment.
+Most settings are shown as compact rows on the Configuration page, each with a
+single terse line of help. Click **Edit** to unfold a field, then **Save**.
+`remote_flags` stays permanently visible.
 
 ### Switching between SQLite and Postgres
 
@@ -212,9 +213,8 @@ The backend is chosen **once at startup** from the environment:
 - `DATABASE_URL` empty → **SQLite** (`DATA_DIR/app.db`)
 
 To switch, set (or clear) `DATABASE_URL` and **restart** the app. The
-Configuration page shows the active backend as a badge; its `database_url`
-field is a **read-only** view of the value the app started with and cannot
-change the backend on its own.
+Configuration page shows the active backend (`Backend: sqlite` or
+`Backend: postgres`); the backend is controlled exclusively by the environment.
 
 #### Postgres connection troubleshooting
 
@@ -369,6 +369,11 @@ Errors page and in the per-archive log.
 
 ### Queue and re-runs
 
+- `max_archive_size` (in bytes; `0` = no limit) is enforced while listing —
+  over-limit archives are ignored entirely (never inserted into the queue) and
+  re-evaluated on every run — and again when a run selects queued rows, so
+  rows that were queued before the limit was set are skipped too. Raising the
+  limit takes effect on the next listing/run.
 - `queue_max` (clamped to a positive integer) caps both how many paths are
   accepted while listing and how many queued rows are selected for a run.
 - New paths are added as `queued`. Archives whose path lives under

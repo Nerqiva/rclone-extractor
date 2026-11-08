@@ -24,6 +24,7 @@ const defaults: Record<string, string> = {
   scan_root: "",
   remote_flags: "",
   queue_max: "500",
+  max_archive_size: "0",
   sort_by: "path",
   sort_dir: "asc",
   dry_run: "0",

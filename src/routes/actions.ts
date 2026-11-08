@@ -90,23 +90,12 @@ const SETTING_KEYS = [
   "remote_flags",
   "rclone_conf",
   "queue_max",
+  "max_archive_size",
   "sort_by",
   "sort_dir",
   "trash_subdir",
   "tmp_dir",
 ];
-
-/** Render a database URL with credentials masked: postgres://user:••••@host/db */
-export function maskDatabaseUrl(raw: string): string {
-  if (!raw) return "";
-  try {
-    const u = new URL(raw);
-    if (u.password) u.password = "****";
-    return u.toString();
-  } catch {
-    return "(set)";
-  }
-}
 
 actions.post("/config", async (c) => {
   const form = await c.req.formData();
@@ -165,6 +154,32 @@ actions.post("/config", async (c) => {
     }
     storedTmpDir = spec.value;
   }
+  let maxArchiveSizeStored: string | undefined;
+  const maxSizeRaw =
+    form.get("max_archive_size") === null
+      ? undefined
+      : String(form.get("max_archive_size") ?? "").trim();
+  if (maxSizeRaw !== undefined) {
+    if (maxSizeRaw === "") {
+      maxArchiveSizeStored = "0";
+    } else {
+      const n = Number(maxSizeRaw);
+      const multiplier = String(form.get("max_archive_size_unit") ?? "MB") === "GB"
+        ? 1024 ** 3
+        : 1024 ** 2;
+      const bytes = Math.round(n * multiplier);
+      if (!Number.isFinite(n) || n < 0 || !Number.isSafeInteger(bytes)) {
+        return c.html(
+          await configForm(
+            `<p class="note err">max_archive_size must be a non-negative number (0 disables the limit).</p>`,
+          ),
+          200,
+          toastHeaders("max_archive_size is invalid", "err"),
+        );
+      }
+      maxArchiveSizeStored = String(bytes);
+    }
+  }
   if (source.trim()) {
     const parsed = normalizeRcloneConf(source);
     if (!parsed.ok) {
@@ -181,11 +196,15 @@ actions.post("/config", async (c) => {
     if (key === "rclone_conf") continue;
     if (key === "tmp_dir") continue; // stored normalized below
     if (key === "trash_subdir") continue; // stored normalized below
+    if (key === "max_archive_size") continue; // stored normalized below (bytes)
     const value = form.get(key);
     if (value !== null) await setSetting(key, String(value));
   }
   if (trashStored !== undefined) await setSetting("trash_subdir", trashStored);
   if (storedTmpDir !== undefined) await setSetting("tmp_dir", storedTmpDir);
+  if (maxArchiveSizeStored !== undefined) {
+    await setSetting("max_archive_size", maxArchiveSizeStored);
+  }
   if (normalizedConf !== null) await setSetting("rclone_conf", normalizedConf);
   await setSetting("dry_run", form.get("dry_run") !== null ? "1" : "0");
   await setSetting("resume", form.get("resume") !== null ? "1" : "0");
@@ -358,13 +377,14 @@ function settingRow(
   label: string,
   value: string,
   editor: string,
-  opts: { unset?: boolean } = {},
+  opts: { unset?: boolean; hint?: string } = {},
 ): string {
   return `<div class="setting">
     <div class="setting-head">
       <div class="setting-info">
         <span class="setting-label">${esc(label)}</span>
         <span class="setting-value${opts.unset ? " unset" : ""}">${esc(value)}</span>
+        ${opts.hint ? `<span class="field-hint">${opts.hint}</span>` : ""}
       </div>
       <button type="button" class="btn small" data-edit>Edit</button>
     </div>
@@ -378,16 +398,20 @@ function settingRow(
   </div>`;
 }
 
-function staticRow(label: string, value: string, badge: string): string {
-  return `<div class="setting setting-static">
-    <div class="setting-head">
-      <div class="setting-info">
-        <span class="setting-label">${esc(label)}</span>
-        <span class="setting-value${value ? "" : " unset"}">${esc(value || "not set")}</span>
-      </div>
-      <span class="pill">${esc(badge)}</span>
-    </div>
-  </div>`;
+/** Format stored max_archive_size bytes for the collapsed row label. */
+function formatMaxArchiveSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "no limit";
+  const gb = bytes / 1024 ** 3;
+  if (Number.isInteger(gb)) return `${gb} GB`;
+  return `${Number((bytes / 1024 ** 2).toFixed(2))} MB`;
+}
+
+/** Split stored max_archive_size bytes into an editable value + unit. */
+function splitMaxArchiveSize(bytes: number): { value: string; unit: "MB" | "GB" } {
+  if (bytes >= 1024 ** 3 && bytes % 1024 ** 3 === 0) {
+    return { value: String(bytes / 1024 ** 3), unit: "GB" };
+  }
+  return { value: String(Number((bytes / 1024 ** 2).toFixed(2))), unit: "MB" };
 }
 
 export async function configForm(note = ""): Promise<string> {
@@ -404,6 +428,10 @@ export async function configForm(note = ""): Promise<string> {
     : storedConf
       ? "set"
       : "from RCLONE_CONF env";
+  const maxSizeRaw = Number(s.max_archive_size ?? "0");
+  const maxSizeBytes =
+    Number.isFinite(maxSizeRaw) && maxSizeRaw > 0 ? Math.floor(maxSizeRaw) : 0;
+  const maxSizeSplit = splitMaxArchiveSize(maxSizeBytes);
   return `<form class="card" hx-post="/config" hx-encoding="multipart/form-data" hx-target="#config-form" hx-swap="outerHTML" id="config-form">
   ${note}
   <p class="muted">
@@ -416,37 +444,56 @@ export async function configForm(note = ""): Promise<string> {
     s.scan_root || "not set",
     `<label class="field"><span>scan_root</span>
       <input type="text" name="scan_root" value="${esc(s.scan_root ?? "")}" placeholder="remote:path or /local/path"></label>`,
-    { unset: !s.scan_root },
+    { unset: !s.scan_root, hint: `Root to scan. Example: <code>remote:path</code> or <code>/local/path</code>.` },
   )}
   <label class="field"><span>remote_flags</span>
     <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list"></label>
+  <p class="field-hint">Extra flags for remote commands. Example: <code>--fast-list</code>.</p>
   ${settingRow(
     "rclone_conf",
     confLabel,
     `<label class="field"><span>rclone.conf</span>
       <input type="file" name="rclone_conf_file" accept=".conf,text/plain"></label>
     <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Clear stored config</button>`,
-    { unset: !effectiveConf },
+    {
+      unset: !effectiveConf,
+      hint: `Falls back to <code>RCLONE_CONF</code> env when unset.`,
+    },
   )}
   ${settingRow(
     "queue_max",
     s.queue_max ?? "500",
     `<label class="field"><span>queue_max</span>
-      <input type="number" name="queue_max" value="${esc(s.queue_max ?? "500")}"></label>`,
+      <input type="number" name="queue_max" min="1" value="${esc(s.queue_max ?? "500")}"></label>`,
+    { hint: `Max archives queued per run. Default <code>500</code>.` },
+  )}
+  ${settingRow(
+    "max_archive_size",
+    formatMaxArchiveSize(maxSizeBytes),
+    `<label class="field"><span>max_archive_size</span>
+      <div class="field-inline">
+        <input type="number" name="max_archive_size" min="0" step="any" value="${esc(maxSizeSplit.value)}" placeholder="0">
+        <select name="max_archive_size_unit">
+          <option value="MB"${maxSizeSplit.unit === "MB" ? " selected" : ""}>MB</option>
+          <option value="GB"${maxSizeSplit.unit === "GB" ? " selected" : ""}>GB</option>
+        </select>
+      </div></label>`,
+    { unset: maxSizeBytes <= 0, hint: `Skips archives larger than this. <code>0</code> = no limit.` },
   )}
   ${settingRow(
     "trash_subdir",
     s.trash_subdir ?? "trash",
     `<label class="field"><span>trash_subdir</span>
       <input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? "trash")}"></label>`,
+    { hint: `Where processed archives are moved. Relative to <code>scan_root</code>.` },
   )}
   ${settingRow(
     "tmp_dir",
     s.tmp_dir || TMP_DIR_DEFAULT,
     `<label class="field"><span>tmp_dir</span>
       <input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}"></label>`,
+    { hint: `Where archives are extracted. Relative = inside <code>scan_root</code>; absolute path or <code>remote:path</code> elsewhere. <strong class="warn">Must not overlap <code>trash_subdir</code>.</strong>` },
   )}
-  <p class="muted">Where rclone extracts archives. Relative paths resolve inside <strong>scan_root</strong>; <code>remote:path</code> or <code>/abs/path</code> extract elsewhere. App-owned run dirs are purged automatically; other files are kept. <code>dry_run</code> disables cleanup.</p>
   ${settingRow(
     "sort_by",
     s.sort_by ?? "path",
@@ -455,6 +502,7 @@ export async function configForm(note = ""): Promise<string> {
         <option value="path"${sel(s.sort_by ?? "path", "path")}>path</option>
         <option value="size"${sel(s.sort_by ?? "path", "size")}>size</option>
       </select></label>`,
+    { hint: `Queue sort field.` },
   )}
   ${settingRow(
     "sort_dir",
@@ -464,15 +512,10 @@ export async function configForm(note = ""): Promise<string> {
         <option value="asc"${sel(s.sort_dir ?? "asc", "asc")}>asc</option>
         <option value="desc"${sel(s.sort_dir ?? "asc", "desc")}>desc</option>
       </select></label>`,
+    { hint: `Queue sort direction.` },
   )}
-  ${staticRow(
-    "database_url",
-    maskDatabaseUrl(s.database_url ?? ""),
-    "read-only",
-  )}
-  <p class="muted">database_url is set through the DATABASE_URL environment variable; restart to switch backends.</p>
-  <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run</label>
-  <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> Continue previous task (resume after crash/failure)</label>
+  <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run — simulate only; nothing is moved or deleted</label>
+  <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> resume — re-queue archives interrupted mid-extraction on next start</label>
   <div class="btn-row">
     <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>
   </div>

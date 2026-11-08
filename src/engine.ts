@@ -76,6 +76,14 @@ function clampQueueMax(raw: string | undefined): number {
   return Math.min(n, 100_000);
 }
 
+// max_archive_size is stored as bytes ("0" = no limit). Invalid values are
+// treated as "no limit" rather than silently capping at some minimum.
+function clampMaxArchiveSize(raw: string | undefined): number {
+  const n = Math.floor(Number(raw ?? "0"));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, Number.MAX_SAFE_INTEGER);
+}
+
 // Reading the cancel flag once per listed line would put a database round
 // trip on the hot path (and, on Postgres, a pool checkout). Poll at most
 // twice a second; a stop therefore takes effect within ~500ms.
@@ -248,6 +256,9 @@ export async function runEngine(): Promise<void> {
     }
 
     const queueMax = clampQueueMax(await getSetting("queue_max", "500"));
+    const maxArchiveSize = clampMaxArchiveSize(
+      await getSetting("max_archive_size", "0"),
+    );
     const dryRun = (await getSetting("dry_run", "0")) === "1";
     const trashSubdir = trashSubdirValidated;
     const trashDir = normalizeRel(trashSubdir);
@@ -261,6 +272,7 @@ export async function runEngine(): Promise<void> {
 
     let queued = 0;
     let skippedUnsafe = 0;
+    let ignoredTooLarge = 0;
     const createdAt = now();
     const listed = await rc.list(async (rel, size) => {
       if (await cancelRequestedCached()) return false;
@@ -273,6 +285,13 @@ export async function runEngine(): Promise<void> {
       // Archives already sitting in the trash subdir are not queued again;
       // otherwise a done path there would be re-queued on every run.
       if (isTrashPath(rel, trashSubdir)) return;
+      // Archives above the configured max size are ignored entirely: never
+      // queued, not stored, and re-evaluated on the next run (so raising the
+      // limit takes effect immediately).
+      if (maxArchiveSize > 0 && size > maxArchiveSize) {
+        ignoredTooLarge++;
+        return;
+      }
       if (queued >= queueMax) return false;
 
       const prev = existing.get(rel);
@@ -301,6 +320,11 @@ export async function runEngine(): Promise<void> {
 
     if (skippedUnsafe > 0) {
       warn(`listing skipped ${skippedUnsafe} unsafe path(s) from the remote`);
+    }
+    if (ignoredTooLarge > 0) {
+      logger.info(
+        `listing ignored ${ignoredTooLarge} archive(s) above max_archive_size`,
+      );
     }
     if (listed.streamError) {
       const cancelRequested =
@@ -340,12 +364,17 @@ export async function runEngine(): Promise<void> {
     const sortDir = (await getSetting("sort_dir", "asc")) === "desc" ? "DESC" : "ASC";
     // Exclude pre-existing queued rows that live in the trash subdir (e.g.
     // enqueued by an older version), so they are never processed.
+    // Archives above the configured max size that were queued before the
+    // limit was set stay queued but are not selected; raising the limit
+    // makes them eligible again.
+    const sizeGuard = maxArchiveSize > 0 ? " AND size <= ?" : "";
     const queueWhere = trashDir
-      ? "WHERE status='queued' AND path <> ? AND path NOT LIKE ? ESCAPE '\\'"
-      : "WHERE status='queued'";
+      ? `WHERE status='queued' AND path <> ? AND path NOT LIKE ? ESCAPE '\\'${sizeGuard}`
+      : `WHERE status='queued'${sizeGuard}`;
     const queueParams: unknown[] = trashDir
       ? [trashDir, `${escapeLike(trashDir)}/%`]
       : [];
+    if (maxArchiveSize > 0) queueParams.push(maxArchiveSize);
     const rows = await store.query<{ id: number; path: string; size: number }>(
       `SELECT id, path, size FROM archives ${queueWhere} ORDER BY ${sortBy} ${sortDir} LIMIT ?`,
       [...queueParams, queueMax],

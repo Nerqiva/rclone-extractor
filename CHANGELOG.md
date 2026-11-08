@@ -110,6 +110,12 @@ to `main`.
   KB, and directories are excluded. Skipped archives stay skipped on later runs.
 - Archives under `trash_subdir` are ignored while building the queue and when a
   run selects queued rows, preventing re-processing of already-trashed files.
+- **`max_archive_size` setting on the Configuration page.** A per-archive size
+  limit, entered in MB or GB (stored in bytes, `0` = no limit). Archives
+  larger than the limit are ignored while listing — never queued, not
+  stored — and are re-evaluated on every run, so raising the limit takes
+  effect immediately. Rows queued before the limit was set are also skipped
+  when a run selects its queue.
 - After each processed archive the now-empty per-archive temp directory is
   removed (`rclone rmdir`), and the run-level and global `.rclone-extractor-tmp`
   directories are removed at the end of the run, best-effort. Non-empty
@@ -190,6 +196,11 @@ to `main`.
 - **Queue semantics are explicit.** `queue_max` caps both listing and queue
   selection; `done` paths that reappear are re-queued outside dry-run mode; and
   failed archives are re-queued with a cleared `error_kind` on Start.
+- **Configuration page copy is minimal.** Each option now carries a single
+  terse, on-point line (description, warning, or example) under its value; the
+  long explanatory paragraphs below the form were removed, and the `database_url`
+  row was dropped entirely — the active backend type is shown once in the
+  `Backend:` header line instead.
 - **Archive completion is strict.** A row is marked `done` only when extract,
   promote, cleanup, and trash succeed; cleanup failures are warnings. Cancelled
   runs use the `cancelled` stage, and unfinished runs are closed on boot.
