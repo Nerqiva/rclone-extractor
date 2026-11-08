@@ -332,6 +332,18 @@ falls back from `rclone rmdir` to `rclone purge`. Non-app entries inside
 Configuration page also has a **Purge temp directory** maintenance action.
 `dry_run` disables destructive cleanup entirely.
 
+The Configuration page's maintenance actions:
+
+- **Clear archives** empties the archive queue, archive logs and the logs
+  registry (archives re-build automatically on the next run, so ids keep
+  growing).
+- **Clear runs** deletes run history, run logs and the app's temp dirs, resets
+  the runs id sequence and `last_run_id` — the next run starts from #1.
+- **Clear everything** additionally wipes archives/logs/log_lines and resets
+  their sequences.
+- All clear actions refuse to run while a task is in progress; the temp purge
+  honors `dry_run` and only removes app-owned numeric run dirs.
+
 ### Content filters (before extraction)
 
 Every archive is inspected before anything is extracted, using
@@ -466,6 +478,7 @@ src/
     logsapi.ts     GET /logs/fragment  /errors/fragment  + downloads
     data.ts        POST /export  POST /import
 public/
+  favicon.svg      r/ monogram icon
   styles.css       design system
   htmx.min.js      vendored htmx
   copy.js          clipboard copy + incremental live-log polling

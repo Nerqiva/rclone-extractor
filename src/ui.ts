@@ -64,36 +64,59 @@ const GLOBAL_SCRIPT = `<script>
 })();
 </script>`;
 
-const NAV: { href: string; label: string; key: string }[] = [
-  { href: "/", label: "Progress", key: "dashboard" },
-  { href: "/config", label: "Configuration", key: "config" },
-  { href: "/logs", label: "Logs", key: "logs" },
-  { href: "/errors", label: "Errors", key: "errors" },
+const NAV: { href: string; label: string; key: string; icon: string }[] = [
+  {
+    href: "/",
+    label: "Progress",
+    key: "dashboard",
+    icon: `<polyline points="3 12 8 12 11 5 14 19 17 12 21 12"/>`,
+  },
+  {
+    href: "/config",
+    label: "Configuration",
+    key: "config",
+    icon: `<line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.1" fill="#242d40"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.1" fill="#242d40"/>`,
+  },
+  {
+    href: "/logs",
+    label: "Logs",
+    key: "logs",
+    icon: `<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>`,
+  },
+  {
+    href: "/errors",
+    label: "Errors",
+    key: "errors",
+    icon: `<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>`,
+  },
 ];
+
+const BRAND_MARK = `<svg class="brand-mark" viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="14" fill="#242d40" stroke="#2e3a52" stroke-width="3"/><text x="31" y="44" text-anchor="middle" font-family="ui-monospace, JetBrains Mono, Menlo, monospace" font-weight="700" font-size="32"><tspan fill="#6f9bff">r</tspan><tspan fill="#cdd6f4">/</tspan></text></svg>`;
 
 export function rail(active: string, csrf: string | null = null): string {
   const links = NAV.map(
-    (n) =>
-      `<a class="nav-link${n.key === active ? " active" : ""}" href="${n.href}">${esc(
-        n.label,
-      )}</a>`,
+    (n) => `<a class="nav-link${n.key === active ? " active" : ""}" href="${n.href}"${
+      n.key === active ? ' aria-current="page"' : ""
+    }><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${n.icon}</svg><span>${esc(n.label)}</span></a>`,
   ).join("");
   const csrfInput = csrf
     ? `<input type="hidden" name="csrf_token" value="${esc(csrf)}">`
     : "";
   return `<aside class="rail" id="rail">
-    <div class="brand">rclone<span>/</span>extractor</div>
-    <nav class="nav">${links}</nav>
+    <a class="brand" href="/" aria-label="rclone-extractor home">${BRAND_MARK}<span class="brand-word">rclone<span class="brand-slash">/</span>extractor</span></a>
+    <nav class="nav" aria-label="Main">${links}</nav>
     <div class="rail-foot">
-      <span class="dot" id="status-dot" title="status"></span>
-      <span class="dot-label">authed</span>
+      <div class="rail-status">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="dot-label">authed</span>
+      </div>
       <form method="post" action="/logout" class="rail-logout">
         ${csrfInput}
-        <button class="btn" type="submit">Sign out</button>
+        <button class="btn small rail-btn" type="submit">Sign out</button>
       </form>
-      <form method="post" action="/logout-all" class="rail-logout">
+      <form method="post" action="/logout-all" class="rail-logout rail-logout-all">
         ${csrfInput}
-        <button class="btn ghost" type="submit" title="Revoke every session">Sign out everywhere</button>
+        <button class="btn ghost small rail-btn" type="submit" title="Revoke every session on this server">Sign out everywhere</button>
       </form>
     </div>
   </aside>`;
@@ -135,6 +158,7 @@ overlay.addEventListener("click", function () {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${csrf ? `<meta name="csrf-token" content="${esc(csrf)}">` : ""}
 <title>${esc(title)} · rclone-extractor</title>
+<link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
 <link rel="stylesheet" href="/public/styles.css">
 <script src="/public/htmx.min.js" defer></script>
 </head>

@@ -218,7 +218,54 @@ actions.post("/config/rclone-clear", async (c) => {
   );
 });
 
+/** Reset AUTOINCREMENT/serial sequences so ids restart at 1. */
+async function resetSequences(tables: string[]): Promise<void> {
+  for (const table of tables) {
+    try {
+      if (store.backend() === "postgres") {
+        await store.run(
+          `SELECT setval(pg_get_serial_sequence('${table}', 'id'), 1, false)`,
+        );
+      } else {
+        await store.run("DELETE FROM sqlite_sequence WHERE name = ?", [table]);
+      }
+    } catch (e) {
+      console.warn(`could not reset ${table} sequence:`, String(e));
+    }
+  }
+}
+
+/** Purge app-owned numeric temp run dirs (same rules as the manual purge). */
+async function purgeAppTempDirs(): Promise<
+  | { ok: true; dryRun: boolean; purged: number; failed: number }
+  | { ok: false }
+> {
+  const dryRun = (await getSetting("dry_run", "0")) === "1";
+  const scanRoot = (await getSetting("scan_root", "")) ?? "";
+  const trash = (await getSetting("trash_subdir", "trash")) ?? "trash";
+  const raw = ((await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT).trim();
+  const spec = raw
+    ? parseTmpDir(raw, scanRoot, trash)
+    : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
+  if (!spec) return { ok: false };
+  const rc = await Rclone.fromSettings();
+  const res = await rc.purgeStaleTemp(tmpRootPath(scanRoot, spec), dryRun);
+  return { ok: true, dryRun, purged: res.purged.length, failed: res.failed.length };
+}
+
+function tempPurgeNote(p: Awaited<ReturnType<typeof purgeAppTempDirs>>): string {
+  if (!p.ok) return " Temp purge skipped (tmp_dir invalid).";
+  if (p.dryRun) return ` Dry run: would purge ${p.purged} temp dir(s).`;
+  return ` Purged ${p.purged} temp dir(s)${p.failed ? ` (${p.failed} failed)` : ""}.`;
+}
+
+const RUNNING_GUARD = `<p class="note err">Task is running — stop it first.</p>`;
+const RUNNING_GUARD_HEADERS = toastHeaders("Stop the task first.", "err");
+
 actions.post("/maintenance/archives", async (c) => {
+  if (engineState.running) {
+    return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
+  }
   await store.run("DELETE FROM log_lines WHERE scope='archive'");
   await store.run("DELETE FROM logs");
   await store.run("DELETE FROM archives");
@@ -230,49 +277,50 @@ actions.post("/maintenance/archives", async (c) => {
 });
 
 actions.post("/maintenance/runs", async (c) => {
+  if (engineState.running) {
+    return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
+  }
   await store.run("DELETE FROM log_lines WHERE scope='run'");
   await store.run("DELETE FROM runs");
+  await resetSequences(["runs"]);
+  await setSetting("last_run_id", "0");
+  let purgeNote = "";
+  try {
+    purgeNote = tempPurgeNote(await purgeAppTempDirs());
+  } catch (e) {
+    purgeNote = ` Temp purge failed: ${String(e)}`;
+  }
   return c.html(
-    `<p class="note">Cleared run history and logs.</p>`,
+    `<p class="note">Cleared run history and logs.${esc(purgeNote)} Next run starts from #1.</p>`,
     200,
-    toastHeaders("Cleared run history and logs."),
+    toastHeaders(`Cleared run history; next run starts from #1.`),
   );
 });
 
 /** Manual purge of stale temp dirs (boot/sweep parity). */
 actions.post("/maintenance/tmp-purge", async (c) => {
-  const dryRun = (await getSetting("dry_run", "0")) === "1";
-  const scanRoot = (await getSetting("scan_root", "")) ?? "";
-  const trash = (await getSetting("trash_subdir", "trash")) ?? "trash";
-  const raw = ((await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT).trim();
-  const spec = raw
-    ? parseTmpDir(raw, scanRoot, trash)
-    : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
-  if (!spec) {
-    return c.html(
-      `<p class="note err">tmp_dir is invalid; nothing purged.</p>`,
-      200,
-      toastHeaders("tmp_dir is invalid", "err"),
-    );
-  }
   try {
-    const rc = await Rclone.fromSettings();
-    const res = await rc.purgeStaleTemp(tmpRootPath(scanRoot, spec), dryRun);
-    const purged = res.purged.length;
-    const failed = res.failed.length;
-    const none = purged === 0 && failed === 0;
-    const msg = dryRun
+    const p = await purgeAppTempDirs();
+    if (!p.ok) {
+      return c.html(
+        `<p class="note err">tmp_dir is invalid; nothing purged.</p>`,
+        200,
+        toastHeaders("tmp_dir is invalid", "err"),
+      );
+    }
+    const none = p.purged === 0 && p.failed === 0;
+    const msg = p.dryRun
       ? none
         ? "Dry run: temp directory is tidy"
-        : `Dry run: would purge ${purged} stale item(s)`
+        : `Dry run: would purge ${p.purged} stale item(s)`
       : none
         ? "Temp directory is tidy"
-        : `Purged ${purged} stale item(s)`;
-    const detail = failed ? ` ${failed} could not be purged.` : "";
+        : `Purged ${p.purged} stale item(s)`;
+    const detail = p.failed ? ` ${p.failed} could not be purged.` : "";
     return c.html(
-      `<p class="note${failed ? " err" : ""}">${esc(msg)}.${esc(detail)}</p>`,
+      `<p class="note${p.failed ? " err" : ""}">${esc(msg)}.${esc(detail)}</p>`,
       200,
-      toastHeaders(msg + detail, failed ? "err" : "ok"),
+      toastHeaders(msg + detail, p.failed ? "err" : "ok"),
     );
   } catch (e) {
     return c.html(
@@ -284,12 +332,23 @@ actions.post("/maintenance/tmp-purge", async (c) => {
 });
 
 actions.post("/maintenance/all", async (c) => {
+  if (engineState.running) {
+    return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
+  }
   await store.run("DELETE FROM log_lines");
   await store.run("DELETE FROM logs");
   await store.run("DELETE FROM runs");
   await store.run("DELETE FROM archives");
+  await resetSequences(["archives", "runs", "log_lines"]);
+  await setSetting("last_run_id", "0");
+  let purgeNote = "";
+  try {
+    purgeNote = tempPurgeNote(await purgeAppTempDirs());
+  } catch (e) {
+    purgeNote = ` Temp purge failed: ${String(e)}`;
+  }
   return c.html(
-    `<p class="note">Cleared all task data and logs.</p>`,
+    `<p class="note">Cleared all task data and logs.${esc(purgeNote)} Next run starts from #1.</p>`,
     200,
     toastHeaders("Cleared all task data and logs."),
   );

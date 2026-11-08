@@ -65,8 +65,8 @@ pages.get("/config", async (c) => {
     <p class="muted">Remove task data from the database. This cannot be undone.</p>
     <div class="btn-row">
       <button class="btn" hx-post="/maintenance/archives" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear the archive queue?"><span class="spinner" aria-hidden="true"></span>Clear archives</button>
-      <button class="btn" hx-post="/maintenance/runs" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear run history and logs?"><span class="spinner" aria-hidden="true"></span>Clear runs</button>
-      <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear ALL task data and logs?"><span class="spinner" aria-hidden="true"></span>Clear everything</button>
+      <button class="btn" hx-post="/maintenance/runs" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Delete run history, logs and temp dirs? Next run starts from #1."><span class="spinner" aria-hidden="true"></span>Clear runs</button>
+      <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Delete ALL task data, logs and temp dirs? Next run starts from #1."><span class="spinner" aria-hidden="true"></span>Clear everything</button>
       <button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" hx-confirm="Purge stale run directories in the temp directory?"><span class="spinner" aria-hidden="true"></span>Purge temp directory</button>
     </div>
     <div id="tmp-purge-result"></div>
