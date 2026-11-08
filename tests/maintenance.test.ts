@@ -7,6 +7,25 @@ import { Hono } from "hono";
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "rx-maintenance-"));
 delete process.env.DATABASE_URL;
 
+// This suite shells out to rclone (maintenance routes purge app temp dirs
+// via `rclone lsf --dirs-only`). Install a mock so the test does not depend
+// on an ambient rclone or on PATH polluted by other test files.
+const mockBase = process.env.DATA_DIR;
+const binDir = join(mockBase, "bin");
+mkdirSync(binDir, { recursive: true });
+const mockScript = `#!/bin/sh
+if [ "$1" = "lsf" ]; then
+  echo "123/"
+  exit 0
+fi
+if [ "$1" = "purge" ]; then
+  exit 0
+fi
+exit 0
+`;
+writeFileSync(join(binDir, "rclone"), mockScript, { mode: 0o755 });
+process.env.PATH = `${binDir}:${process.env.PATH}`;
+
 let store: typeof import("../src/db").store;
 let engineState: typeof import("../src/engine").engineState;
 let getSetting: typeof import("../src/db").getSetting;

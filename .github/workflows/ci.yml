@@ -24,7 +24,7 @@ jobs:
       - name: Test
         run: |
           if [ -d tests ] && find tests -type f \( -name '*.test.*' -o -name '*.spec.*' \) | grep -q .; then
-            bun test
+            bun test --isolate
           else
             echo "No test files present; skipping."
           fi
