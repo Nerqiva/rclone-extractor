@@ -136,7 +136,9 @@ export function toPgInsert(sql: string): string {
       return `${body} ON CONFLICT(key) DO UPDATE SET value=excluded.value`;
     }
     if (table === "archives") {
-      return `${body} ON CONFLICT(id) DO UPDATE SET path=excluded.path, size=excluded.size, status=excluded.status, error_kind=excluded.error_kind, created_at=excluded.created_at, updated_at=excluded.updated_at`;
+      // archives' UNIQUE column is `path` (the id carries no dedup value for
+      // conflicting uploads). Keep the original created_at on re-import.
+      return `${body} ON CONFLICT(path) DO UPDATE SET size=excluded.size, status=excluded.status, error_kind=excluded.error_kind, updated_at=excluded.updated_at`;
     }
     if (table === "runs") {
       return `${body} ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, finished_at=excluded.finished_at, total=excluded.total, done=excluded.done, failed=excluded.failed, skipped=excluded.skipped, interrupted=excluded.interrupted`;

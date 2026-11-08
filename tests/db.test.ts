@@ -29,9 +29,9 @@ test("insert or replace logs -> composite conflict", () => {
   expect(out).toContain("ON CONFLICT(archive_id, kind) DO UPDATE SET rel_path=excluded.rel_path");
 });
 
-test("insert or replace archives -> conflict on id", () => {
+test("insert or replace archives -> conflict on path", () => {
   const out = toPgInsert(
     "INSERT OR REPLACE INTO archives(id, path, size, status, error_kind, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
   );
-  expect(out).toContain("ON CONFLICT(id) DO UPDATE SET");
+  expect(out).toContain("ON CONFLICT(path) DO UPDATE SET");
 });

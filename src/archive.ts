@@ -29,9 +29,20 @@ export function stem(name: string): string {
   const base = name.slice(name.lastIndexOf("/") + 1);
   const lower = base.toLowerCase();
   for (const suffix of SUPPORTED) {
-    if (lower.endsWith(suffix)) return base.slice(0, base.length - suffix.length);
+    if (lower.endsWith(suffix)) {
+      const s = base.slice(0, base.length - suffix.length);
+      return sanitizeStem(s);
+    }
   }
-  return base;
+  return sanitizeStem(base);
+}
+
+// The stem becomes a path segment passed to rclone. Collapse anything that
+// could traverse or produce a degenerate directory name onto "x".
+function sanitizeStem(s: string): string {
+  const t = s.replace(/[\\/]/g, "_").replace(/\0/g, "").trim();
+  if (!t || /^[.]+$/.test(t)) return "x";
+  return t;
 }
 
 export function parentRel(rel: string): string {
@@ -70,6 +81,37 @@ export function normalizeRel(p: string): string {
     .replace(/^\.\//, "")
     .replace(/^\/+/, "")
     .replace(/\/+$/, "");
+}
+
+/**
+ * True for paths that are safe to pass to rclone under `<root>/<rel>`:
+ * non-empty, not absolute, no `.`/`..`/empty segments. Anything from a
+ * remote listing must pass this before it reaches extract/trash/promote.
+ */
+export function isSafeRel(p: string): boolean {
+  if (typeof p !== "string") return false;
+  const t = p.trim();
+  if (!t || t.length > 4096 || t.includes("\0")) return false;
+  if (t.startsWith("/") || /^[A-Za-z]:[\\/]/.test(t)) return false;
+  for (const seg of t.split("/")) {
+    if (seg === "" || seg === "." || seg === "..") return false;
+  }
+  return true;
+}
+
+/**
+ * Validate a trash subdir setting: relative, safe segments, non-empty.
+ * Returns the normalized value, or null when unusable.
+ */
+export function parseTrashSubdir(raw: string): string | null {
+  const t = normalizeRel(String(raw ?? "").trim());
+  if (!t || t.length > 256 || t.includes("\0")) return null;
+  for (const seg of t.split("/")) {
+    if (!/^[A-Za-z0-9._-]+$/.test(seg) || seg === "." || seg === "..") {
+      return null;
+    }
+  }
+  return t;
 }
 
 function baseName(p: string): string {

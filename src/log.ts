@@ -197,8 +197,10 @@ export async function tailRendered(
 }
 
 export async function readAll(ref: LogRef): Promise<string[]> {
+  // Bounded so a pathological log cannot exhaust memory; 50k lines is far
+  // beyond any sane archive log and keeps downloads responsive.
   const rows = await store.query<LogRow>(
-    "SELECT ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY id ASC",
+    "SELECT ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY id ASC LIMIT 50000",
     [ref.scope, ref.refId, ref.kind],
   );
   return rows.map(formatRow);

@@ -30,10 +30,10 @@ test("absolute remote path is preserved", () => {
     kind: "absolute",
     value: "myremote:path/to/tmp",
   });
-  expect(parseTmpDir("remote:", ROOT, TRASH)).toEqual({
-    kind: "absolute",
-    value: "remote:",
-  });
+  // A bare remote ("remote:") names the root of the remote: using it as a
+  // temp dir would put scratch data at the top level of the remote, so it
+  // is refused.
+  expect(parseTmpDir("remote:", ROOT, TRASH)).toBeNull();
 });
 
 test("absolute local path is preserved", () => {
@@ -41,6 +41,18 @@ test("absolute local path is preserved", () => {
     kind: "absolute",
     value: "/mnt/nas/tmp",
   });
+  expect(parseTmpDir("/", ROOT, TRASH)).toBeNull();
+});
+
+test("absolute tmp overlapping the scan root is refused", () => {
+  // With a local scan root, an absolute temp dir that contains or equals
+  // the scan root (or its trash dir) is refused.
+  expect(parseTmpDir("/", "/data/scan", "trash")).toBeNull();
+  expect(parseTmpDir("/data", "/data/scan", "trash")).toBeNull();
+  expect(parseTmpDir("/data/scan", "/data/scan", "trash")).toBeNull();
+  expect(parseTmpDir("/data/scan/tmp", "/data/scan", "trash")).toBeNull();
+  expect(parseTmpDir("/data/scan-trash", "/data/scan", "trash")).not.toBeNull();
+  expect(parseTmpDir("/data/tmp", "/data/scan", "trash")).not.toBeNull();
 });
 
 test("empty values are rejected (caller falls back to default)", () => {

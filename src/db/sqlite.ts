@@ -19,6 +19,9 @@ export class SqliteStore implements Store {
     }
     this.db = new Database(DB_PATH, { create: true });
     this.db.exec("PRAGMA journal_mode=WAL;");
+    // Wait instead of erroring immediately when another statement holds the
+    // write lock (e.g. the engine logging while an HTTP handler writes).
+    this.db.exec("PRAGMA busy_timeout=5000;");
     this.db.exec(SQLITE_SCHEMA);
   }
 
@@ -48,6 +51,23 @@ export class SqliteStore implements Store {
     params: unknown[] = [],
   ): Promise<T | null> {
     return (this.handle.query(sql).get(...(params as never[])) as T) ?? null;
+  }
+
+  async transaction<T>(fn: (tx: Store) => Promise<T>): Promise<T> {
+    const db = this.handle;
+    db.exec("BEGIN");
+    try {
+      const result = await fn(this);
+      db.exec("COMMIT");
+      return result;
+    } catch (e) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // already rolled back or connection is broken
+      }
+      throw e;
+    }
   }
 
   async close(): Promise<void> {

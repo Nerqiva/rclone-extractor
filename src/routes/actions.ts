@@ -8,6 +8,7 @@ import { APP_PASSWORD, RCLONE_CONF, RCLONE_CONF_PATH } from "../config";
 import { normalizeRcloneConf } from "../rcloneconf";
 import { Rclone } from "../rclone";
 import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "../tmpdir";
+import { parseTrashSubdir } from "../archive";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
@@ -94,6 +95,18 @@ const SETTING_KEYS = [
   "tmp_dir",
 ];
 
+/** Render a database URL with credentials masked: postgres://user:••••@host/db */
+export function maskDatabaseUrl(raw: string): string {
+  if (!raw) return "";
+  try {
+    const u = new URL(raw);
+    if (u.password) u.password = "****";
+    return u.toString();
+  } catch {
+    return "(set)";
+  }
+}
+
 actions.post("/config", async (c) => {
   const form = await c.req.formData();
 
@@ -116,9 +129,24 @@ actions.post("/config", async (c) => {
   const scanRootNew = form.get("scan_root") !== null
     ? String(form.get("scan_root"))
     : ((await getSetting("scan_root", "")) ?? "");
-  const trashNew = form.get("trash_subdir") !== null
+  const trashRawValue = form.get("trash_subdir") !== null
     ? String(form.get("trash_subdir"))
     : ((await getSetting("trash_subdir", "trash")) ?? "trash");
+  let trashStored: string | undefined;
+  if (form.get("trash_subdir") !== null) {
+    const parsedTrash = parseTrashSubdir(trashRawValue);
+    if (!parsedTrash) {
+      return c.html(
+        await configForm(
+          `<p class="note err">trash_subdir is not a usable relative path (no absolute paths, &quot;..&quot; or empty/special segments).</p>`,
+        ),
+        200,
+        toastHeaders("trash_subdir is not usable", "err"),
+      );
+    }
+    trashStored = parsedTrash;
+  }
+  const trashNew = trashStored ?? trashRawValue;
   let storedTmpDir: string | undefined;
   const tmpRaw = form.get("tmp_dir") === null ? undefined : String(form.get("tmp_dir") ?? "").trim();
   if (tmpRaw !== undefined) {
@@ -151,9 +179,11 @@ actions.post("/config", async (c) => {
   for (const key of SETTING_KEYS) {
     if (key === "rclone_conf") continue;
     if (key === "tmp_dir") continue; // stored normalized below
+    if (key === "trash_subdir") continue; // stored normalized below
     const value = form.get(key);
     if (value !== null) await setSetting(key, String(value));
   }
+  if (trashStored !== undefined) await setSetting("trash_subdir", trashStored);
   if (storedTmpDir !== undefined) await setSetting("tmp_dir", storedTmpDir);
   if (normalizedConf !== null) await setSetting("rclone_conf", normalizedConf);
   await setSetting("dry_run", form.get("dry_run") !== null ? "1" : "0");
@@ -377,7 +407,7 @@ export async function configForm(note = ""): Promise<string> {
   )}
   ${staticRow(
     "database_url",
-    s.database_url ?? "",
+    maskDatabaseUrl(s.database_url ?? ""),
     "read-only",
   )}
   <p class="muted">database_url is set through the DATABASE_URL environment variable; restart to switch backends.</p>

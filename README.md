@@ -178,6 +178,8 @@ database. They can also be seeded from environment variables.
 | `RCLONE_CONF` | *(empty)* | Base64-encoded `rclone.conf`, used as a fallback when the stored `rclone_conf` setting is empty. Generate with `base64 -w0 rclone.conf`. |
 | `RCLONE_BIN` | `rclone` | Path to the rclone binary. Set this to a full path if your host does not have rclone on `PATH`, or if you must install the build that matches your CPU (arm64 vs amd64). |
 | `DATABASE_URL` | *(empty)* | Postgres connection string. When empty, SQLite at `DATA_DIR/app.db` is used. |
+| `PG_POOL_MAX` | `4` | Max connections this app opens to Postgres (keep small; see below). |
+| `COOKIE_SECURE` | `1` | Session cookie is `Secure` (HTTPS only). Set `0` only when serving over plain HTTP. |
 | `DATA_DIR` | `/app/data` | Directory for the SQLite file and the working `rclone.conf`. Only needed when using SQLite. |
 | `BIND` | `0.0.0.0` | HTTP bind address. |
 | `PORT` | `8080` | HTTP port. |
@@ -212,6 +214,29 @@ To switch, set (or clear) `DATABASE_URL` and **restart** the app. The
 Configuration page shows the active backend as a badge; its `database_url`
 field is a **read-only** view of the value the app started with and cannot
 change the backend on its own.
+
+#### Postgres connection troubleshooting
+
+If the deploy log shows `PostgresError: remaining connection slots are
+reserved for roles with the SUPERUSER attribute` (errno `53300`), the remote
+Postgres service has hit its connection cap — the remaining slots are reserved
+for superusers, so regular connections are refused. Note that this app does
+not limit what else uses the same service: other apps or stale idle
+connections can consume the slots too. Fix it on both sides:
+
+1. **In the remote Postgres service:** raise `max_connections` (if your plan
+   allows), terminate stale backends (`SELECT pg_terminate_backend(pid) FROM
+   pg_stat_activity WHERE state = 'idle' ...` as a superuser), or point
+   `DATABASE_URL` at the service's **connection pooler** (most hosted
+   Postgres providers offer one — e.g. Neon/Supabase/Aiven/Render poolers or
+   PgBouncer in transaction mode).
+2. **In this app:** keep `PG_POOL_MAX` small (default `4`). The pool recycles
+   idle connections after 20 s and the app closes its connections on
+   `SIGTERM`, so deploys do not leak slots. Boot retries the database
+   connection a few times before giving up instead of crash-looping.
+
+Use `?sslmode=require` in the URL at minimum; use `verify-full` (with the
+provider's CA) for internet-exposed databases.
 
 ---
 

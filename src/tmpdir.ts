@@ -30,13 +30,22 @@ export function parseTmpDir(
 ): TmpDirSpec | null {
   const trimmed = norm(raw);
   if (!trimmed) return null;
+  if (trimmed === "/") return null;
+  // "remote:" (bare remote) or "C:" (drive root): nothing to safely purge.
+  if (trimmed.endsWith(":")) return null;
   if (trimmed.includes("..")) return null;
+  if (trimmed.includes("\0")) return null;
 
   const absolute = isAbsoluteTmpPath(trimmed);
   if (!absolute && !/^[A-Za-z0-9._/-]+$/.test(trimmed)) return null;
 
   const scan = norm(scanRoot);
   const trash = norm(trashSubdir);
+  const trashFull = scan && trash ? `${scan}/${trash}` : trash;
+  const absTmp = absolute ? trimmed : scan ? `${scan}/${trimmed}` : trimmed;
+
+  const overlaps = (a: string, b: string): boolean =>
+    a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 
   // A temp dir that coincides with the scan root or the trash dir (or the
   // scan-root/trash combo) would let the sweeper eat archives or trashed
@@ -46,6 +55,14 @@ export function parseTmpDir(
   if (scan && trash && trimmed === `${scan}/${trash}`) return null;
   if (trash && trimmed.startsWith(`${trash}/`)) return null;
   if (trash && trash.startsWith(`${trimmed}/`)) return null;
+  // Absolute temp dirs get no promote exclusion from overlapping the scan
+  // tree, so they may not overlap scan/trash at all (not even as a parent).
+  if (absolute) {
+    if (scan && overlaps(absTmp, scan)) return null;
+    if (trashFull && overlaps(absTmp, trashFull)) return null;
+  } else if (trashFull && overlaps(absTmp, trashFull)) {
+    return null;
+  }
 
   if (absolute) return { kind: "absolute", value: trimmed };
 

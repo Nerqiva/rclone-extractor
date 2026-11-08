@@ -19,6 +19,8 @@ import {
   classifyArchive,
   describeArchiveStats,
   stem,
+  isSafeRel,
+  parseTrashSubdir,
   type SkipReason,
 } from "./archive";
 
@@ -68,6 +70,27 @@ function clampQueueMax(raw: string | undefined): number {
   const n = Math.floor(Number(raw ?? "500"));
   if (!Number.isFinite(n) || n <= 0) return 500;
   return Math.min(n, 100_000);
+}
+
+// Reading the cancel flag once per listed line would put a database round
+// trip on the hot path (and, on Postgres, a pool checkout). Poll at most
+// twice a second; a stop therefore takes effect within ~500ms.
+const CANCEL_CACHE_MS = 500;
+let cancelCache = { at: 0, value: "0" };
+
+function resetCancelCache(): void {
+  cancelCache = { at: 0, value: "0" };
+}
+
+async function cancelRequestedCached(): Promise<boolean> {
+  const nowMs = Date.now();
+  if (nowMs - cancelCache.at >= CANCEL_CACHE_MS) {
+    cancelCache = {
+      at: nowMs,
+      value: (await getSetting("cancel", "0")) ?? "0",
+    };
+  }
+  return cancelCache.value === "1";
 }
 
 /**
@@ -121,10 +144,18 @@ export async function runEngine(): Promise<void> {
   }
   // Validate tmp_dir up front so misconfiguration fails fast instead of
   // producing a half-extracted archive outside the expected tree.
+  const trashRaw = (await getSetting("trash_subdir", "trash")) ?? "trash";
+  const trashSubdirValidated = parseTrashSubdir(trashRaw);
+  if (!trashSubdirValidated) {
+    engineState.stage = "error";
+    engineState.lastError = `trash_subdir is invalid: ${trashRaw}`;
+    engineState.running = false;
+    return;
+  }
   const tmpRawValue = (await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT;
   const tmpRaw = tmpRawValue.trim();
   const tmpSpec = tmpRaw
-    ? parseTmpDir(tmpRaw, scanRoot, (await getSetting("trash_subdir", "trash")) ?? "trash")
+    ? parseTmpDir(tmpRaw, scanRoot, trashSubdirValidated)
     : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
   if (!tmpSpec) {
     engineState.stage = "error";
@@ -134,6 +165,7 @@ export async function runEngine(): Promise<void> {
   }
 
   await setSetting("cancel", "0");
+  resetCancelCache();
 
   let runRowId = 0;
   let logger: Logger | null = null;
@@ -199,7 +231,7 @@ export async function runEngine(): Promise<void> {
 
     const queueMax = clampQueueMax(await getSetting("queue_max", "500"));
     const dryRun = (await getSetting("dry_run", "0")) === "1";
-    const trashSubdir = (await getSetting("trash_subdir", "trash")) ?? "trash";
+    const trashSubdir = trashSubdirValidated;
     const trashDir = normalizeRel(trashSubdir);
     const existing = new Map(
       (
@@ -210,9 +242,16 @@ export async function runEngine(): Promise<void> {
     );
 
     let queued = 0;
+    let skippedUnsafe = 0;
     const createdAt = now();
     const listed = await rc.list(async (rel, size) => {
-      if ((await getSetting("cancel", "0")) === "1") return false;
+      if (await cancelRequestedCached()) return false;
+      // A hostile or corrupt remote could return paths that escape the scan
+      // tree ("..", absolute paths, empty segments). Never touch those.
+      if (!isSafeRel(rel)) {
+        skippedUnsafe++;
+        return;
+      }
       // Archives already sitting in the trash subdir are not queued again;
       // otherwise a done path there would be re-queued on every run.
       if (isTrashPath(rel, trashSubdir)) return;
@@ -242,6 +281,9 @@ export async function runEngine(): Promise<void> {
       }
     });
 
+    if (skippedUnsafe > 0) {
+      warn(`listing skipped ${skippedUnsafe} unsafe path(s) from the remote`);
+    }
     if (listed.streamError) {
       const cancelRequested =
         engineState.forceStop || (await getSetting("cancel", "0")) === "1";
@@ -258,9 +300,17 @@ export async function runEngine(): Promise<void> {
     } else if (listed.stopped) {
       logger.info("listing stopped early (queue limit or cancel)");
     } else if (listed.code !== 0) {
-      const msg = `listing failed (exit ${listed.code})`;
-      fail(msg, `$ ${listed.command}\n${listed.stderr}`.trim());
-      throw new Error(msg);
+      // A hard stop kills the listing process; a non-zero exit then means
+      // "cancelled", not "the remote broke".
+      const cancelRequested =
+        engineState.forceStop || (await getSetting("cancel", "0")) === "1";
+      if (cancelRequested) {
+        logger.info("listing stopped by user");
+      } else {
+        const msg = `listing failed (exit ${listed.code})`;
+        fail(msg, `$ ${listed.command}\n${listed.stderr}`.trim());
+        throw new Error(msg);
+      }
     }
     if (listed.stderr.trim()) {
       warn(`listing stderr: ${listed.stderr.trim()}`);
@@ -290,13 +340,30 @@ export async function runEngine(): Promise<void> {
     engineState.stage = "extracting";
 
     for (const row of rows) {
-      if ((await getSetting("cancel", "0")) === "1") {
+      if (await cancelRequestedCached()) {
         logger.info("cancel requested, stopping");
         engineState.stage = "cancelled";
         break;
       }
 
       const rel = row.path;
+      // Defense in depth: rows enqueued by older versions could hold paths
+      // that are unsafe to pass to rclone. Fail them instead of executing.
+      if (!isSafeRel(rel)) {
+        await store.run(
+          "UPDATE archives SET status='failed', error_kind='unsafe_path', updated_at=? WHERE id=?",
+          [now(), row.id],
+        );
+        warn(`skipped unsafe stored path: ${JSON.stringify(rel)}`);
+        engineState.failed++;
+        await store.run("UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?", [
+          engineState.done,
+          engineState.failed,
+          engineState.skipped,
+          runRowId,
+        ]);
+        continue;
+      }
       engineState.currentRel = rel;
       engineState.extractStats = null;
       await store.run(
@@ -423,9 +490,10 @@ export async function runEngine(): Promise<void> {
         if (engineState.forceStop) {
           // Hard stop while the archive was mid-flight: put it back in the
           // queue instead of counting it as done/failed/skipped, so it is
-          // picked up again on the next run.
+          // picked up again on the next run. Never resurrect an archive
+          // whose terminal state (done/skipped) already committed.
           await store.run(
-            "UPDATE archives SET status='queued', updated_at=? WHERE id=?",
+            "UPDATE archives SET status='queued', updated_at=? WHERE id=? AND status NOT IN ('done', 'skipped')",
             [now(), row.id],
           );
           engineState.currentCommand = "";
@@ -457,19 +525,35 @@ export async function runEngine(): Promise<void> {
       }
     }
 
-    // Best effort: drop the now-empty run-level and global temp dirs. If a
-    // directory is not empty (e.g. an archive was force-stopped mid-flight),
-    // purge it instead of leaving junk behind.
-    for (const p of [tmpRunDir(tmpRoot, runRowId), tmpRoot]) {
-      const res = await rc.rmdir(p, dryRun);
-      if (res.code !== 0) {
-        const purged = await rc.purge(p, dryRun);
+    // Best effort: drop the now-empty run-level temp dir. If it is not
+    // empty (e.g. an archive was force-stopped mid-flight), purge only that
+    // exact directory — never the shared temp root, which may hold entries
+    // owned by the user that the app must not delete.
+    const tmpRootNorm = tmpRoot.replace(/\/+$/, "");
+    const runDir = tmpRunDir(tmpRootNorm, runRowId);
+    const tmpRootIsSafe =
+      tmpRootNorm.length > 1 &&
+      tmpRootNorm !== "/" &&
+      !tmpRootNorm.endsWith(":") &&
+      !/^[A-Za-z]:[\\/]?$/.test(tmpRootNorm) &&
+      runDir === `${tmpRootNorm}/${runRowId}`;
+    const runRes = await rc.rmdir(runDir, dryRun);
+    if (runRes.code !== 0) {
+      if (tmpRootIsSafe) {
+        const purged = await rc.purge(runDir, dryRun);
         if (purged.code === 0) {
-          logger.info(`purged ${p} (not empty)`);
+          logger.info(`purged ${runDir} (not empty)`);
         } else {
-          logger.info(`left ${p} in place (${purged.stderr.trim() || "not empty"})`);
+          logger.info(`left ${runDir} in place (${purged.stderr.trim() || "not empty"})`);
         }
+      } else {
+        logger.info(`left ${runDir} in place (temp root not safe to purge)`);
       }
+    }
+    // The shared temp root itself is only removed when already empty.
+    const rootRes = await rc.rmdir(tmpRootNorm, dryRun);
+    if (rootRes.code !== 0) {
+      logger.info(`left ${tmpRootNorm} in place (not empty)`);
     }
 
     // A stop requested while the last archive was being processed never gets

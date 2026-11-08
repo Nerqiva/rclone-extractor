@@ -10,6 +10,7 @@ export interface Store {
   insertReturningId(sql: string, params?: unknown[]): Promise<number>;
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
   get1<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T | null>;
+  transaction<T>(fn: (tx: Store) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 
@@ -34,7 +35,29 @@ const defaults: Record<string, string> = {
   last_run_id: "0",
 };
 
+const INIT_ATTEMPTS = 5;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function initDb(): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= INIT_ATTEMPTS; attempt++) {
+    try {
+      await initDbOnce();
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (attempt === INIT_ATTEMPTS) break;
+      const delayMs = Math.min(1000 * 2 ** (attempt - 1), 8000);
+      console.warn(
+        `db init attempt ${attempt}/${INIT_ATTEMPTS} failed: ${String(e)} — retrying in ${delayMs}ms`,
+      );
+      await sleep(delayMs);
+    }
+  }
+  throw lastErr;
+}
+
+async function initDbOnce(): Promise<void> {
   await store.init();
   await migrateRunsInterrupted();
 

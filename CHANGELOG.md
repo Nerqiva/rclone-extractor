@@ -11,7 +11,64 @@ to `main`.
 
 ## [Unreleased]
 
+### Security
+- Session cookies are now `Secure` (HTTPS-only) by default (`COOKIE_SECURE=0`
+  opts out for plain-HTTP deployments), login sessions expire after 7 days
+  (expiry is verified server-side, not just via cookie max age), and `POST
+  /login` is rate-limited per source IP (5 failures → 10-minute lockout,
+  HTTP 429 + `Retry-After`).
+- `database_url` on the Configuration page is rendered with credentials
+  masked instead of decrypted in full.
+- Unauthenticated htmx/fetch requests receive HTTP 401 instead of a silent
+  redirect to `/login`.
+- `rclone.conf` working copy is written atomically with mode `0600`;
+  `DATA_DIR` is created with mode `0700`.
+
+### Fixed
+- **Postgres connection exhaustion** (`53300: remaining connection slots are
+  reserved for roles with the SUPERUSER attribute`): the app now opens at
+  most `PG_POOL_MAX` connections (default 4), recycles idle connections after
+  20 s, closes the pool on `SIGTERM`/`SIGINT` (deploys no longer leak
+  backends), and retries database initialization a few times with backoff at
+  boot instead of crash-looping the service.
+- End-of-run cleanup no longer `rclone purge`es the shared temp root (it may
+  contain user-owned entries); only the current run's own directory is ever
+  purged, and only when it is strictly inside the configured temp root.
+- `tmp_dir` validation now rejects `/`, bare remotes (`remote:`), drive
+  roots, and absolute temp dirs that overlap the scan root or trash dir.
+- `trash_subdir` is validated as a safe relative path (no absolute paths,
+  `..`, or special segments), on save and at run start.
+- Paths from remote listings are validated before use; `..`/absolute/empty
+  segments are skipped (or fail the archive with `unsafe_path`) instead of
+  reaching `extract`/`trash`/`promote`.
+- Crash-safe force-stop: a force-stopped archive is only re-queued when its
+  terminal state had not committed yet (`done`/`skipped` are preserved), and
+  a force-stop during listing is treated as "cancelled", not "listing
+  failed".
+- Backup import is transactional, validates every record before writing
+  anything, restores the `logs` table, restores rows under their original
+  ids, resets Postgres sequences (`setval`) after restore, skips blanked
+  secret values from non-secret exports (importing a safe backup no longer
+  wipes stored credentials), and does not duplicate `log_lines` on
+  re-import. Backup export now uses deterministic `ORDER BY id`.
+- `INSERT OR REPLACE INTO archives` on Postgres now upserts `ON CONFLICT
+  (path)` instead of a non-matching `id` target.
+- SQLite runs with `PRAGMA busy_timeout=5000`.
+- The cancel flag is polled at most twice per second in the hot listing loop
+  instead of once per listed line.
+- `/download/run/:id` and `/download/archive/:id` reject non-integer ids
+  (was: 500 on Postgres, silent empty 404 on SQLite); error rows are capped
+  at 500 entries; log downloads are capped at 50 000 lines.
+- `archives`/`stem()` sanitize archive basenames that produce empty or
+  dot-only temp directory names.
+
 ### Added
+- `PG_POOL_MAX` and `COOKIE_SECURE` environment variables (see README and
+  `.env.example`), plus Postgres connection troubleshooting docs for hosted
+  databases (pooler setup, `max_connections`, ECONNREFUSED/53300).
+- `tests/data.test.ts`: export→wipe→import round trip (ids preserved,
+  secrets preserved, re-import idempotent, malformed records rejected).
+- `TZ=Asia/Omsk` in the Docker image (with `tzdata` installed).
 - **Progress page** replacing the old Dashboard. It shows a run status badge,
   KPI cards (done, failed, skipped, remaining), a segmented progress bar, and a
   detail grid with the current archive, active command, stage, rate, and ETA.

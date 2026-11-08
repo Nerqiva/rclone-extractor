@@ -105,6 +105,10 @@ pages.get("/config", async (c) => {
     if (exportForm) {
       exportForm.addEventListener("submit", async function (event) {
         event.preventDefault();
+        if (exportForm.include_rclone && exportForm.include_rclone.checked &&
+            !window.confirm("The export will contain unencrypted secrets (rclone.conf, database_url). Continue?")) {
+          return;
+        }
         var btn = exportForm.querySelector('button[type="submit"]');
         setLoading(btn, true);
         try {
@@ -145,6 +149,9 @@ pages.get("/config", async (c) => {
         var fileInput = importForm.querySelector('input[type="file"]');
         if (fileInput && (!fileInput.files || fileInput.files.length === 0)) {
           toast("Choose a backup .json file first.", "err");
+          return;
+        }
+        if (!window.confirm("Importing a backup overwrites matching rows in the current database. Continue?")) {
           return;
         }
         setLoading(btn, true);

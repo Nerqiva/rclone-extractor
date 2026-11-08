@@ -1,6 +1,7 @@
+import { writeFileSync, renameSync, chmodSync } from "node:fs";
 import { getSetting, store } from "./db";
 import { existsSync } from "node:fs";
-import { isSupported } from "./archive";
+import { isSupported, isSafeRel, parseTrashSubdir } from "./archive";
 import { isAbsoluteTmpPath, type SweepResult } from "./tmpdir";
 import { RCLONE_CONF, RCLONE_CONF_PATH, ensureDataDir, RCLONE_BIN } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
@@ -198,6 +199,10 @@ function redactArgs(args: string[]): string[] {
   return out;
 }
 
+function assertSafeRel(rel: string): void {
+  if (!isSafeRel(rel)) throw new Error(`unsafe archive path refused: ${JSON.stringify(rel)}`);
+}
+
 function parseListLine(line: string): { rel: string; size: number } | null {
   const idx = line.lastIndexOf(";");
   if (idx === -1) return null;
@@ -322,7 +327,16 @@ export class Rclone {
 
     if (conf) {
       if (ensureDataDir()) {
-        await Bun.write(RCLONE_CONF_PATH, conf);
+        // Write via a temp file + rename so a crash mid-write cannot leave a
+        // truncated config, and never leave credentials world-readable.
+        const tmp = `${RCLONE_CONF_PATH}.tmp-${process.pid}`;
+        try {
+          writeFileSync(tmp, conf, { mode: 0o600 });
+          renameSync(tmp, RCLONE_CONF_PATH);
+          chmodSync(RCLONE_CONF_PATH, 0o600);
+        } catch (e) {
+          console.warn(`could not write ${RCLONE_CONF_PATH}: ${String(e)}`);
+        }
       } else {
         console.warn(
           `could not write ${RCLONE_CONF_PATH}: data directory not writable; relying on existing rclone config`,
@@ -451,6 +465,7 @@ export class Rclone {
     ref: RcloneRef,
     onEntry: (entry: ArchiveEntry) => void,
   ): Promise<ArchiveListOutcome> {
+    assertSafeRel(rel);
     const args = [
       "archive",
       "list",
@@ -571,6 +586,7 @@ export class Rclone {
     ref: RcloneRef,
     onStats?: (stats: ExtractStats) => void,
   ): Promise<Outcome> {
+    assertSafeRel(rel);
     const args = [
       "archive",
       "extract",
@@ -640,6 +656,7 @@ export class Rclone {
     ref: RcloneRef,
     tmpTopSegment: string | null,
   ): Promise<Outcome> {
+    assertSafeRel(rel);
     const idx = rel.lastIndexOf("/");
     const parent = idx === -1 ? "" : rel.slice(0, idx);
     const args = [
@@ -719,6 +736,10 @@ export class Rclone {
   }
 
   async trash(rel: string, subdir: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
+    assertSafeRel(rel);
+    if (!parseTrashSubdir(subdir)) {
+      throw new Error(`unsafe trash_subdir refused: ${JSON.stringify(subdir)}`);
+    }
     return this.run(
       ["moveto", `${this.root}/${rel}`, `${this.root}/${subdir}/${rel}`],
       dry,

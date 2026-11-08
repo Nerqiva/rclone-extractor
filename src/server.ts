@@ -59,6 +59,24 @@ if (tmpSpecBoot) {
 
 const app = new Hono();
 
+// Render (and every PaaS) stops the instance with SIGTERM. Close the database
+// pool so the remote Postgres releases our connection slots immediately
+// instead of holding them until TCP keepalive times out.
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`received ${signal}; closing database connections`);
+  try {
+    await store.close();
+  } catch (e) {
+    console.warn(`error closing database: ${String(e)}`);
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+
 app.get("/healthz", (c) => c.text("ok"));
 
 app.use("/public/*", serveStatic({ root: "./" }));

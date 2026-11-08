@@ -10,6 +10,14 @@ export const SECRET_KEY = process.env.SECRET_KEY ?? ""; // at-rest encryption pa
 export const DATABASE_URL = process.env.DATABASE_URL ?? ""; // remote postgres, optional
 export const RCLONE_CONF = process.env.RCLONE_CONF ?? ""; // base64-encoded rclone.conf fallback
 export const RCLONE_BIN = process.env.RCLONE_BIN ?? "rclone"; // path to the rclone binary
+// Max connections this app opens to Postgres. Keep it small: the remote
+// service caps total connections and reserves slots for superusers.
+const pgPoolMax = Number(process.env.PG_POOL_MAX ?? 4);
+export const PG_POOL_MAX =
+  Number.isFinite(pgPoolMax) && pgPoolMax >= 1 ? Math.min(Math.floor(pgPoolMax), 32) : 4;
+// Session cookie is marked Secure (HTTPS only) by default. Set
+// COOKIE_SECURE=0 when serving the app over plain HTTP (e.g. LAN/testing).
+export const COOKIE_SECURE = process.env.COOKIE_SECURE !== "0";
 
 // The local filesystem is only needed for the SQLite database and the
 // transient rclone.conf working copy. On hosts with a read-only or
@@ -17,7 +25,7 @@ export const RCLONE_BIN = process.env.RCLONE_BIN ?? "rclone"; // path to the rcl
 // directory creation is best-effort and must never crash the process.
 export function ensureDataDir(): boolean {
   try {
-    mkdirSync(DATA_DIR, { recursive: true });
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
     return true;
   } catch {
     return false;

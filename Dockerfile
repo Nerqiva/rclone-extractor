@@ -5,7 +5,7 @@ FROM oven/bun:1.4-slim
 ARG TARGETARCH
 ARG TARGETVARIANT
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl unzip tar gzip \
+      ca-certificates curl unzip tar gzip tzdata \
  && ARCH="${TARGETARCH:-amd64}" \
  && case "$ARCH" in \
       amd64) RCLONE_ARCH=amd64 ;; \
@@ -32,7 +32,7 @@ COPY . .
 # mount a volume here (note: a host/Render disk mount is root-owned and may need
 # DATA_DIR pointed elsewhere) or use Postgres.
 RUN mkdir -p /app/data && chown -R bun:bun /app/data
-ENV DATA_DIR=/app/data PORT=8080
+ENV DATA_DIR=/app/data PORT=8080 TZ=Asia/Omsk
 VOLUME /app/data
 EXPOSE 8080
 USER bun
