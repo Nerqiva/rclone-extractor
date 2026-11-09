@@ -1,9 +1,8 @@
 import { writeFileSync, renameSync, chmodSync } from "node:fs";
 import { getSetting, store } from "./db";
-import { existsSync } from "node:fs";
 import { isSupported, isSafeRel, parseTrashSubdir } from "./archive";
 import { isAbsoluteTmpPath, type SweepResult } from "./tmpdir";
-import { RCLONE_CONF, RCLONE_CONF_PATH, ensureDataDir, RCLONE_BIN } from "./config";
+import { RCLONE_CONF, RCLONE_CONF_PATH, RCLONE_BIN } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
 import { insertLogLines } from "./log";
 import type { Logger } from "./log";
@@ -299,14 +298,15 @@ export class Rclone {
     public root: string,
     public flags: string[],
     private runLog?: Logger,
-    private confPath?: string,
   ) {}
 
-  // rclone only reads a config file passed via --config. Without this the
-  // subprocess falls back to ~/.config/rclone/rclone.conf and errors with
-  // "didn't find section in config file".
+  // The --config flag is hard-coded so rclone never falls back to
+  // ~/.config/rclone/rclone.conf (which errors with "didn't find section in
+  // config file"). When a stored/env rclone_conf is set, fromSettings()
+  // keeps the file at this path up to date; otherwise the mounted file is
+  // used as-is. A --config in remote_flags is stripped, not honored.
   private confArgs(): string[] {
-    return this.confPath ? ["--config", this.confPath] : [];
+    return ["--config", RCLONE_CONF_PATH];
   }
 
   static async fromSettings(runLog?: Logger): Promise<Rclone> {
@@ -327,26 +327,21 @@ export class Rclone {
     }
 
     if (conf) {
-      if (ensureDataDir()) {
-        // Write via a temp file + rename so a crash mid-write cannot leave a
-        // truncated config, and never leave credentials world-readable.
-        const tmp = `${RCLONE_CONF_PATH}.tmp-${process.pid}`;
-        try {
-          writeFileSync(tmp, conf, { mode: 0o600 });
-          renameSync(tmp, RCLONE_CONF_PATH);
-          chmodSync(RCLONE_CONF_PATH, 0o600);
-        } catch (e) {
-          console.warn(`could not write ${RCLONE_CONF_PATH}: ${String(e)}`);
-        }
-      } else {
-        console.warn(
-          `could not write ${RCLONE_CONF_PATH}: data directory not writable; relying on existing rclone config`,
-        );
+      // Write via a temp file + rename so a crash mid-write cannot leave a
+      // truncated config, and never leave credentials world-readable. The
+      // path is hard-coded (see config.ts); a failure here is only a warning
+      // — rclone itself will report the unreadable/missing file.
+      const tmp = `${RCLONE_CONF_PATH}.tmp-${process.pid}`;
+      try {
+        writeFileSync(tmp, conf, { mode: 0o600 });
+        renameSync(tmp, RCLONE_CONF_PATH);
+        chmodSync(RCLONE_CONF_PATH, 0o600);
+      } catch (e) {
+        console.warn(`could not write ${RCLONE_CONF_PATH}: ${String(e)}`);
       }
     }
 
-    const confPath = existsSync(RCLONE_CONF_PATH) ? RCLONE_CONF_PATH : undefined;
-    return new Rclone(RCLONE_BIN, root, flags, runLog, confPath);
+    return new Rclone(RCLONE_BIN, root, flags, runLog);
   }
 
   private announce(args: string[]): string {
@@ -384,8 +379,8 @@ export class Rclone {
     ) => boolean | void | Promise<boolean | void>,
   ): Promise<ListOutcome> {
     const args = [
-      "lsf",
       ...this.confArgs(),
+      "lsf",
       this.root,
       "--recursive",
       "--files-only",
@@ -452,8 +447,8 @@ export class Rclone {
    * Read-only, so no --dry-run is added even when dry-run mode is on; the
    * whole purpose is to inspect an archive before any extraction happens.
    * Entries are streamed to `onEntry` (O(1) memory); the caller aggregates
-   * counts. The command and, on failure, stderr are appended to the archive
-   * log. Never throws for listing failures; spawn failures propagate.
+   * counts. On failure the raw stderr is appended to the archive log.
+   * Never throws for listing failures; spawn failures propagate.
    */
   async archiveList(
     rel: string,
@@ -462,18 +457,17 @@ export class Rclone {
   ): Promise<ArchiveListOutcome> {
     assertSafeRel(rel);
     const args = [
+      ...this.confArgs(),
       "archive",
       "list",
       `${this.root}/${rel}`,
       "--files-only",
-      ...this.confArgs(),
       ...this.flags,
     ];
     const command = this.announce(args);
 
-    let seq = await this.nextSeq(ref);
-    await this.appendArchiveLines(ref, [`$ ${command}`], seq);
-    seq++;
+    // No `$ command` pre-line: archive logs hold raw binary output only.
+    const seq = await this.nextSeq(ref);
 
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
@@ -514,41 +508,26 @@ export class Rclone {
     const stderr = await stderrPromise;
     const code = await proc.exited;
 
+    // Raw binary output only — no app wording in the archive log.
     if (streamError || code !== 0) {
-      const lines = [`archive list failed (exit ${code})`];
-      const tail = [stderr, streamError ?? ""].filter(Boolean).join("\n").trim();
-      if (tail) lines.push(tail);
-      await this.appendArchiveLines(ref, lines, seq);
+      const raw = [stderr.trim(), streamError ?? ""].filter(Boolean).join("\n");
+      if (raw) await this.appendArchiveLines(ref, raw.split("\n"), seq);
     }
 
     return { code, tail: [], stderr, command, files, streamError };
   }
 
-  /** Append informational lines to an archive's log. Never throws. */
-  async note(ref: RcloneRef, lines: string[]): Promise<void> {
-    try {
-      const seq = await this.nextSeq(ref);
-      await this.appendArchiveLines(ref, lines, seq);
-    } catch (e) {
-      console.warn("could not write archive note:", e);
-    }
-  }
-
   /**
-   * Run a command. When `ref` is given, the command and its output are
+   * Run a command. When `ref` is given, the binary's raw output lines are
    * appended to that archive's log; without a ref the command still goes to
-   * the run log via `announce()`.
+   * the run log via `announce()`. Archive logs never carry app wording.
    */
   async run(args: string[], dry: boolean, ref?: RcloneRef): Promise<Outcome> {
     const full = [...this.confArgs(), ...args, ...this.flags];
     if (dry) full.push("--dry-run");
     const command = this.announce(full);
 
-    let seq = ref ? await this.nextSeq(ref) : 0;
-    if (ref) {
-      await this.appendArchiveLines(ref, [`$ ${command}`], seq);
-      seq++;
-    }
+    const seq = ref ? await this.nextSeq(ref) : 0;
 
     const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
@@ -569,42 +548,24 @@ export class Rclone {
   }
 
   /**
-   * Extract an archive. Unlike `run()`, stderr/stdout are streamed line by
-   * line so `--stats-one-line` progress (printed once per second) can be
-   * forwarded live via `onStats` and filtered out of the archive log. The
-   * log gets the command line and every non-stats line, same as before.
+   * Run a transfer command (archive extract, move, moveto) with `--stats`
+   * output streamed line by line: per-second stats lines are forwarded live
+   * via `onStats` and kept out of the archive log; every other raw line the
+   * binary writes is appended verbatim (bounded batches, only the tail is
+   * kept in memory). Archive logs never carry app wording.
    */
-  async extract(
-    rel: string,
-    tmp: string,
+  private async streamTransfer(
+    args: string[],
     dry: boolean,
     ref: RcloneRef,
     onStats?: (stats: ExtractStats) => void,
   ): Promise<Outcome> {
-    assertSafeRel(rel);
-    const args = [
-      "archive",
-      "extract",
-      `${this.root}/${rel}`,
-      this.fullPath(tmp),
-      "--stats",
-      "1s",
-      "--stats-one-line",
-      // rclone logs --stats output at INFO, which the default NOTICE log
-      // level suppresses; without this the flags above produce no output.
-      "--log-level",
-      "INFO",
-    ];
     const full = [...this.confArgs(), ...args, ...this.flags];
     if (dry) full.push("--dry-run");
     const command = this.announce(full);
 
-    let seq = ref ? await this.nextSeq(ref) : 0;
-    if (ref) {
-      await this.appendArchiveLines(ref, [`$ ${command}`], seq);
-      seq++;
-    }
-
+    // No `$ command` pre-line: archive logs hold raw binary output only.
+    const seq = await this.nextSeq(ref);
     const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
       stderr: "pipe",
@@ -616,7 +577,7 @@ export class Rclone {
     let pending: string[] = [];
     let flushChain: Promise<void> = Promise.resolve();
     const flush = (force = false): void => {
-      if (!ref || pending.length === 0) return;
+      if (pending.length === 0) return;
       if (!force && pending.length < LOG_BATCH) return;
       const batch = pending;
       pending = [];
@@ -674,12 +635,37 @@ export class Rclone {
     };
   }
 
+  async extract(
+    rel: string,
+    tmp: string,
+    dry: boolean,
+    ref: RcloneRef,
+    onStats?: (stats: ExtractStats) => void,
+  ): Promise<Outcome> {
+    assertSafeRel(rel);
+    const args = [
+      "archive",
+      "extract",
+      `${this.root}/${rel}`,
+      this.fullPath(tmp),
+      "--stats",
+      "1s",
+      "--stats-one-line",
+      // rclone logs --stats output at INFO, which the default NOTICE log
+      // level suppresses; without this the flags above produce no output.
+      "--log-level",
+      "INFO",
+    ];
+    return this.streamTransfer(args, dry, ref, onStats);
+  }
+
   async promote(
     rel: string,
     tmp: string,
     dry: boolean,
     ref: RcloneRef,
     tmpTopSegment: string | null,
+    onStats?: (stats: ExtractStats) => void,
   ): Promise<Outcome> {
     assertSafeRel(rel);
     const idx = rel.lastIndexOf("/");
@@ -695,9 +681,14 @@ export class Rclone {
       // top level so archive contents that are themselves named like the
       // temp dir are still promoted. Absolute temp dirs need no exclusion.
       "--delete-empty-src-dirs",
+      "--stats",
+      "1s",
+      "--stats-one-line",
+      "--log-level",
+      "INFO",
     ];
     if (tmpTopSegment) args.push("--exclude", `/${tmpTopSegment}/**`);
-    return this.run(args, dry, ref);
+    return this.streamTransfer(args, dry, ref, onStats);
   }
 
   async cleanup(tmp: string, dry: boolean, ref?: RcloneRef): Promise<Outcome> {
@@ -717,8 +708,8 @@ export class Rclone {
   /** Top-level directory names of a remote path (no trailing slashes). Missing dir yields []. */
   async listTopDirs(path: string): Promise<string[]> {
     const args = [
-      "lsf",
       ...this.confArgs(),
+      "lsf",
       this.fullPath(path),
       "--dirs-only",
       "--format",
@@ -760,15 +751,31 @@ export class Rclone {
     return result;
   }
 
-  async trash(rel: string, subdir: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
+  async trash(
+    rel: string,
+    subdir: string,
+    dry: boolean,
+    ref: RcloneRef,
+    onStats?: (stats: ExtractStats) => void,
+  ): Promise<Outcome> {
     assertSafeRel(rel);
     if (!parseTrashSubdir(subdir)) {
       throw new Error(`unsafe trash_subdir refused: ${JSON.stringify(subdir)}`);
     }
-    return this.run(
-      ["moveto", `${this.root}/${rel}`, `${this.root}/${subdir}/${rel}`],
+    return this.streamTransfer(
+      [
+        "moveto",
+        `${this.root}/${rel}`,
+        `${this.root}/${subdir}/${rel}`,
+        "--stats",
+        "1s",
+        "--stats-one-line",
+        "--log-level",
+        "INFO",
+      ],
       dry,
       ref,
+      onStats,
     );
   }
 }

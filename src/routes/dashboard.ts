@@ -21,7 +21,8 @@ interface Snapshot {
   finishedAt: string;
   lastError: string;
   scanRoot: string;
-  extractStats: ExtractStats | null;
+  commandStats: ExtractStats | null;
+  activity: string;
 }
 
 const STAGE_LABEL: Record<string, string> = {
@@ -115,7 +116,8 @@ async function snapshot(): Promise<Snapshot> {
       finishedAt: engineState.finishedAt,
       lastError: engineState.lastError,
       scanRoot,
-      extractStats: engineState.extractStats,
+      commandStats: engineState.commandStats,
+      activity: engineState.activity,
     };
   }
 
@@ -146,7 +148,8 @@ async function snapshot(): Promise<Snapshot> {
       finishedAt: "",
       lastError: "",
       scanRoot,
-      extractStats: null,
+      commandStats: null,
+      activity: "",
     };
   }
 
@@ -164,7 +167,8 @@ async function snapshot(): Promise<Snapshot> {
     finishedAt: row.finished_at ?? "",
     lastError: "",
     scanRoot,
-    extractStats: null,
+    commandStats: null,
+    activity: "",
   };
 }
 
@@ -209,7 +213,9 @@ export async function progressPanel(): Promise<string> {
     Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : 0;
   const elapsed = duration(elapsedMs);
   const cls = stateClass(s.stage, s.running);
-  const label = stageLabel(s.stage);
+  // While a command is in flight the badge names the command, not the
+  // coarse stage ("Extracting" / "Moving to trash" / ...).
+  const label = s.activity || stageLabel(s.stage);
   const current = s.currentRel || "—";
   const command = s.currentCommand || "—";
   const mutedNote =
@@ -226,23 +232,34 @@ export async function progressPanel(): Promise<string> {
     s.stage === "interrupted"
       ? `<p class="warn-line">This run did not finish — it restarted mid-task. In-progress archives resume on the next start when resume is enabled.</p>`
       : "";
-  const extractBlock =
-    s.stage === "extracting" && s.extractStats
-      ? (() => {
-          const st = s.extractStats;
+  // One thin bar slot shared by every in-flight rclone command; transfer
+  // commands (extract/move/moveto) show their live byte progress, everything
+  // else shows an indeterminate sweep.
+  const commandBlock = s.activity
+    ? (() => {
+        const st = s.commandStats;
+        if (st) {
           const pctText = st.percent === null ? "—" : `${Math.round(st.percent)}%`;
           const width = st.percent === null ? 0 : Math.max(0, Math.min(100, st.percent));
           const eta = st.etaText ? st.etaText : "—";
           return `
     <div class="extract-mini">
       <div class="extract-mini-head">
-        <span class="extract-mini-label">Current extraction</span>
+        <span class="extract-mini-label">${esc(s.activity)}</span>
         <span class="extract-mini-value">${esc(fmtBytes(st.bytesDone))} / ${esc(fmtBytes(st.bytesTotal))} · ${esc(pctText)} · ${esc(fmtRate(st.speedBytesPerSec))} · ETA ${esc(eta)}</span>
       </div>
       <div class="minibar" aria-hidden="true"><span style="width:${width.toFixed(1)}%"></span></div>
     </div>`;
-        })()
-      : "";
+        }
+        return `
+    <div class="extract-mini">
+      <div class="extract-mini-head">
+        <span class="extract-mini-label">${esc(s.activity)}</span>
+      </div>
+      <div class="minibar is-indeterminate" role="progressbar" aria-label="${esc(s.activity)}"><span></span></div>
+    </div>`;
+      })()
+    : "";
 
   return `<section class="progress-panel ${cls}">
     <header class="run-header">
@@ -275,7 +292,7 @@ export async function progressPanel(): Promise<string> {
         <span><i class="legend-dot remain"></i>Remaining ${remaining}</span>
       </div>
       <div class="progress-count">${processed} of ${s.total} processed</div>
-      ${extractBlock}
+      ${commandBlock}
     </div>
 
     <div class="stat-grid">

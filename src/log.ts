@@ -189,6 +189,21 @@ export async function tailRendered(
   return { entries: renderLogEntries(rows), lastId };
 }
 
+/** Next free seq for a ref (MAX(seq)+1). */
+export async function nextSeqFor(ref: LogRef): Promise<number> {
+  const row = await store.get1<{ m: number | null }>(
+    "SELECT MAX(seq) AS m FROM log_lines WHERE scope=? AND ref_id=? AND kind=?",
+    [ref.scope, ref.refId, ref.kind],
+  );
+  return Number(row?.m ?? -1) + 1;
+}
+
+/** Insert raw lines at the next free seq. Used for diagnostics with no app wording. */
+export async function appendRawLines(ref: LogRef, lines: string[]): Promise<void> {
+  if (lines.length === 0) return;
+  await insertLogLines(ref, lines, await nextSeqFor(ref));
+}
+
 /** Insert log lines in one transaction; returns the next free seq. */
 export async function insertLogLines(
   ref: LogRef,

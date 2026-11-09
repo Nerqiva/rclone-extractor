@@ -1,10 +1,9 @@
 import { Hono } from "hono";
-import { rmSync } from "node:fs";
 import { store, setSetting, allSettings, getSetting } from "../db";
 import { engineState, runEngine, stopEngine, forceStopEngine } from "../engine";
 import { esc } from "../ui";
 import { encryptionEnabled } from "../crypto";
-import { APP_PASSWORD, RCLONE_CONF, RCLONE_CONF_PATH } from "../config";
+import { APP_PASSWORD, RCLONE_CONF } from "../config";
 import { normalizeRcloneConf } from "../rcloneconf";
 import { Rclone } from "../rclone";
 import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "../tmpdir";
@@ -39,15 +38,13 @@ export function controlsFragment(): string {
     <span class="note warn-line stop-note">Stopping immediately — the current archive was aborted…</span>
   </div>`;
   }
-  if (engineState.stopRequested) {
-    return `<div id="controls" class="btn-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
-    <button class="btn danger solid" hx-post="/run/stop" hx-target="#controls" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Force stop</button>
-    <span class="note warn-line stop-note">Stop requested — finishing the current archive. Click Force stop to stop immediately.</span>
-  </div>`;
-  }
+  // The Stop button opens the shared stop modal (Soft stop / Hard stop).
+  const note = engineState.stopRequested
+    ? `<span class="note warn-line stop-note">Stop requested — finishing the current archive…</span>`
+    : `<span class="muted">run in progress…</span>`;
   return `<div id="controls" class="btn-row">
-    <button class="btn danger" hx-post="/run/stop" hx-target="#controls" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Stop</button>
-    <span class="muted">run in progress…</span>
+    <button class="btn danger" data-modal-open="stop-modal">Stop</button>
+    ${note}
   </div>`;
 }
 
@@ -66,10 +63,12 @@ actions.post("/run/start", async (c) => {
 });
 
 actions.post("/run/stop", async (c) => {
+  const form = await c.req.formData().catch(() => null);
+  const mode = form ? String(form.get("mode") ?? "soft") : "soft";
   if (!engineState.running) {
     return c.html(controlsFragment());
   }
-  if (engineState.stopRequested) {
+  if (mode === "hard") {
     forceStopEngine();
     return c.html(
       controlsFragment(),
@@ -98,6 +97,13 @@ const SETTING_KEYS = [
 ];
 
 actions.post("/config", async (c) => {
+  if (engineState.running) {
+    return c.html(
+      await configForm(`<p class="note err">Task is running — stop it first.</p>`),
+      200,
+      RUNNING_GUARD_HEADERS,
+    );
+  }
   const form = await c.req.formData();
 
   const confFile = form.get("rclone_conf_file");
@@ -226,10 +232,16 @@ actions.post("/rclone-conf", async (c) => {
 });
 
 actions.post("/config/rclone-clear", async (c) => {
+  if (engineState.running) {
+    return c.html(
+      await configForm(`<p class="note err">Task is running — stop it first.</p>`),
+      200,
+      RUNNING_GUARD_HEADERS,
+    );
+  }
   await setSetting("rclone_conf", "");
-  try {
-    rmSync(RCLONE_CONF_PATH, { force: true });
-  } catch {}
+  // Never delete the file at RCLONE_CONF_PATH: it may be the user's mounted
+  // /data/app/rclone.conf. A stored conf is overwritten on the next save.
   return c.html(
     await configForm(`<p class="note">rclone.conf cleared.</p>`),
     200,
@@ -281,27 +293,38 @@ function tempPurgeNote(p: Awaited<ReturnType<typeof purgeAppTempDirs>>): string 
 const RUNNING_GUARD = `<p class="note err">Task is running — stop it first.</p>`;
 const RUNNING_GUARD_HEADERS = toastHeaders("Stop the task first.", "err");
 
-actions.post("/maintenance/archives", async (c) => {
-  if (engineState.running) {
-    return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
+// Clear queues: allowed even while a task is running. Deletes queued
+// archives (and their log rows); a running engine skips rows that are no
+// longer queued. Run count, history and caches are untouched.
+actions.post("/maintenance/queues", async (c) => {
+  const ids = (
+    await store.query<{ id: number }>("SELECT id FROM archives WHERE status='queued'")
+  ).map((row) => Number(row.id));
+  if (ids.length > 0) {
+    const placeholders = ids.map(() => "?").join(",");
+    await store.run(
+      `DELETE FROM log_lines WHERE scope='archive' AND ref_id IN (${placeholders})`,
+      ids,
+    );
+    await store.run(`DELETE FROM logs WHERE archive_id IN (${placeholders})`, ids);
+    await store.run("DELETE FROM archives WHERE status='queued'");
   }
-  await store.run("DELETE FROM log_lines WHERE scope='archive'");
-  await store.run("DELETE FROM logs");
-  await store.run("DELETE FROM archives");
-  return c.html(
-    `<p class="note">Cleared archive queue.</p>`,
-    200,
-    toastHeaders("Cleared archive queue."),
-  );
+  const msg = ids.length > 0 ? `Cleared queue (${ids.length} archive(s)).` : "Queue is already empty.";
+  return c.html(`<p class="note">${esc(msg)}</p>`, 200, toastHeaders(msg));
 });
 
+// Clear History: wipes the queue, run count and the archive cache, along
+// with run/archive logs and the run counter (dry-run aware temp purge
+// kept). Blocked while a task is running.
 actions.post("/maintenance/runs", async (c) => {
   if (engineState.running) {
     return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
   }
-  await store.run("DELETE FROM log_lines WHERE scope='run'");
+  await store.run("DELETE FROM log_lines");
+  await store.run("DELETE FROM logs");
   await store.run("DELETE FROM runs");
-  await resetSequences(["runs"]);
+  await store.run("DELETE FROM archives");
+  await resetSequences(["archives", "runs", "log_lines"]);
   await setSetting("last_run_id", "0");
   let purgeNote = "";
   try {
@@ -310,14 +333,32 @@ actions.post("/maintenance/runs", async (c) => {
     purgeNote = ` Temp purge failed: ${String(e)}`;
   }
   return c.html(
-    `<p class="note">Cleared run history and logs.${esc(purgeNote)} Next run starts from #1.</p>`,
+    `<p class="note">Cleared history, queue and caches.${esc(purgeNote)} Next run starts from #1.</p>`,
     200,
-    toastHeaders(`Cleared run history; next run starts from #1.`),
+    toastHeaders("Cleared history; next run starts from #1."),
+  );
+});
+
+// Clear logs: wipes logs and errors only. Runs and archives are kept.
+actions.post("/maintenance/logs", async (c) => {
+  if (engineState.running) {
+    return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
+  }
+  await store.run("DELETE FROM log_lines");
+  await store.run("DELETE FROM logs");
+  await store.run("UPDATE archives SET error_kind=NULL");
+  return c.html(
+    `<p class="note">Cleared logs and errors.</p>`,
+    200,
+    toastHeaders("Cleared logs and errors."),
   );
 });
 
 /** Manual purge of stale temp dirs (boot/sweep parity). */
 actions.post("/maintenance/tmp-purge", async (c) => {
+  if (engineState.running) {
+    return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
+  }
   try {
     const p = await purgeAppTempDirs();
     if (!p.ok) {
@@ -367,9 +408,9 @@ actions.post("/maintenance/all", async (c) => {
     purgeNote = ` Temp purge failed: ${String(e)}`;
   }
   return c.html(
-    `<p class="note">Cleared all task data and logs.${esc(purgeNote)} Next run starts from #1.</p>`,
+    `<p class="note">Cleared everything — queue, history, logs, errors and temp dir.${esc(purgeNote)} Next run starts from #1.</p>`,
     200,
-    toastHeaders("Cleared all task data and logs."),
+    toastHeaders("Cleared everything."),
   );
 });
 
@@ -377,14 +418,13 @@ function settingRow(
   label: string,
   value: string,
   editor: string,
-  opts: { unset?: boolean; hint?: string } = {},
+  opts: { unset?: boolean } = {},
 ): string {
   return `<div class="setting">
     <div class="setting-head">
       <div class="setting-info">
         <span class="setting-label">${esc(label)}</span>
         <span class="setting-value${opts.unset ? " unset" : ""}">${esc(value)}</span>
-        ${opts.hint ? `<span class="field-hint">${opts.hint}</span>` : ""}
       </div>
       <button type="button" class="btn small" data-edit>Edit</button>
     </div>
@@ -432,40 +472,42 @@ export async function configForm(note = ""): Promise<string> {
   const maxSizeBytes =
     Number.isFinite(maxSizeRaw) && maxSizeRaw > 0 ? Math.floor(maxSizeRaw) : 0;
   const maxSizeSplit = splitMaxArchiveSize(maxSizeBytes);
-  return `<form class="card" hx-post="/config" hx-encoding="multipart/form-data" hx-target="#config-form" hx-swap="outerHTML" id="config-form">
+  // While a task is running every setting on this page is out of reach;
+  // Clear queues (Maintenance) stays usable. The fieldset disables all
+  // nested controls; server-side guards remain as the real enforcement.
+  const running = engineState.running;
+  const dis = running ? " disabled" : "";
+  return `<form class="card${running ? " is-disabled" : ""}" hx-post="/config" hx-encoding="multipart/form-data" hx-target="#config-form" hx-swap="outerHTML" id="config-form">
   ${note}
+  ${running ? `<p class="muted">Task running — options are disabled.</p>` : ""}
   <p class="muted">
     Backend: <strong>${esc(backend)}</strong>
     &middot; Encryption: <strong>${enc ? "on" : "off"}</strong>
     <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">APP_PASSWORD ${esc(pwWorks)}</span>
   </p>
+  <fieldset class="bare-fieldset"${dis}>
   ${settingRow(
     "scan_root",
     s.scan_root || "not set",
     `<label class="field"><span>scan_root</span>
       <input type="text" name="scan_root" value="${esc(s.scan_root ?? "")}" placeholder="remote:path or /local/path"></label>`,
-    { unset: !s.scan_root, hint: `Root to scan. Example: <code>remote:path</code> or <code>/local/path</code>.` },
+    { unset: !s.scan_root },
   )}
   <label class="field"><span>remote_flags</span>
     <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list"></label>
-  <p class="field-hint">Extra flags for remote commands. Example: <code>--fast-list</code>.</p>
   ${settingRow(
     "rclone_conf",
     confLabel,
     `<label class="field"><span>rclone.conf</span>
       <input type="file" name="rclone_conf_file" accept=".conf,text/plain"></label>
-    <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Clear stored config</button>`,
-    {
-      unset: !effectiveConf,
-      hint: `Falls back to <code>RCLONE_CONF</code> env when unset.`,
-    },
+    <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored rclone.conf?|Clear"><span class="spinner" aria-hidden="true"></span>Clear stored config</button>`,
+    { unset: !effectiveConf },
   )}
   ${settingRow(
     "queue_max",
     s.queue_max ?? "500",
     `<label class="field"><span>queue_max</span>
       <input type="number" name="queue_max" min="1" value="${esc(s.queue_max ?? "500")}"></label>`,
-    { hint: `Max archives queued per run. Default <code>500</code>.` },
   )}
   ${settingRow(
     "max_archive_size",
@@ -478,21 +520,19 @@ export async function configForm(note = ""): Promise<string> {
           <option value="GB"${maxSizeSplit.unit === "GB" ? " selected" : ""}>GB</option>
         </select>
       </div></label>`,
-    { unset: maxSizeBytes <= 0, hint: `Skips archives larger than this. <code>0</code> = no limit.` },
+    { unset: maxSizeBytes <= 0 },
   )}
   ${settingRow(
     "trash_subdir",
     s.trash_subdir ?? "trash",
     `<label class="field"><span>trash_subdir</span>
       <input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? "trash")}"></label>`,
-    { hint: `Where processed archives are moved. Relative to <code>scan_root</code>.` },
   )}
   ${settingRow(
     "tmp_dir",
     s.tmp_dir || TMP_DIR_DEFAULT,
     `<label class="field"><span>tmp_dir</span>
       <input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}"></label>`,
-    { hint: `Where archives are extracted. Relative = inside <code>scan_root</code>; absolute path or <code>remote:path</code> elsewhere. <strong class="warn">Must not overlap <code>trash_subdir</code>.</strong>` },
   )}
   ${settingRow(
     "sort_by",
@@ -502,7 +542,6 @@ export async function configForm(note = ""): Promise<string> {
         <option value="path"${sel(s.sort_by ?? "path", "path")}>path</option>
         <option value="size"${sel(s.sort_by ?? "path", "size")}>size</option>
       </select></label>`,
-    { hint: `Queue sort field.` },
   )}
   ${settingRow(
     "sort_dir",
@@ -512,12 +551,12 @@ export async function configForm(note = ""): Promise<string> {
         <option value="asc"${sel(s.sort_dir ?? "asc", "asc")}>asc</option>
         <option value="desc"${sel(s.sort_dir ?? "asc", "desc")}>desc</option>
       </select></label>`,
-    { hint: `Queue sort direction.` },
   )}
-  <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run — simulate only; nothing is moved or deleted</label>
-  <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> resume — re-queue archives interrupted mid-extraction on next start</label>
+  <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run</label>
+  <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> resume</label>
   <div class="btn-row">
     <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>
   </div>
+  </fieldset>
 </form>`;
 }

@@ -15,11 +15,11 @@ pages.get("/", (c) =>
   c.html(
     layout(
       "Task progress",
-      `<div class="page-toolbar">
-        <div id="controls" hx-get="/dashboard/controls" hx-trigger="load" hx-swap="outerHTML"></div>
-      </div>
-      <div hx-get="/dashboard/fragment" hx-trigger="load, every 1s" hx-swap="innerHTML">
+      `<div hx-get="/dashboard/fragment" hx-trigger="load, every 1s" hx-swap="innerHTML">
         <p class="muted">Loading…</p>
+      </div>
+      <div class="controls-dock">
+        <div id="controls" hx-get="/dashboard/controls" hx-trigger="load" hx-swap="outerHTML"></div>
       </div>`,
       "dashboard",
       csrfFor(c),
@@ -33,6 +33,9 @@ pages.get("/config", async (c) => {
   const runtimeRow = runtime.ok
     ? `<dt>rclone</dt><dd><code>${esc(runtime.detail)}</code><br><span class="muted">${esc(runtime.bin)}</span></dd>`
     : `<dt>rclone</dt><dd><span class="note err">not runnable</span><br><code>${esc(runtime.detail)}</code></dd>`;
+  const running = engineState.running;
+  const dis = running ? " disabled" : "";
+  const backupCls = running ? "card is-disabled" : "card";
   const extra = `<div class="card">
     <h2 class="section-title" style="margin-top:0">Runtime</h2>
     <dl class="detail-grid">${runtimeRow}</dl>
@@ -42,8 +45,9 @@ pages.get("/config", async (c) => {
         : `<p class="muted">The extractor cannot run rclone. Install the build matching your CPU architecture (arm64 vs amd64) or set <code>RCLONE_BIN</code>, then redeploy.</p>`
     }
   </div>
-  <div class="card">
+  <div class="${backupCls}">
     <h2 class="section-title" style="margin-top:0">Backup</h2>
+    <fieldset class="bare-fieldset"${dis}>
     <form id="export-form" method="post" action="/export">
       <input type="hidden" name="csrf_token" value="${esc(csrf ?? "")}">
       <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, database_url)</label>
@@ -54,6 +58,7 @@ pages.get("/config", async (c) => {
       <label class="field"><span>Import backup (.json)</span><input type="file" name="archive" accept=".json,application/json"></label>
       <button class="btn danger" type="submit" data-loading-label="Importing…"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Import (replaces data)</span></button>
     </form>
+    </fieldset>
     ${
       encryptionEnabled()
         ? ""
@@ -62,12 +67,13 @@ pages.get("/config", async (c) => {
   </div>
   <div class="card">
     <h2 class="section-title" style="margin-top:0">Maintenance</h2>
-    <p class="muted">Remove task data from the database. This cannot be undone.</p>
+    ${running ? `<p class="muted">Task running — options are disabled.</p>` : ""}
     <div class="btn-row">
-      <button class="btn" hx-post="/maintenance/archives" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Clear the archive queue?"><span class="spinner" aria-hidden="true"></span>Clear archives</button>
-      <button class="btn" hx-post="/maintenance/runs" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Delete run history, logs and temp dirs? Next run starts from #1."><span class="spinner" aria-hidden="true"></span>Clear runs</button>
-      <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" hx-confirm="Delete ALL task data, logs and temp dirs? Next run starts from #1."><span class="spinner" aria-hidden="true"></span>Clear everything</button>
-      <button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" hx-confirm="Purge stale run directories in the temp directory?"><span class="spinner" aria-hidden="true"></span>Purge temp directory</button>
+      <button class="btn" hx-post="/maintenance/queues" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear the queue?|Clear queues"><span class="spinner" aria-hidden="true"></span>Clear queues</button>
+      <button class="btn" hx-post="/maintenance/runs" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear history (queue, run count and caches)?|Clear History"${dis}><span class="spinner" aria-hidden="true"></span>Clear History</button>
+      <button class="btn" hx-post="/maintenance/logs" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear logs and errors?|Clear logs"${dis}><span class="spinner" aria-hidden="true"></span>Clear logs</button>
+      <button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" data-confirm="Clear the tmp directory?|Clear tmp directory"${dis}><span class="spinner" aria-hidden="true"></span>Clear tmp directory</button>
+      <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear everything (queue, history, logs, errors, tmp directory)?|Clear everything"${dis}><span class="spinner" aria-hidden="true"></span>Clear everything</button>
     </div>
     <div id="tmp-purge-result"></div>
     <div id="maintenance-result"></div>

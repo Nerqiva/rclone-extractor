@@ -29,6 +29,8 @@ beforeAll(async () => {
   mkdirSync(scanRoot, { recursive: true });
 
   const script = `#!/bin/sh
+# strip leading hard-coded --config <path> pair
+if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
   echo "./big.zip;5000000"
   echo "./small.zip;100000"

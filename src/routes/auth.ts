@@ -188,13 +188,6 @@ auth.post("/logout", async (c) => {
   return c.redirect("/login");
 });
 
-/** Revoke every session, including this one. */
-auth.post("/logout-all", async (c) => {
-  await store.run("DELETE FROM sessions").catch(() => {});
-  deleteCookie(c, COOKIE, { path: "/" });
-  return c.redirect("/login");
-});
-
 export async function authMiddleware(
   c: any,
   next: () => Promise<void>,

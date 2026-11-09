@@ -31,7 +31,10 @@ COPY . .
 # Pre-create it and give ownership to `bun`. To persist across redeploys either
 # mount a volume here (note: a host/Render disk mount is root-owned and may need
 # DATA_DIR pointed elsewhere) or use Postgres.
-RUN mkdir -p /app/data && chown -R bun:bun /app/data
+# The app passes --config /data/app/rclone.conf to every rclone invocation, so
+# pre-create /data/app owned by the runtime user (writable for an rclone_conf
+# working copy; mount your own rclone.conf there to use it as-is).
+RUN mkdir -p /app/data /data/app && chown -R bun:bun /app/data /data/app
 ENV DATA_DIR=/app/data PORT=8080 TZ=Asia/Omsk
 VOLUME /app/data
 EXPOSE 8080

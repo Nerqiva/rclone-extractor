@@ -16,22 +16,21 @@ test("idle shows the Start button", () => {
   expect(html).not.toContain("Stopping…");
 });
 
-test("running shows the Stop button with a toast on click", () => {
+test("running shows the Stop button that opens the stop modal", () => {
   engineState.running = true;
   const html = controlsFragment();
   expect(html).toContain(">Stop</button>");
-  expect(html).toContain("/run/stop");
+  expect(html).toContain('data-modal-open="stop-modal"');
   expect(html).toContain("run in progress");
   expect(html).not.toContain("Force stop");
 });
 
-test("soft-stop requested shows Force stop plus a persistent note", () => {
+test("soft-stop requested shows a persistent note and the modal Stop button", () => {
   engineState.running = true;
   engineState.stopRequested = true;
   const html = controlsFragment();
-  expect(html).toContain("Force stop");
+  expect(html).toContain('data-modal-open="stop-modal"');
   expect(html).toContain("Stop requested");
-  expect(html).toContain("every 1s"); // fragment polls itself until resolved
   expect(html).not.toContain("run in progress…</span>");
 });
 

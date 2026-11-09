@@ -62,6 +62,60 @@ to `main`.
 - `archives`/`stem()` sanitize archive basenames that produce empty or
   dot-only temp directory names.
 
+### Changed
+- **Per-command live progress.** The Progress page status badge and the slim
+  bar in its fixed slot now follow the in-flight rclone command one stage at
+  a time: listing (`lsf`), queue build, archive inspection (`archive list`),
+  extraction, promotion (`move`), and trash (`moveto`). Transfer commands
+  show real byte progress (percent, MiB/s, ETA) parsed from `--stats-one-line`;
+  the rest show an indeterminate sweeping bar. The overall segmented bar is
+  unchanged, and every bar occupies the same thin slot, swapping as stages
+  cycle.
+- **`--config /data/app/rclone.conf` is hard-coded.** Every rclone invocation
+  unconditionally receives it; a stored/env `rclone_conf` is written to that
+  path (atomically, mode 0600) before runs, otherwise the mounted file is
+  used as-is. Any `--config` in `remote_flags` is ignored (existing behavior).
+- **Stop moved to the bottom of the progress page** and now asks for
+  confirmation first — **Soft stop** (the current archive finishes, then the
+  run stops) or **Hard stop** (the in-flight rclone process is killed
+  immediately). The buttons carry no explanation text; the panel keeps its
+  persistent "Stop requested" note.
+- **Archive logs now hold the raw output of the rclone binary only.** The
+  `$ command` announcement and app-written skip/failure notes are gone from
+  per-archive logs (raw stderr/stdout is kept verbatim, stats lines excluded).
+  The dedicated **Errors** tab and its Copy/Download show that raw output
+  instead of app-generated log lines.
+- **Configuration page greys out while a task is running** — every option
+  except **Clear queues** is disabled (config form, backup/import, maintenance,
+  Save/Edit buttons), with a single "Task running — options are disabled."
+  line. Field descriptions were reduced to the bare minimum.
+- **Maintenance rework.** **Clear archives** is now **Clear queues** (allowed
+  while a task is running; the engine skips rows that are no longer queued;
+  run count is kept). **Clear runs** is now **Clear History** (wipes queue,
+  run count and the archive cache plus logs; temp purge kept). New **Clear
+  logs** (logs and errors only — log lines, logs registry and the `/errors`
+  failure index). **Purge temp directory** is now **Clear tmp directory**.
+  **Clear everything** now also wipes errors and the tmp directory. All
+  destructive actions ask for confirmation via a shared modal dialog.
+- **Stop is no longer a two-click toggle.** `/run/stop` accepts a `mode`
+  field (`soft`/`hard`); the controls fragment no longer flips into a "Force
+  stop" button — hard stop is reached through the confirmation modal (or by
+  re-pressing Stop while a soft stop is pending).
+
+### Added
+- Shared confirmation modal used by the stop button (Soft stop / Hard stop)
+  and by every destructive maintenance/config action (Clear queues, Clear
+  History, Clear logs, Clear tmp directory, Clear everything, Clear stored
+  config). Backdrop click and Escape dismiss it.
+- Clear logs endpoint (`POST /maintenance/logs`) and clear-queues endpoint
+  (`POST /maintenance/queues`, replaces `/maintenance/archives`).
+
+### Removed
+- **Sign out everywhere** button and `POST /logout-all`; the single
+  **Sign out** button remains and revokes the current session.
+- The app-written `$ command` line and skip-reason notes from per-archive
+  logs (replaced by raw binary output).
+
 ### Added
 - `PG_POOL_MAX` and `COOKIE_SECURE` environment variables (see README and
   `.env.example`), plus Postgres connection troubleshooting docs for hosted

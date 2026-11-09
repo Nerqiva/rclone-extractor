@@ -1326,3 +1326,82 @@ td.path {
   }
 }
 
+
+/* ---- modals ---- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(8, 12, 22, 0.62);
+}
+.modal-overlay[hidden] {
+  display: none;
+}
+.modal-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  min-width: 240px;
+  max-width: 420px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+.modal-title {
+  margin: 0 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* ---- indeterminate minibar (rclone commands with no byte progress) ---- */
+.minibar.is-indeterminate span {
+  width: 34%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent) 30%,
+    var(--accent) 70%,
+    transparent
+  );
+  animation: indeterminate-sweep 1.15s linear infinite;
+  transition: none;
+}
+@keyframes indeterminate-sweep {
+  from {
+    transform: translateX(-115%);
+  }
+  to {
+    transform: translateX(330%);
+  }
+}
+
+/* ---- disabled / greyed-out state ---- */
+.is-disabled {
+  opacity: 0.45;
+}
+button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.bare-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* ---- controls dock (bottom of the progress page) ---- */
+.controls-dock {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}

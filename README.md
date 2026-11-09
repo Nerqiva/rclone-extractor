@@ -28,8 +28,10 @@ scan  →  extract  →  promote  →  trash
   are not queued.
 - **Live progress page** — KPI cards, a segmented progress bar, stage text,
   per-run rate/ETA, the active rclone command, done/failed/skipped counters,
-  and a slim live bar with the current extraction's progress, speed and ETA
-  update every second without a page reload.
+  and a slim live bar that follows the in-flight rclone command: real progress
+  (bytes/speed/ETA) for transfer commands (extract / move / moveto), an
+  indeterminate sweeping bar for the rest (lsf, archive list, purge, rmdir).
+  Updates every second without a page reload.
 - **Mobile-friendly logs** — the log and error views are selectable text with
   Copy all / Copy selection / Select all / Download controls.
 - **Continue previous task** — resumable runs. If the app crashes or is
@@ -57,8 +59,14 @@ docker run -d --name rclone-extractor \
   -e SECRET_KEY=change-me-too \
   -p 8080:8080 \
   -v rclone-data:/app/data \
+  -v /path/to/rclone.conf:/data/app/rclone.conf:ro \
   ghcr.io/<owner>/rclone-extractor:latest
 ```
+
+Every rclone invocation gets `--config /data/app/rclone.conf` baked in. Mount
+your `rclone.conf` there (or store one in the app / `RCLONE_CONF` env, which
+is written to that path before each run). `remote_flags` never needs a
+`--config`.
 
 Open <http://localhost:8080> and sign in with `APP_PASSWORD`.
 
@@ -147,7 +155,7 @@ SECRET_KEY=change-me-too               # passphrase for encrypting stored secret
 
 # --- database (leave DATABASE_URL empty to use local SQLite) ---
 DATABASE_URL=                          # e.g. postgres://user:pass@host:5432/db?sslmode=require
-DATA_DIR=/app/data                     # SQLite file + working rclone.conf (only used for SQLite)
+DATA_DIR=/app/data                     # SQLite file (only needed for SQLite); rclone.conf lives at /data/app/rclone.conf
 
 # --- rclone ---
 RCLONE_CONF=                           # generate with: base64 -w0 rclone.conf
@@ -191,7 +199,7 @@ database. They can also be seeded from environment variables.
 | Setting | Description |
 |---|---|
 | `scan_root` | rclone remote or path to scan, e.g. `s3:bucket/archives` or `/data/in`. |
-| `remote_flags` | Extra flags appended to every rclone command, e.g. `--config /data/rclone.conf`. |
+| `remote_flags` | Extra flags appended to every rclone command. `--config /data/app/rclone.conf` is passed unconditionally (any `--config` here is ignored). |
 | `queue_max` | Maximum archives queued per run (default `500`). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
@@ -199,7 +207,7 @@ database. They can also be seeded from environment variables.
 | `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
 | `tmp_dir` | Where rclone extracts archives temporarily (default `.rclone-extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`interrupted`. |
-| `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. |
+| `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. When set, it is written to `/data/app/rclone.conf` before rclone runs; otherwise the mounted `/data/app/rclone.conf` is used as-is. |
 
 Most settings are shown as compact rows on the Configuration page, each with a
 single terse line of help. Click **Edit** to unfold a field, then **Save**.
@@ -304,9 +312,11 @@ archives with the same filename cannot collide.
 
 `remote_flags` is appended to
 every command; `--dry-run` is added when `dry_run` is on (`archive list` is
-read-only and never gets `--dry-run`). The active command is written to both
-the run log and, for per-archive work, the archive log; when a stage fails,
-the command and its output are also written to the errors log.
+read-only and never gets `--dry-run`). All rclone output streams are stored
+verbatim: the run log carries human-readable annotations plus every command
+the app runs, while each per-archive archive log holds the binary's raw
+output only (no app wording). The **Errors** page and per-archive downloads
+show that raw output.
 
 `promote` passes `--exclude /<tmp-top-segment>/**` (only when `tmp_dir` is a
 relative path nested inside the scan root) because `rclone move` refuses to
@@ -317,32 +327,39 @@ promoted, and an absolute `tmp_dir` needs no exclusion. Without the exclusion,
 when tmp is nested, every promotion fails with
 "can't sync or move files on overlapping remotes".
 
-The `extract` step streams its output: rclone prints single-line transfer
-stats once per second (`--stats-one-line`); the app parses those lines to drive
-the live "Current extraction" meter on the progress page and filters them out
-of the archive log, so a long extract does not spam the log with one line per
-second. The command line and everything rclone reports besides stats lines are
-still logged.
+Every rclone command shows its own live status and a thin progress bar in the
+same slot on the progress page: the listing (`lsf`), the queue build, the
+archive inspection (`archive list`), the extraction, the promotion (`move`),
+and the trash move (`moveto`) update one stage at a time as they cycle.
+Transfer commands stream single-line stats once per second (`--stats-one-line`);
+the app parses those lines to drive a live byte/percent/speed/ETA bar and
+filters them out of the archive log (they carry no error signal); everything
+else rclone writes is logged. Commands without byte progress (lsf, archive
+list, purge, rmdir) show an indeterminate bar instead.
 
 Directories matching the app's run layout (`<runid>/` with numeric names, as
 created under `tmp_dir`) are purged automatically at boot, at the start of
 every run, and at the end of a run; the last cleanup of a non-empty directory
 falls back from `rclone rmdir` to `rclone purge`. Non-app entries inside
 `tmp_dir` are never deleted — they are left alone and only logged. The
-Configuration page also has a **Purge temp directory** maintenance action.
+Configuration page also has a **Clear tmp directory** maintenance action.
 `dry_run` disables destructive cleanup entirely.
 
-The Configuration page's maintenance actions:
+The Configuration page's maintenance actions (each asks for confirmation;
+all are disabled while a task is running except **Clear queues**):
 
-- **Clear archives** empties the archive queue, archive logs and the logs
-  registry (archives re-build automatically on the next run, so ids keep
-  growing).
-- **Clear runs** deletes run history, run logs and the app's temp dirs, resets
-  the runs id sequence and `last_run_id` — the next run starts from #1.
-- **Clear everything** additionally wipes archives/logs/log_lines and resets
-  their sequences.
-- All clear actions refuse to run while a task is in progress; the temp purge
-  honors `dry_run` and only removes app-owned numeric run dirs.
+- **Clear queues** deletes queued archives (and their archive log rows) —
+  even while a task is running; the running engine skips the deleted rows.
+  Run count, history and the archive cache are kept.
+- **Clear History** wipes the queue, run count and the archive cache along
+  with run/archive logs, and resets the ids — the next run starts from #1
+  (dry-run aware temp purge kept).
+- **Clear logs** wipes logs and errors only — log lines, the logs registry
+  and the `/errors` failure index (`error_kind`). Runs and archives are kept.
+- **Clear tmp directory** purges stale app-owned numeric run dirs (honors
+  `dry_run`).
+- **Clear everything** wipes queue, history, logs, errors and the tmp
+  directory; next run starts from #1.
 
 ### Content filters (before extraction)
 
@@ -365,7 +382,7 @@ these holds:
 If the listing error mentions a password, the skip reason is `password`
 (same as a password failure during extraction). Skipped archives are never
 re-queued on later runs and stay in place; the reason is visible on the
-Errors page and in the per-archive log.
+Errors page (as the error-kind pill).
 
 ### Queue and re-runs
 
@@ -386,12 +403,13 @@ Errors page and in the per-archive log.
 - **Start** re-queues archives in the `failed` state and clears their
   `error_kind`. Stale `extracting` rows are also recovered on boot/Start
   (re-queued with `resume` on, marked `interrupted` with it off).
-- **Stop** is a soft stop: the button becomes **Force stop**, the panel shows a
-  persistent "Stop requested" message, and the current archive finishes before
-  the run stops (ending with the `cancelled` stage). A second click on
-  **Force stop** kills the in-flight rclone process immediately; the interrupted
-  archive is re-queued (never counted as done/failed/skipped) and the run ends
-  as `cancelled`.
+- **Stop** sits at the bottom of the progress page and asks for confirmation
+  first (no explanation text — just the two choices): **Soft stop** lets the
+  current archive finish (the run ends with the `cancelled` stage); **Hard
+  stop** kills the in-flight rclone process immediately, re-queues the
+  interrupted archive (never counted as done/failed/skipped) and ends the run
+  as `cancelled`. The panel shows a persistent "Stop requested" message while
+  a soft stop is pending.
 - All action buttons share the same feedback: a spinner and disabled state
   while the request is in flight, then a toast (via the `HX-Trigger` response
   header) reporting the outcome.
@@ -416,8 +434,7 @@ This makes an interrupted run safe to resume by simply restarting the app.
 
 - Sign-in is password-only (`APP_PASSWORD`); sessions are stored server-side
   in the `sessions` table and the cookie holds a signed session id.
-- **Sign out** revokes the current session immediately; **Sign out
-  everywhere** (Configuration sidebar) revokes all sessions.
+- **Sign out** revokes the current session immediately.
 - Sessions expire after 7 days; expired rows are purged on login.
 - All mutating routes require a CSRF token (derived from the session, sent as
   `X-CSRF-Token` from htmx or a hidden `csrf_token` field in plain forms).
@@ -445,9 +462,10 @@ page, plus tabs for the run log and the errors log.
   copies whatever you have selected; **Select all** selects the whole log for
   partial manual copying. Clipboard fallbacks work on plain-HTTP self-hosted
   deployments too.
-- The **Errors** page has a **Copy all** button for a tab-separated summary
-  and a per-row **Copy** button that fetches that archive's extract log
-  (the failure and the command that produced it).
+- The **Errors** page lists archives with `error_kind` set and has a
+  **Copy all** button for a tab-separated summary. Each row's **Copy** /
+  **Download** button fetches that archive's log, which stores the raw rclone
+  output of the failing command — nothing written by the app is added to it.
 
 ### Backend adapter
 
@@ -477,7 +495,7 @@ src/
   ui.ts            HTML layout + escaping
   routes/
     pages.ts       GET /  /config  /logs  /errors
-    auth.ts        login/logout/logout-all, DB sessions, CSRF middleware
+    auth.ts        login/logout, DB sessions, CSRF middleware
     dashboard.ts   GET /dashboard/fragment (progress panel poll target)
     actions.ts     POST /run/start  /run/stop  /config  /rclone-conf
     logsapi.ts     GET /logs/fragment  /errors/fragment  + downloads
@@ -496,14 +514,14 @@ public/
 GET  /                     task progress        (auth)
 GET  /config               configuration        (auth)
 GET  /logs  /errors        log & error pages    (auth)
-GET  /login  POST /login  POST /logout  POST /logout-all
+GET  /login  POST /login  POST /logout
 GET  /dashboard/fragment   live progress panel  (auth)
 GET  /dashboard/controls   run controls         (auth)
 GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
 POST /run/start  /run/stop                     (auth)
 POST /config  /rclone-conf  /config/rclone-clear  (auth)
-POST /maintenance/archives  /maintenance/runs  /maintenance/all  /maintenance/tmp-purge  (auth)
+POST /maintenance/queues  /maintenance/runs  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)
 POST /export  /import                          (auth)
 GET  /healthz              "ok" (no auth)

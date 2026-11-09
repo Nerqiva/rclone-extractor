@@ -1,4 +1,4 @@
-import { Logger } from "./log";
+import { Logger, appendRawLines } from "./log";
 import { store, getSetting, setSetting } from "./db";
 import { Rclone, killActiveProcs, type ExtractStats } from "./rclone";
 import {
@@ -38,7 +38,14 @@ export const engineState = {
   finishedAt: "",
   lastError: "",
   scanRoot: "",
-  extractStats: null as ExtractStats | null,
+  // Live progress of the rclone command currently in flight, when it emits
+  // --stats (extract/move/moveto). Null for non-transfer commands (lsf,
+  // archive list, purge, rmdir) and between commands.
+  commandStats: null as ExtractStats | null,
+  // Short human-readable label for the rclone command/phase currently in
+  // flight ("Listing archives", "Extracting", ...). Drives the per-command
+  // progress bar and status badge in the dashboard.
+  activity: "",
   // UI state for the stop button: stopRequested = soft stop asked (current
   // archive finishes first), forceStop = hard stop asked (rclone killed
   // immediately). Set/reset by stopEngine/forceStopEngine and runEngine.
@@ -68,6 +75,12 @@ export function forceStopEngine(): void {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/** Set the in-flight command label shown by the UI; clears transfer stats. */
+function setActivity(label: string): void {
+  engineState.activity = label;
+  engineState.commandStats = null;
 }
 
 function clampQueueMax(raw: string | undefined): number {
@@ -151,7 +164,8 @@ export async function runEngine(): Promise<void> {
   engineState.skipped = 0;
   engineState.startedAt = "";
   engineState.finishedAt = "";
-  engineState.extractStats = null;
+  engineState.commandStats = null;
+  engineState.activity = "";
   engineState.stopRequested = false;
   engineState.forceStop = false;
 
@@ -237,6 +251,7 @@ export async function runEngine(): Promise<void> {
     const tmpRoot = tmpRootPath(scanRoot, tmpSpec);
     const tmpTop = tmpTopSegment(tmpSpec);
     const dryRunNow = (await getSetting("dry_run", "0")) === "1";
+    setActivity("Purging stale temp");
     try {
       const res = await rc.purgeStaleTemp(tmpRoot, dryRunNow);
       if (res.purged.length) {
@@ -253,6 +268,8 @@ export async function runEngine(): Promise<void> {
       }
     } catch (e) {
       logger.warn(`temp sweep failed: ${e}`);
+    } finally {
+      setActivity("");
     }
 
     const queueMax = clampQueueMax(await getSetting("queue_max", "500"));
@@ -274,6 +291,7 @@ export async function runEngine(): Promise<void> {
     let skippedUnsafe = 0;
     let ignoredTooLarge = 0;
     const createdAt = now();
+    setActivity("Listing archives");
     const listed = await rc.list(async (rel, size) => {
       if (await cancelRequestedCached()) return false;
       // A hostile or corrupt remote could return paths that escape the scan
@@ -360,6 +378,7 @@ export async function runEngine(): Promise<void> {
     logger.info(`listing complete: ${queued} new/requeued archive(s)`);
 
     engineState.stage = "queueing";
+    setActivity("Building queue");
     const sortBy = (await getSetting("sort_by", "path")) === "size" ? "size" : "path";
     const sortDir = (await getSetting("sort_dir", "asc")) === "desc" ? "DESC" : "ASC";
     // Exclude pre-existing queued rows that live in the trash subdir (e.g.
@@ -385,12 +404,23 @@ export async function runEngine(): Promise<void> {
     logger.info(`queue size ${rows.length}`);
 
     engineState.stage = "extracting";
+    setActivity("");
 
     for (const row of rows) {
       if (await cancelRequestedCached()) {
         logger.info("cancel requested, stopping");
         engineState.stage = "cancelled";
         break;
+      }
+      // Clear-queues maintenance may have deleted this row while the run
+      // was in flight; skip it instead of processing a stale entry.
+      const current = await store.get1<{ status: string }>(
+        "SELECT status FROM archives WHERE id=?",
+        [row.id],
+      );
+      if (!current || current.status !== "queued") {
+        logger.info(`skipping ${row.path} (queue cleared)`);
+        continue;
       }
 
       const rel = row.path;
@@ -412,7 +442,8 @@ export async function runEngine(): Promise<void> {
         continue;
       }
       engineState.currentRel = rel;
-      engineState.extractStats = null;
+      engineState.commandStats = null;
+      engineState.activity = "";
       await store.run(
         "UPDATE archives SET status='extracting', updated_at=? WHERE id=?",
         [now(), row.id],
@@ -435,9 +466,11 @@ export async function runEngine(): Promise<void> {
         // match the skip rules (empty, torrent, website, tiny) or cannot be
         // read are skipped and never extracted.
         const stats = createArchiveStats();
+        setActivity("Inspecting archive");
         const listOut = await rc.archiveList(rel, ref, (entry) =>
           addArchiveEntry(stats, entry.path, entry.size),
         );
+        setActivity("");
         const listFailed = Boolean(listOut.streamError) || listOut.code !== 0;
         let skipReason: SkipReason | "unreadable" | "password" | null = null;
         if (listFailed) {
@@ -450,9 +483,6 @@ export async function runEngine(): Promise<void> {
           const detail = listFailed
             ? `listing failed (exit ${listOut.code})`
             : describeArchiveStats(stats);
-          if (!listFailed) {
-            await rc.note(ref, [`archive list: ${detail}`, `skip reason: ${skipReason}`]);
-          }
           await store.run(
             "UPDATE archives SET status='skipped', error_kind=?, updated_at=? WHERE id=?",
             [skipReason, now(), row.id],
@@ -461,10 +491,11 @@ export async function runEngine(): Promise<void> {
           result = "skipped";
         } else {
         tmpAttempted = true;
+        setActivity("Extracting");
         const ex = await rc.extract(rel, tmp, dryRun, ref, (stats) => {
-          engineState.extractStats = stats;
+          engineState.commandStats = stats;
         });
-        engineState.extractStats = null;
+        setActivity("");
 
         if (ex.code !== 0) {
           const all = `${ex.tail.join("\n")}\n${ex.stderr}`;
@@ -476,7 +507,9 @@ export async function runEngine(): Promise<void> {
             warn(`skipped (password): ${rel} [$ ${ex.command}]`);
             result = "skipped";
           } else {
+            setActivity("Cleaning up");
             await rc.cleanup(tmp, dryRun, ref);
+            setActivity("");
             await store.run(
               "UPDATE archives SET status='failed', error_kind='extract', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -487,9 +520,15 @@ export async function runEngine(): Promise<void> {
             );
           }
         } else {
-          const promoted = await rc.promote(rel, tmp, dryRun, ref, tmpTop);
+          setActivity("Moving to destination");
+          const promoted = await rc.promote(rel, tmp, dryRun, ref, tmpTop, (stats) => {
+            engineState.commandStats = stats;
+          });
+          setActivity("");
           if (promoted.code !== 0) {
+            setActivity("Cleaning up");
             await rc.cleanup(tmp, dryRun, ref);
+            setActivity("");
             await store.run(
               "UPDATE archives SET status='failed', error_kind='promote', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -499,14 +538,20 @@ export async function runEngine(): Promise<void> {
               `$ ${promoted.command}\n${promoted.tail.join("\n")}`.trim(),
             );
           } else {
+            setActivity("Cleaning up");
             const cleaned = await rc.cleanup(tmp, dryRun, ref);
+            setActivity("");
             if (cleaned.code !== 0) {
               warn(
                 `cleanup failed: ${rel} [$ ${cleaned.command}] ${cleaned.stderr.trim()}`,
               );
             }
 
-            const trashed = await rc.trash(rel, trashSubdir, dryRun, ref);
+            setActivity("Moving to trash");
+            const trashed = await rc.trash(rel, trashSubdir, dryRun, ref, (stats) => {
+              engineState.commandStats = stats;
+            });
+            setActivity("");
             if (trashed.code !== 0) {
               await store.run(
                 "UPDATE archives SET status='failed', error_kind='trash', updated_at=? WHERE id=?",
@@ -532,6 +577,9 @@ export async function runEngine(): Promise<void> {
           "UPDATE archives SET status='failed', error_kind='spawn', updated_at=? WHERE id=?",
           [now(), row.id],
         );
+        // No binary output exists when the spawn itself failed; store the
+        // (only) diagnostic so the error row's Copy/Download is not empty.
+        await appendRawLines(ref, [String(e)]).catch(() => {});
         fail(`archive error: ${rel}`, String(e));
       } finally {
         if (engineState.forceStop) {
@@ -544,13 +592,15 @@ export async function runEngine(): Promise<void> {
             [now(), row.id],
           );
           engineState.currentCommand = "";
-          engineState.extractStats = null;
+          engineState.commandStats = null;
+          engineState.activity = "";
         } else {
           if (result === "done") engineState.done++;
           else if (result === "skipped") engineState.skipped++;
           else engineState.failed++;
           engineState.currentCommand = "";
-          engineState.extractStats = null;
+          engineState.commandStats = null;
+          engineState.activity = "";
           await store.run("UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?", [
             engineState.done,
             engineState.failed,
@@ -562,7 +612,9 @@ export async function runEngine(): Promise<void> {
         // around (and failing rmdir is only a warning) when extraction did
         // not finish, so any partial data is kept.
         if (tmpAttempted) {
+          setActivity("Cleaning up");
           const rmdir = await rc.rmdir(archiveTmpDir, dryRun, ref);
+          setActivity("");
           if (rmdir.code !== 0) {
             warn(
               `rmdir failed: ${archiveTmpDir} [$ ${rmdir.command}] ${rmdir.stderr.trim() || "not empty"}`,
@@ -576,6 +628,7 @@ export async function runEngine(): Promise<void> {
     // empty (e.g. an archive was force-stopped mid-flight), purge only that
     // exact directory — never the shared temp root, which may hold entries
     // owned by the user that the app must not delete.
+    setActivity("Cleaning up");
     const tmpRootNorm = tmpRoot.replace(/\/+$/, "");
     const runDir = tmpRunDir(tmpRootNorm, runRowId);
     const tmpRootIsSafe =
@@ -602,6 +655,7 @@ export async function runEngine(): Promise<void> {
     if (rootRes.code !== 0) {
       logger.info(`left ${tmpRootNorm} in place (not empty)`);
     }
+    setActivity("");
 
     // A stop requested while the last archive was being processed never gets
     // another loop iteration to notice it, so decide here.
@@ -635,7 +689,8 @@ export async function runEngine(): Promise<void> {
     engineState.running = false;
     engineState.currentRel = "";
     engineState.currentCommand = "";
-    engineState.extractStats = null;
+    engineState.commandStats = null;
+    engineState.activity = "";
     engineState.stopRequested = false;
     engineState.forceStop = false;
   }

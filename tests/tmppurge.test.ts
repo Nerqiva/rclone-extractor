@@ -14,6 +14,8 @@ test("purgeStaleTemp purges only app-layout dirs inside the temp root", () => {
 
   // mock rclone: lsf prints dirs (one stray, two app-layout), purge appends to a marker
   const script = `#!/bin/sh
+# strip leading hard-coded --config <path> pair
+if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
   case "$2" in
     *${tmpAbs}*)
@@ -69,6 +71,8 @@ test("purgeStaleTemp in dry-run reports without deleting", () => {
   mkdirSync(tmpAbs, { recursive: true });
 
   const script = `#!/bin/sh
+# strip leading hard-coded --config <path> pair
+if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
   printf '123/\\n'
   exit 0

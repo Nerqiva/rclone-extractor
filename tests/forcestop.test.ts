@@ -14,6 +14,8 @@ test("force stop kills the in-flight extract and re-queues the archive", () => {
 
   // rclone mock: the extract sleeps long enough to be killed mid-flight.
   const script = `#!/bin/sh
+# strip leading hard-coded --config <path> pair
+if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
   echo "./big.zip;50000"
   exit 0

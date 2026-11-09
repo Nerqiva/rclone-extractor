@@ -23,6 +23,8 @@ beforeAll(async () => {
   mkdirSync(scanRoot, { recursive: true });
 
   const script = `#!/bin/sh
+# strip leading hard-coded --config <path> pair
+if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
   echo "./a/b.zip;100000"
   echo "./a/c.zip;100000"
@@ -129,21 +131,22 @@ test("run log and error log include the active rclone command", async () => {
     refId: engineState.runId,
     kind: "main",
   });
-  expect(main.some((line) => line.includes("$ rclone lsf"))).toBe(true);
+  expect(
+    main.some((line) => line.includes("$ rclone") && line.includes("lsf")),
+  ).toBe(true);
 
   const errors = await readAll({
     scope: "run",
     refId: engineState.runId,
     kind: "errors",
   });
-  const commandLine = errors.find((line) =>
-    line.includes("$ rclone archive extract"),
+  const commandLine = errors.find(
+    (line) => line.includes("archive extract") && line.includes("c.zip"),
   );
   expect(commandLine).toBeDefined();
-  expect(commandLine).toContain("c.zip");
 });
 
-test("per-archive log records the command that ran", async () => {
+test("per-archive log holds the raw binary output, not app lines", async () => {
   const row = await db!.store.get1<{ id: number }>(
     "SELECT id FROM archives WHERE path='a/c.zip'",
   );
@@ -153,25 +156,23 @@ test("per-archive log records the command that ran", async () => {
     refId: Number(row!.id),
     kind: "extract",
   });
-  expect(lines.some((line) => line.includes("$ rclone archive extract"))).toBe(
-    true,
-  );
+  // The raw stderr of the failed extract is stored verbatim...
+  expect(lines.some((line) => line.includes("password required"))).toBe(true);
+  // ...and no app-written command line is added.
+  expect(lines.some((line) => line.includes("$ rclone"))).toBe(false);
 });
 
 test("promote command excludes the tmp workspace from the destination", async () => {
-  const row = await db!.store.get1<{ id: number }>(
-    "SELECT id FROM archives WHERE path='a/b.zip'",
-  );
-  expect(row).toBeDefined();
-  const lines = await readAll({
-    scope: "archive",
-    refId: Number(row!.id),
-    kind: "extract",
+  const main = await readAll({
+    scope: "run",
+    refId: engineState.runId,
+    kind: "main",
   });
   expect(
-    lines.some(
+    main.some(
       (line) =>
-        line.includes("$ rclone move") &&
+        line.includes("$ rclone") &&
+        line.includes("move") &&
         line.includes("--exclude") &&
         line.includes("/.rclone-extractor-tmp/**"),
     ),
@@ -188,7 +189,9 @@ test("temp parents are removed (rmdir) after processing", async () => {
     refId: Number(row!.id),
     kind: "extract",
   });
-  expect(lines.some((line) => line.includes("$ rclone rmdir"))).toBe(true);
+  // The per-archive archive log holds raw binary output only — the rmdir
+  // command line is an app line and lives in the run log.
+  expect(lines.some((line) => line.includes("$ rclone rmdir"))).toBe(false);
 
   const main = await readAll({
     scope: "run",
@@ -197,7 +200,10 @@ test("temp parents are removed (rmdir) after processing", async () => {
   });
   expect(
     main.some(
-      (line) => line.includes("$ rclone rmdir") && line.includes(".rclone-extractor-tmp"),
+      (line) =>
+        line.includes("$ rclone") &&
+        line.includes("rmdir") &&
+        line.includes(".rclone-extractor-tmp"),
     ),
   ).toBe(true);
 });

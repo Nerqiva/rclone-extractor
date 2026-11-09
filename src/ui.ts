@@ -61,8 +61,89 @@ const GLOBAL_SCRIPT = `<script>
     if (typeof detail === "string") { toast(detail, "ok"); return; }
     toast(detail.message || "", detail.kind || "ok");
   });
+
+  function showModal(id) {
+    var overlay = document.getElementById(id);
+    if (!overlay) return;
+    overlay.hidden = false;
+    var first = overlay.querySelector("button");
+    if (first) first.focus();
+  }
+  function hideModals() {
+    var overlays = document.querySelectorAll(".modal-overlay");
+    for (var i = 0; i < overlays.length; i++) overlays[i].hidden = true;
+  }
+
+  var pendingConfirm = null;
+
+  // data-modal-open opens a named modal; data-modal-close and backdrop
+  // clicks dismiss any modal. [data-confirm] buttons are htmx buttons that
+  // must first pass through the shared confirm modal: intercept the click in
+  // the capture phase (so htmx never sees it), then re-dispatch once the
+  // user confirms.
+  document.body.addEventListener("click", function (event) {
+    var open = event.target.closest("[data-modal-open]");
+    if (open) {
+      event.preventDefault();
+      showModal(open.getAttribute("data-modal-open"));
+      return;
+    }
+    if (event.target.closest("[data-modal-close]") || event.target.classList.contains("modal-overlay")) {
+      hideModals();
+      return;
+    }
+    var cfm = event.target.closest("[data-confirm]");
+    if (cfm && !cfm.hasAttribute("data-confirmed")) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      pendingConfirm = cfm;
+      var title = document.getElementById("confirm-modal-title");
+      var ok = document.getElementById("confirm-ok");
+      var parts = String(cfm.getAttribute("data-confirm") || "|").split("|");
+      if (title) title.textContent = parts[0] || "Confirm";
+      if (ok) ok.textContent = parts[1] || "Confirm";
+      showModal("confirm-modal");
+    }
+  }, true);
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") hideModals();
+  });
+
+  document.body.addEventListener("click", function (event) {
+    if (event.target.id !== "confirm-ok") return;
+    if (!pendingConfirm) { hideModals(); return; }
+    var btn = pendingConfirm;
+    pendingConfirm = null;
+    btn.setAttribute("data-confirmed", "1");
+    hideModals();
+    btn.click();
+    btn.removeAttribute("data-confirmed");
+  });
 })();
 </script>`;
+
+// Shared modals injected on every authenticated page. The stop modal offers
+// soft (current archive finishes) and hard (abort now) stop with no explanatory
+// text; the confirm modal is the generic guard for destructive actions.
+const MODALS = `<div class="modal-overlay" id="stop-modal" hidden role="dialog" aria-modal="true" aria-label="Stop">
+  <div class="modal-card">
+    <div class="modal-actions">
+      <button type="button" class="btn danger" hx-post="/run/stop" hx-vals='{"mode":"soft"}' hx-target="#controls" hx-swap="outerHTML" data-modal-close>Soft stop</button>
+      <button type="button" class="btn danger solid" hx-post="/run/stop" hx-vals='{"mode":"hard"}' hx-target="#controls" hx-swap="outerHTML" data-modal-close>Hard stop</button>
+      <button type="button" class="btn ghost" data-modal-close>Cancel</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay" id="confirm-modal" hidden role="dialog" aria-modal="true" aria-label="Confirm">
+  <div class="modal-card">
+    <h2 class="modal-title" id="confirm-modal-title">Confirm</h2>
+    <div class="modal-actions">
+      <button type="button" class="btn danger" id="confirm-ok">Confirm</button>
+      <button type="button" class="btn" data-modal-close>Cancel</button>
+    </div>
+  </div>
+</div>`;
 
 const NAV: { href: string; label: string; key: string; icon: string }[] = [
   {
@@ -113,10 +194,6 @@ export function rail(active: string, csrf: string | null = null): string {
       <form method="post" action="/logout" class="rail-logout">
         ${csrfInput}
         <button class="btn small rail-btn" type="submit">Sign out</button>
-      </form>
-      <form method="post" action="/logout-all" class="rail-logout rail-logout-all">
-        ${csrfInput}
-        <button class="btn ghost small rail-btn" type="submit" title="Revoke every session on this server">Sign out everywhere</button>
       </form>
     </div>
   </aside>`;
@@ -169,6 +246,7 @@ ${railHtml}
 ${body}
 </main>
 <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
+${active !== "" ? MODALS : ""}
 ${GLOBAL_SCRIPT}
 ${script}
 </body>

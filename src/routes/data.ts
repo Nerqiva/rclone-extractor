@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { store, allSettings, SECRET_KEYS } from "../db";
 import { encryptionEnabled, encrypt } from "../crypto";
+import { engineState } from "../engine";
 
 export const data = new Hono();
 
@@ -189,6 +190,11 @@ function validateLogs(raw: unknown): ValidatedLog[] | string {
 }
 
 data.post("/import", async (c) => {
+  // The Configuration page disables Import while a task is running; enforce
+  // the same server-side since import replaces data wholesale.
+  if (engineState.running) {
+    return c.json({ ok: false, message: "Task is running — stop it first." }, 409);
+  }
   const form = await c.req.formData().catch(() => null);
   if (!form) {
     return c.json({ ok: false, message: "invalid multipart form" }, 400);

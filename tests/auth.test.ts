@@ -122,21 +122,6 @@ test("plain form hidden csrf_token field is accepted", async () => {
   expect(res.status).toBe(200);
 });
 
-test("logout-all revokes every session", async () => {
-  const a = await login();
-  const b = await login();
-
-  const res = await app.request("/logout-all", {
-    method: "POST",
-    headers: { Cookie: `sess=${a.cookie}`, "X-CSRF-Token": a.csrf },
-  });
-  expect(res.status).toBe(302);
-
-  for (const s of [a, b]) {
-    expect(await verifySession(s.cookie)).toBeNull();
-  }
-});
-
 test("expired session is rejected and removed", async () => {
   const sess = await createSession();
   const id = sess.slice(0, sess.lastIndexOf("."));
