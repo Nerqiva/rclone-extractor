@@ -85,7 +85,11 @@ docker run -d --name rclone-extractor \
 When `DATABASE_URL` is set, Postgres is used and the schema is created
 automatically on first boot. Existing databases are migrated automatically on
 boot as well (currently: the `runs.interrupted` flag used to show crashed-but-
-closed runs as **Interrupted**).
+closed runs as **Interrupted**, the dropped legacy `logs` table, and the
+dropped `log_lines.seq` / `sessions.created_at` columns). Index DDL failures
+during schema install are logged and skipped rather than crashing the
+process; a critical table that is missing or unreadable fails with a clear
+error naming it.
 
 ### Deploy on SnapDeploy (containers)
 

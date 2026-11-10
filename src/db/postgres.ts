@@ -1,5 +1,13 @@
 import { SQL } from "bun";
-import { PG_SCHEMA, toPgPlaceholders, toPgInsert } from "./schema";
+import {
+  PG_SCHEMA,
+  splitSchemaStatements,
+  isTolerantSchemaStatement,
+  CRITICAL_TABLES,
+  schemaStmtPreview,
+  toPgPlaceholders,
+  toPgInsert,
+} from "./schema";
 import type { Store } from "./index";
 import { PG_POOL_MAX } from "../config";
 
@@ -39,9 +47,35 @@ export class PostgresStore implements Store {
 
   async init(): Promise<void> {
     if (this.isTx) throw new Error("init() is not available inside a transaction");
-    // NOTE: PG_SCHEMA must not contain semicolons inside string literals.
-    for (const stmt of PG_SCHEMA.split(";")) {
-      if (stmt.trim()) await this.sql.unsafe(stmt);
+    // PG_SCHEMA must not contain semicolons inside string literals.
+    // Index statements are best-effort: a partially migrated database must
+    // not crash the process (42703: column does not exist). Table statements
+    // stay strict — a missing table is fatal and reported clearly.
+    for (const stmt of splitSchemaStatements(PG_SCHEMA)) {
+      try {
+        await this.sql.unsafe(stmt);
+      } catch (e) {
+        if (isTolerantSchemaStatement(stmt)) {
+          console.warn(
+            `schema: skipping index statement "${schemaStmtPreview(stmt)}": ${String(e)}`,
+          );
+          continue;
+        }
+        throw e;
+      }
+    }
+    await this.assertCriticalTables();
+  }
+
+  private async assertCriticalTables(): Promise<void> {
+    for (const table of CRITICAL_TABLES) {
+      try {
+        await this.sql.unsafe(`SELECT 1 FROM ${table} LIMIT 1`);
+      } catch (e) {
+        throw new Error(
+          `critical table "${table}" is missing or unreadable: ${String(e)}`,
+        );
+      }
     }
   }
 

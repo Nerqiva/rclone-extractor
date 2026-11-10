@@ -103,6 +103,41 @@ CREATE INDEX IF NOT EXISTS idx_archives_error
 `;
 
 /**
+ * Split a schema script into individual statements. The bundled schemas
+ * contain no semicolons inside string literals, so a plain split is safe.
+ */
+export function splitSchemaStatements(sql: string): string[] {
+  return sql
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * True for statements that are safe to skip when they fail on a database
+ * whose schema has drifted (e.g. an index over a column dropped by an
+ * earlier migration). Tables are never treated as optional.
+ */
+export function isTolerantSchemaStatement(stmt: string): boolean {
+  return /^\s*CREATE\s+(UNIQUE\s+)?INDEX/i.test(stmt);
+}
+
+/** Critical tables the app cannot boot without; verified after schema install. */
+export const CRITICAL_TABLES = [
+  "settings",
+  "archives",
+  "runs",
+  "log_lines",
+  "sessions",
+] as const;
+
+/** One-line preview of a schema statement for log messages. */
+export function schemaStmtPreview(stmt: string): string {
+  const oneLine = stmt.replace(/\s+/g, " ").trim();
+  return oneLine.length > 100 ? `${oneLine.slice(0, 100)}…` : oneLine;
+}
+
+/**
  * Convert a `?`-placeholder statement into a Postgres `$n`-placeholder one.
  * Applies only the divergent patterns the app uses (see PG_SCHEMA and the
  * INSERT OR IGNORE / INSERT OR REPLACE rewrites below).

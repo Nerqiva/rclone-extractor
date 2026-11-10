@@ -91,6 +91,13 @@ to `main`.
   at 500 entries; log downloads are capped at 50 000 lines.
 - `archives`/`stem()` sanitize archive basenames that produce empty or
   dot-only temp directory names.
+- **Schema install no longer crash-loops on legacy drift** (`42703: column
+  "seq" does not exist`, `ComputeIndexAttrs`): `CREATE INDEX` statements
+  during boot are best-effort (a failing index is logged and skipped), and
+  the critical tables (`settings`, `archives`, `runs`, `log_lines`,
+  `sessions`) are verified after schema install — a table that is missing or
+  unreadable fails with a clear error naming it instead of a raw Postgres
+  exception and 5 retries.
 - **Errors page**: error rows whose failure produced no rclone-binary output
   (`unsafe_path`, `interrupted`, the webapp-made skip classifications
   `empty`/`torrent`/`website`/`tiny`, and binary commands that exit non-zero

@@ -1,6 +1,12 @@
 import { Database } from "bun:sqlite";
 import { DB_PATH, ensureDataDir } from "../config";
-import { SQLITE_SCHEMA } from "./schema";
+import {
+  SQLITE_SCHEMA,
+  splitSchemaStatements,
+  isTolerantSchemaStatement,
+  CRITICAL_TABLES,
+  schemaStmtPreview,
+} from "./schema";
 import type { Store } from "./index";
 
 export class SqliteStore implements Store {
@@ -22,7 +28,29 @@ export class SqliteStore implements Store {
     // Wait instead of erroring immediately when another statement holds the
     // write lock (e.g. the engine logging while an HTTP handler writes).
     this.db.exec("PRAGMA busy_timeout=5000;");
-    this.db.exec(SQLITE_SCHEMA);
+    // Index statements are best-effort; table statements stay strict.
+    for (const stmt of splitSchemaStatements(SQLITE_SCHEMA)) {
+      try {
+        this.db.exec(`${stmt};`);
+      } catch (e) {
+        if (isTolerantSchemaStatement(stmt)) {
+          console.warn(
+            `schema: skipping index statement "${schemaStmtPreview(stmt)}": ${String(e)}`,
+          );
+          continue;
+        }
+        throw e;
+      }
+    }
+    for (const table of CRITICAL_TABLES) {
+      try {
+        this.db.query(`SELECT 1 FROM ${table} LIMIT 1`).get();
+      } catch (e) {
+        throw new Error(
+          `critical table "${table}" is missing or unreadable: ${String(e)}`,
+        );
+      }
+    }
   }
 
   private get handle(): Database {
