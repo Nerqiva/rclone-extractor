@@ -4,7 +4,8 @@ import { APP_PASSWORD, BIND, PORT } from "./config";
 import { initDb, store, getSetting } from "./db";
 import { recoverStale } from "./engine";
 import { checkRclone, Rclone } from "./rclone";
-import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "./tmpdir";
+import { tmpRootPath } from "./tmpdir";
+import { loadTmpDirSettings } from "./tmpsweep";
 import { auth, authMiddleware, csrfMiddleware } from "./routes/auth";
 import { Logger } from "./log";
 import { pages } from "./routes/pages";
@@ -39,19 +40,16 @@ if (recovered > 0) {
 // Best-effort cleanup of temp dirs left behind by previous runs (e.g. after
 // a crash). Only app-owned numeric directories inside the configured
 // tmp_dir are purged; anything else is left alone. Honors dry_run.
-const dryRunBoot = (await getSetting("dry_run", "0")) === "1";
-const scanRootBoot = (await getSetting("scan_root", "")) ?? "";
-const trashBoot = (await getSetting("trash_subdir", "trash")) ?? "trash";
-const tmpRawBoot = ((await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT).trim();
-const tmpSpecBoot = tmpRawBoot
-  ? parseTmpDir(tmpRawBoot, scanRootBoot, trashBoot)
-  : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
-if (tmpSpecBoot) {
+const tmpBoot = await loadTmpDirSettings();
+if (tmpBoot.spec) {
   try {
     const rcBoot = await Rclone.fromSettings();
-    const res = await rcBoot.purgeStaleTemp(tmpRootPath(scanRootBoot, tmpSpecBoot), dryRunBoot);
+    const res = await rcBoot.purgeStaleTemp(
+      tmpRootPath(tmpBoot.scanRoot, tmpBoot.spec),
+      tmpBoot.dryRun,
+    );
     if (res.purged.length) {
-      const verb = dryRunBoot ? "would purge (dry run)" : "purged";
+      const verb = tmpBoot.dryRun ? "would purge (dry run)" : "purged";
       console.log(`boot: ${verb} ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`);
     }
     if (res.failed.length) {
@@ -61,7 +59,7 @@ if (tmpSpecBoot) {
     console.warn(`boot: temp sweep failed: ${e}`);
   }
 } else {
-  console.warn(`boot: invalid tmp_dir setting (${tmpRawBoot}); skipping temp sweep`);
+  console.warn(`boot: invalid tmp_dir setting (${tmpBoot.raw}); skipping temp sweep`);
 }
 
 const app = new Hono();

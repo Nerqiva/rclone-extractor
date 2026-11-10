@@ -1,8 +1,15 @@
-import { writeFileSync, renameSync, chmodSync } from "node:fs";
-import { getSetting, store } from "./db";
+import { writeFileSync, renameSync, chmodSync, mkdirSync, unlinkSync } from "node:fs";
+import { dirname } from "node:path";
+import { getSetting } from "./db";
 import { isSupported, isSafeRel, parseTrashSubdir } from "./archive";
 import { isAbsoluteTmpPath, type SweepResult } from "./tmpdir";
-import { RCLONE_CONF, RCLONE_CONF_PATH, RCLONE_BIN } from "./config";
+import {
+  RCLONE_CONF,
+  RCLONE_CONF_PATH,
+  RCLONE_CONF_FALLBACK_DIR,
+  RCLONE_CONF_FALLBACK_PATH,
+  RCLONE_BIN,
+} from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
 import { insertLogLines } from "./log";
 import type { Logger } from "./log";
@@ -86,7 +93,6 @@ export type ListOutcome = Outcome & {
 };
 
 export type ArchiveListOutcome = Outcome & {
-  files: number;
   streamError?: string;
 };
 
@@ -147,7 +153,7 @@ export function parseStatsLine(line: string): ExtractStats | null {
 export type RcloneRef = {
   scope: "archive";
   refId: number;
-  kind: "rclone" | "extract";
+  kind: "extract";
 };
 
 function quoteArg(arg: string): string {
@@ -290,6 +296,83 @@ function stripConfFlags(flags: string[]): string[] {
   return out;
 }
 
+// The --config path is chosen lazily: the primary working copy lives under
+// DATA_DIR (/app/data by default); when that path is not writable for any
+// reason (read-only mount, EACCES, EROFS, full disk, ...) the working copy
+// is kept at /tmp/app/data/rclone.conf instead and every rclone invocation
+// is pointed there. effectiveConfPath flips back to the primary path once a
+// write there succeeds again.
+let effectiveConfPath = RCLONE_CONF_PATH;
+let fallbackActive = false;
+// Set when the fallback (or a total failure) is used; HTTP handlers consume
+// it to show a toast. Boot-time fallbacks surface on the next dashboard poll.
+let pendingConfNotice: string | null = null;
+
+/** Return (and clear) the pending rclone.conf notice, sanitized for a toast. */
+export function pendingRcloneConfNotice(): string | null {
+  const notice = pendingConfNotice;
+  pendingConfNotice = null;
+  return notice;
+}
+
+function writeConfAtomic(path: string, conf: string): void {
+  const tmp = `${path}.tmp-${process.pid}`;
+  try {
+    writeFileSync(tmp, conf, { mode: 0o600 });
+    renameSync(tmp, path);
+    chmodSync(path, 0o600);
+  } catch (e) {
+    // Never leave a stray .tmp-* copy of the credentials behind.
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // Best effort; the temp file may not exist (or already be renamed).
+    }
+    throw e;
+  }
+}
+
+/**
+ * Write the stored rclone.conf working copy, falling back to /tmp/app/data
+ * when the primary path fails for any reason. Returns a user-facing warning
+ * when the fallback (or a total failure) had to be used, else null.
+ */
+function syncConfFile(conf: string): string | null {
+  try {
+    mkdirSync(dirname(RCLONE_CONF_PATH), { recursive: true });
+    writeConfAtomic(RCLONE_CONF_PATH, conf);
+    if (effectiveConfPath !== RCLONE_CONF_PATH) {
+      effectiveConfPath = RCLONE_CONF_PATH;
+      fallbackActive = false;
+      console.log(`rclone.conf working copy is back at ${RCLONE_CONF_PATH}`);
+    }
+    return null;
+  } catch (primaryErr) {
+    console.warn(
+      `could not write ${RCLONE_CONF_PATH} (${String(primaryErr)}); falling back to ${RCLONE_CONF_FALLBACK_PATH}`,
+    );
+  }
+  try {
+    mkdirSync(RCLONE_CONF_FALLBACK_DIR, { recursive: true, mode: 0o700 });
+    writeConfAtomic(RCLONE_CONF_FALLBACK_PATH, conf);
+    effectiveConfPath = RCLONE_CONF_FALLBACK_PATH;
+    if (!fallbackActive) {
+      fallbackActive = true;
+      const msg = `${RCLONE_CONF_PATH} is not writable; stored rclone.conf is kept at ${RCLONE_CONF_FALLBACK_PATH} instead`;
+      console.warn(msg);
+      pendingConfNotice = msg;
+      return msg;
+    }
+    return null;
+  } catch (fallbackErr) {
+    const msg = `rclone.conf could not be written to ${RCLONE_CONF_PATH} or ${RCLONE_CONF_FALLBACK_PATH}: ${String(fallbackErr)}`;
+    console.warn(msg);
+    pendingConfNotice = msg;
+    fallbackActive = true;
+    return msg;
+  }
+}
+
 export class Rclone {
   onCommand?: (command: string) => void;
 
@@ -303,10 +386,12 @@ export class Rclone {
   // The --config flag is hard-coded so rclone never falls back to
   // ~/.config/rclone/rclone.conf (which errors with "didn't find section in
   // config file"). When a stored/env rclone_conf is set, fromSettings()
-  // keeps the file at this path up to date; otherwise the mounted file is
-  // used as-is. A --config in remote_flags is stripped, not honored.
+  // keeps the working copy at the primary path (or the /tmp fallback when
+  // the primary path is not writable); otherwise the file at the primary
+  // path (e.g. a mounted rclone.conf) is used as-is. A --config in
+  // remote_flags is stripped, not honored.
   private confArgs(): string[] {
-    return ["--config", RCLONE_CONF_PATH];
+    return ["--config", effectiveConfPath];
   }
 
   static async fromSettings(runLog?: Logger): Promise<Rclone> {
@@ -328,17 +413,12 @@ export class Rclone {
 
     if (conf) {
       // Write via a temp file + rename so a crash mid-write cannot leave a
-      // truncated config, and never leave credentials world-readable. The
-      // path is hard-coded (see config.ts); a failure here is only a warning
-      // — rclone itself will report the unreadable/missing file.
-      const tmp = `${RCLONE_CONF_PATH}.tmp-${process.pid}`;
-      try {
-        writeFileSync(tmp, conf, { mode: 0o600 });
-        renameSync(tmp, RCLONE_CONF_PATH);
-        chmodSync(RCLONE_CONF_PATH, 0o600);
-      } catch (e) {
-        console.warn(`could not write ${RCLONE_CONF_PATH}: ${String(e)}`);
-      }
+      // truncated config, and never leave credentials world-readable. When
+      // the primary path under DATA_DIR is not writable for any reason, the
+      // working copy falls back to /tmp/app/data; a failure there is only a
+      // warning — rclone itself will report the unreadable/missing file.
+      const notice = syncConfFile(conf);
+      if (notice) runLog?.warn(notice);
     }
 
     return new Rclone(RCLONE_BIN, root, flags, runLog);
@@ -349,22 +429,6 @@ export class Rclone {
     this.onCommand?.(command);
     this.runLog?.info(`$ ${command}`);
     return command;
-  }
-
-  private async nextSeq(ref: RcloneRef): Promise<number> {
-    const row = await store.get1<{ m: number | null }>(
-      "SELECT MAX(seq) AS m FROM log_lines WHERE scope=? AND ref_id=? AND kind=?",
-      [ref.scope, ref.refId, ref.kind],
-    );
-    return Number(row?.m ?? -1) + 1;
-  }
-
-  private async appendArchiveLines(
-    ref: RcloneRef,
-    lines: string[],
-    seq: number,
-  ): Promise<void> {
-    await insertLogLines(ref, lines, seq);
   }
 
   /** Absolute paths (and `remote:` paths) are used as-is; relative ones are resolved against the scan root. */
@@ -467,8 +531,6 @@ export class Rclone {
     const command = this.announce(args);
 
     // No `$ command` pre-line: archive logs hold raw binary output only.
-    const seq = await this.nextSeq(ref);
-
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       stderr: "pipe",
@@ -476,13 +538,11 @@ export class Rclone {
     const stderrPromise = new Response(proc.stderr).text();
     const decoder = new TextDecoder();
     let buffer = "";
-    let files = 0;
     let streamError: string | undefined;
 
     const consume = (line: string): void => {
       const parsed = parseArchiveListLine(line.replace(/\r$/, ""));
       if (!parsed) return;
-      files++;
       onEntry(parsed);
     };
 
@@ -508,13 +568,16 @@ export class Rclone {
     const stderr = await stderrPromise;
     const code = await proc.exited;
 
-    // Raw binary output only — no app wording in the archive log.
+    // Raw binary output only — except that a failure with no output at all
+    // still gets one diagnostic line so the error row's Copy/Download never
+    // comes up empty (404).
     if (streamError || code !== 0) {
-      const raw = [stderr.trim(), streamError ?? ""].filter(Boolean).join("\n");
-      if (raw) await this.appendArchiveLines(ref, raw.split("\n"), seq);
+      let raw = [stderr.trim(), streamError ?? ""].filter(Boolean).join("\n");
+      if (!raw) raw = `listing failed (exit ${code})`;
+      await insertLogLines(ref, raw.split("\n"));
     }
 
-    return { code, tail: [], stderr, command, files, streamError };
+    return { code, tail: [], stderr, command, streamError };
   }
 
   /**
@@ -526,8 +589,6 @@ export class Rclone {
     const full = [...this.confArgs(), ...args, ...this.flags];
     if (dry) full.push("--dry-run");
     const command = this.announce(full);
-
-    const seq = ref ? await this.nextSeq(ref) : 0;
 
     const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
@@ -542,7 +603,12 @@ export class Rclone {
     const combined = `${out}\n${err}`
       .split("\n")
       .filter((line) => line.length > 0);
-    if (ref) await this.appendArchiveLines(ref, combined, seq);
+    if (ref && combined.length === 0 && code !== 0) {
+      // Silent failure: still leave one diagnostic line so the error row's
+      // Copy/Download is not an empty 404.
+      combined.push(`command failed with exit ${code} (no output)`);
+    }
+    if (ref) await insertLogLines(ref, combined);
 
     return { code, tail: combined.slice(-40), stderr: err, command };
   }
@@ -565,7 +631,6 @@ export class Rclone {
     const command = this.announce(full);
 
     // No `$ command` pre-line: archive logs hold raw binary output only.
-    const seq = await this.nextSeq(ref);
     const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
       stderr: "pipe",
@@ -573,18 +638,16 @@ export class Rclone {
     // Output is streamed to the archive log in bounded batches instead of
     // buffered whole; only the tail is kept for the returned Outcome.
     const LOG_BATCH = 100;
-    let nextSeq = seq;
     let pending: string[] = [];
+    let loggedLines = 0;
     let flushChain: Promise<void> = Promise.resolve();
     const flush = (force = false): void => {
       if (pending.length === 0) return;
       if (!force && pending.length < LOG_BATCH) return;
       const batch = pending;
       pending = [];
-      const start = nextSeq;
-      nextSeq += batch.length;
       flushChain = flushChain.then(() =>
-        insertLogLines(ref, batch, start).catch((e) => {
+        insertLogLines(ref, batch).catch((e) => {
           console.warn("archive log write failed:", String(e));
         }),
       );
@@ -601,6 +664,7 @@ export class Rclone {
         tailLines.push(line);
         if (tailLines.length > 40) tailLines.shift();
         pending.push(line);
+        loggedLines++;
         flush();
       }
     };
@@ -626,6 +690,13 @@ export class Rclone {
     flush(true);
     await flushChain;
     const code = await proc.exited;
+    if (loggedLines === 0 && code !== 0) {
+      // Silent failure: still leave one diagnostic line so the error row's
+      // Copy/Download is not an empty 404.
+      await insertLogLines(ref, [`command failed with exit ${code} (no output)`]).catch(
+        (e) => console.warn("archive log write failed:", String(e)),
+      );
+    }
 
     return {
       code,

@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { engineState } from "../engine";
 import { store, getSetting } from "../db";
-import { esc } from "../ui";
+import { esc, toastTriggerHeaders } from "../ui";
 import type { ExtractStats } from "../rclone";
+import { pendingRcloneConfNotice } from "../rclone";
 import { controlsFragment } from "./actions";
 
 export const dashboard = new Hono();
@@ -332,5 +333,14 @@ export async function progressPanel(): Promise<string> {
   </section>`;
 }
 
-dashboard.get("/dashboard/fragment", async (c) => c.html(await progressPanel()));
+dashboard.get("/dashboard/fragment", async (c) => {
+  // Boot-time rclone.conf fallbacks set a notice that only HTTP responses
+  // can toast; surface it here (polled every second on the Progress page).
+  const confNotice = pendingRcloneConfNotice();
+  return c.html(
+    await progressPanel(),
+    200,
+    confNotice ? toastTriggerHeaders(confNotice, "err") : undefined,
+  );
+});
 dashboard.get("/dashboard/controls", (c) => c.html(controlsFragment()));

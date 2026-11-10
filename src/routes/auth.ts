@@ -49,9 +49,8 @@ export async function createSession(): Promise<string> {
   const id = newSessionId();
   const now = new Date();
   const expires = new Date(now.getTime() + SESSION_MAX_AGE_SEC * 1000);
-  await store.run("INSERT INTO sessions(id, created_at, expires_at) VALUES(?, ?, ?)", [
+  await store.run("INSERT INTO sessions(id, expires_at) VALUES(?, ?)", [
     id,
-    now.toISOString(),
     expires.toISOString(),
   ]);
   return `${id}.${sessionSignature(id)}`;

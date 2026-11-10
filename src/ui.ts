@@ -1,3 +1,26 @@
+/** Sanitize a message for an HX-Trigger appToast header (ASCII-safe). */
+function sanitizeToast(message: string): string {
+  return message
+    .replace(/[^\x20-\x7e]/g, "-")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+}
+
+/**
+ * Headers asking htmx to show a toast. Use for both full-page fragment
+ * responses and polled fragments.
+ */
+export function toastTriggerHeaders(
+  message: string,
+  kind: "ok" | "err" = "ok",
+): HeadersInit {
+  return {
+    "HX-Trigger": JSON.stringify({ appToast: { message: sanitizeToast(message), kind } }),
+  };
+}
+
 export function esc(s: unknown): string {
   return String(s)
     .replace(/&/g, "&amp;")

@@ -94,8 +94,8 @@ logsapi.get("/download/run/:id", async (c) => {
 
 logsapi.get("/download/archive/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  const kind = c.req.query("kind") === "rclone" ? "rclone" : "extract";
   if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const kind = "extract" as const;
   const lines = await readAll({ scope: "archive", refId: id, kind });
   if (lines.length === 0) return c.text("not found", 404);
   return new Response(lines.join("\n") + "\n", {

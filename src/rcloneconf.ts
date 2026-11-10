@@ -55,8 +55,3 @@ export function normalizeRcloneConf(input: string): RcloneConfResult {
   };
 }
 
-/** Decode a stored value for use on disk. Returns "" when invalid. */
-export function decodeRcloneConf(input: string): string {
-  const result = normalizeRcloneConf(input);
-  return result.ok ? result.text : "";
-}

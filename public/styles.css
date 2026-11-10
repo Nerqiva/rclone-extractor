@@ -399,15 +399,6 @@ textarea {
 }
 
 /* ---- progress panel ---- */
-.page-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
 .progress-panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -743,36 +734,6 @@ textarea {
   margin: 8px 0 0;
 }
 
-/* ---- tables ---- */
-.table-wrap {
-  width: 100%;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-th,
-td {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-}
-th {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  font-weight: 500;
-}
-tbody tr:hover {
-  background: rgba(91, 140, 255, 0.05);
-}
-
 /* ---- logs ---- */
 .log-toolbar {
   display: flex;
@@ -801,12 +762,6 @@ tbody tr:hover {
 }
 .btn.ghost:hover {
   background: rgba(91, 140, 255, 0.08);
-}
-.nowrap {
-  white-space: nowrap;
-}
-td.path {
-  overflow-wrap: anywhere;
 }
 .live-note {
   font-size: 11px;
@@ -853,19 +808,6 @@ td.path {
   border-color: var(--border);
   background: var(--panel);
 }
-.log-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 10px 0;
-  font-size: 11px;
-  color: var(--muted);
-}
-.log-meta .btn {
-  margin-left: auto;
-}
-
 /* ---- log viewer ---- */
 .log-viewer {
   background: #161c29;
@@ -962,11 +904,6 @@ td.path {
   color: var(--muted);
 }
 
-/* Filter: hide non-warn/error entries */
-.log-viewer.filter-warnerr .log-entry:not(.log-warn):not(.log-error):not(.log-cmd):not(.log-detail) {
-  display: none;
-}
-
 /* Session summary strip */
 .session-summary {
   display: flex;
@@ -985,19 +922,7 @@ td.path {
   font-size: 11px;
 }
 
-/* Filter chips */
-.log-filters {
-  display: flex;
-  gap: 4px;
-}
-.filter-chip {
-  opacity: 0.6;
-}
-.filter-chip.active {
-  opacity: 1;
-  border-color: var(--accent);
-  color: var(--accent);
-}
+/* Log actions toolbar */
 .log-actions-right {
   display: flex;
   gap: 8px;
@@ -1103,23 +1028,6 @@ td.path {
   display: none;
 }
 
-/* terse per-option help line (description / warning / example) */
-.field-hint {
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--muted);
-  margin: 0;
-}
-.field + .field-hint {
-  margin: -8px 0 14px;
-}
-.field-hint code {
-  font-size: 11px;
-}
-.field-hint .warn {
-  color: var(--warn);
-  font-weight: 600;
-}
 .field-inline {
   display: flex;
   gap: 8px;
@@ -1260,9 +1168,6 @@ td.path {
   .run-times {
     gap: 10px;
   }
-  .log-meta .btn {
-    margin-left: 0;
-  }
   .log-actions {
     margin: 8px 0 6px;
   }
@@ -1280,21 +1185,12 @@ td.path {
     width: 100%;
     min-width: 0;
   }
-  th,
-  td {
-    padding: 7px 6px;
-    font-size: 12px;
-  }
   .log-viewer {
     max-height: 60dvh;
     font-size: 11px;
   }
   .error-grid {
     grid-template-columns: 1fr;
-  }
-  .field-row {
-    flex-direction: column !important;
-    gap: 0 !important;
   }
   .card {
     padding: 14px;

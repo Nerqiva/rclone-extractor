@@ -45,23 +45,18 @@ test("export -> wipe -> import restores rows with the same ids", async () => {
     [102, ts, ts],
   );
   await db.store.run(
-    "INSERT INTO logs(archive_id, kind, rel_path) VALUES(?, 'extract', 'archive-101-extract.log')",
-    [101],
-  );
-  await db.store.run(
-    "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES('archive', 101, 'extract', 0, ?, 'INFO', 'hello')",
+    "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES('archive', 101, 'extract', ?, 'INFO', 'hello')",
     [ts],
   );
 
   const backup = await exportBackup();
   expect(backup.archives.some((a: any) => a.id === 101)).toBe(true);
   expect(backup.runs.some((r: any) => r.id === 102)).toBe(true);
-  expect(backup.logs.some((l: any) => l.archive_id === 101)).toBe(true);
+  expect(backup.logs).toBeUndefined();
   expect(backup.log_lines.some((l: any) => l.ref_id === 101)).toBe(true);
 
   // Wipe everything and restore from the backup.
   await db.store.run("DELETE FROM log_lines");
-  await db.store.run("DELETE FROM logs");
   await db.store.run("DELETE FROM runs");
   await db.store.run("DELETE FROM archives");
 
@@ -77,10 +72,6 @@ test("export -> wipe -> import restores rows with the same ids", async () => {
   expect(archive?.path).toBe("backup-test/a.zip");
   const run = await db.store.get1<{ id: number }>("SELECT id FROM runs WHERE id = 102");
   expect(run?.id).toBe(102);
-  const log = await db.store.get1<{ rel_path: string }>(
-    "SELECT rel_path FROM logs WHERE archive_id = 101",
-  );
-  expect(log?.rel_path).toBe("archive-101-extract.log");
   const lines = await db.store.query<{ line: string }>(
     "SELECT line FROM log_lines WHERE scope = 'archive' AND ref_id = 101",
   );
@@ -113,6 +104,21 @@ test("importing a secret-less backup does not wipe stored rclone_conf", async ()
   const body = (await res.json()) as { ok: boolean };
   expect(body.ok).toBe(true);
   expect(await db.getSetting("rclone_conf")).toBe("UEVyLfM8b=");
+});
+
+test("backups written by older versions (with logs and seq) still import", async () => {
+  const backup = await exportBackup();
+  // Simulate a pre-cleanup backup: logs table dump + seq on log lines.
+  const legacy = {
+    ...backup,
+    logs: [{ archive_id: 101, kind: "extract", rel_path: "archive-101-extract.log" }],
+    log_lines: backup.log_lines.map((l: any) => ({ ...l, seq: 0 })),
+  };
+  const form = new FormData();
+  form.append("archive", new File([JSON.stringify(legacy)], "backup.json", { type: "application/json" }));
+  const res = await jsonRequest("/import", form);
+  const body = (await res.json()) as { ok: boolean; message?: string };
+  expect(body.ok).toBe(true);
 });
 
 test("malformed records are rejected before anything is written", async () => {

@@ -61,6 +61,9 @@ export async function initDb(): Promise<void> {
 async function initDbOnce(): Promise<void> {
   await store.init();
   await migrateRunsInterrupted();
+  await migrateDropLogs();
+  await migrateDropLogLinesSeq();
+  await migrateDropSessionsCreatedAt();
 
   const seen = new Set<string>();
   const existing = await store.query<{ key: string; value: string }>(
@@ -94,6 +97,46 @@ async function migrateRunsInterrupted(): Promise<void> {
   } catch (e) {
     const msg = String(e).toLowerCase();
     if (!msg.includes("duplicate") && !msg.includes("already exists")) {
+      throw e;
+    }
+  }
+}
+
+/**
+ * Drop the `logs` table, superseded by `log_lines` long ago (nothing in the
+ * app ever read it; only the backup export round-tripped it).
+ */
+async function migrateDropLogs(): Promise<void> {
+  await store.run("DROP TABLE IF EXISTS logs");
+}
+
+/**
+ * Drop `log_lines.seq`: nothing read it (only a write-side MAX(seq) fed the
+ * old seq allocator, which the restore path no longer uses). Dropping the
+ * column also drops its dependent index on Postgres; the explicit DROP INDEX
+ * keeps SQLite honest.
+ */
+async function migrateDropLogLinesSeq(): Promise<void> {
+  await store.run("DROP INDEX IF EXISTS idx_log_lines_scope");
+  try {
+    await store.run("ALTER TABLE log_lines DROP COLUMN seq");
+    console.log("migrated: dropped log_lines.seq");
+  } catch (e) {
+    const msg = String(e).toLowerCase();
+    if (!msg.includes("no such column") && !msg.includes("does not exist")) {
+      throw e;
+    }
+  }
+}
+
+/** Drop `sessions.created_at`, which the app never read. */
+async function migrateDropSessionsCreatedAt(): Promise<void> {
+  try {
+    await store.run("ALTER TABLE sessions DROP COLUMN created_at");
+    console.log("migrated: dropped sessions.created_at");
+  } catch (e) {
+    const msg = String(e).toLowerCase();
+    if (!msg.includes("no such column") && !msg.includes("does not exist")) {
       throw e;
     }
   }

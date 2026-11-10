@@ -5,7 +5,7 @@ const DASHES = "-".repeat(72);
 const DASH_RE = /^-{40,}$/;
 
 export type LogScope = "run" | "archive";
-export type LogKind = "main" | "errors" | "rclone" | "extract";
+export type LogKind = "main" | "errors" | "extract";
 
 /** Maximum lines rendered in the log views; both initial paint and polling. */
 export const LOG_TAIL_LIMIT = 300;
@@ -109,7 +109,6 @@ export function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
 }
 
 export class Logger {
-  private seq = 0;
   // Writes are serialized through this chain so the order they hit the
   // database matches call order. With a Postgres pool, concurrent inserts
   // can otherwise land out of order and polls cursoring on `id` permanently
@@ -143,13 +142,12 @@ export class Logger {
   }
 
   private write(level: string, line: string): void {
-    const seq = this.seq++;
     const ts = new Date().toISOString();
     const insert = this.chain.then(async () => {
       try {
         await store.run(
-          "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
-          [this.ref.scope, this.ref.refId, this.ref.kind, seq, ts, level, line],
+          "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES(?, ?, ?, ?, ?, ?)",
+          [this.ref.scope, this.ref.refId, this.ref.kind, ts, level, line],
         );
       } catch (e) {
         console.error("log write failed:", String(e));
@@ -189,39 +187,26 @@ export async function tailRendered(
   return { entries: renderLogEntries(rows), lastId };
 }
 
-/** Next free seq for a ref (MAX(seq)+1). */
-export async function nextSeqFor(ref: LogRef): Promise<number> {
-  const row = await store.get1<{ m: number | null }>(
-    "SELECT MAX(seq) AS m FROM log_lines WHERE scope=? AND ref_id=? AND kind=?",
-    [ref.scope, ref.refId, ref.kind],
-  );
-  return Number(row?.m ?? -1) + 1;
-}
-
-/** Insert raw lines at the next free seq. Used for diagnostics with no app wording. */
+/** Insert raw lines. Used for diagnostics with no app wording. */
 export async function appendRawLines(ref: LogRef, lines: string[]): Promise<void> {
-  if (lines.length === 0) return;
-  await insertLogLines(ref, lines, await nextSeqFor(ref));
+  await insertLogLines(ref, lines);
 }
 
-/** Insert log lines in one transaction; returns the next free seq. */
+/** Insert log lines in one transaction. */
 export async function insertLogLines(
   ref: LogRef,
   lines: string[],
-  seqStart: number,
-  level: string | null = null,
-): Promise<number> {
-  if (lines.length === 0) return seqStart;
+): Promise<void> {
+  if (lines.length === 0) return;
   const ts = new Date().toISOString();
   await store.transaction(async (tx) => {
-    for (let i = 0; i < lines.length; i++) {
+    for (const line of lines) {
       await tx.run(
-        "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        [ref.scope, ref.refId, ref.kind, seqStart + i, ts, level, lines[i]],
+        "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES(?, ?, ?, ?, ?, ?)",
+        [ref.scope, ref.refId, ref.kind, ts, null, line],
       );
     }
   });
-  return seqStart + lines.length;
 }
 
 export async function readAll(ref: LogRef): Promise<string[]> {

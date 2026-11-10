@@ -25,19 +25,11 @@ CREATE TABLE IF NOT EXISTS runs(
   interrupted INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS logs(
-  archive_id INTEGER NOT NULL,
-  kind TEXT NOT NULL,
-  rel_path TEXT NOT NULL,
-  PRIMARY KEY(archive_id, kind)
-);
-
 CREATE TABLE IF NOT EXISTS log_lines(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   scope TEXT NOT NULL,
   ref_id INTEGER NOT NULL,
   kind TEXT NOT NULL,
-  seq INTEGER NOT NULL,
   ts TEXT NOT NULL,
   level TEXT,
   line TEXT NOT NULL
@@ -45,14 +37,10 @@ CREATE TABLE IF NOT EXISTS log_lines(
 
 CREATE TABLE IF NOT EXISTS sessions(
   id TEXT PRIMARY KEY,
-  created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
-
-CREATE INDEX IF NOT EXISTS idx_log_lines_scope
-  ON log_lines(scope, ref_id, kind, seq);
 
 CREATE INDEX IF NOT EXISTS idx_log_lines_scope_id
   ON log_lines(scope, ref_id, kind, id);
@@ -89,19 +77,11 @@ CREATE TABLE IF NOT EXISTS runs(
   interrupted INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS logs(
-  archive_id BIGINT NOT NULL,
-  kind TEXT NOT NULL,
-  rel_path TEXT NOT NULL,
-  PRIMARY KEY(archive_id, kind)
-);
-
 CREATE TABLE IF NOT EXISTS log_lines(
   id BIGSERIAL PRIMARY KEY,
   scope TEXT NOT NULL,
   ref_id BIGINT NOT NULL,
   kind TEXT NOT NULL,
-  seq INTEGER NOT NULL,
   ts TEXT NOT NULL,
   level TEXT,
   line TEXT NOT NULL
@@ -109,14 +89,10 @@ CREATE TABLE IF NOT EXISTS log_lines(
 
 CREATE TABLE IF NOT EXISTS sessions(
   id TEXT PRIMARY KEY,
-  created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
-
-CREATE INDEX IF NOT EXISTS idx_log_lines_scope
-  ON log_lines(scope, ref_id, kind, seq);
 
 CREATE INDEX IF NOT EXISTS idx_log_lines_scope_id
   ON log_lines(scope, ref_id, kind, id);
@@ -158,9 +134,6 @@ export function toPgInsert(sql: string): string {
     }
     if (table === "runs") {
       return `${body} ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, finished_at=excluded.finished_at, total=excluded.total, done=excluded.done, failed=excluded.failed, skipped=excluded.skipped, interrupted=excluded.interrupted`;
-    }
-    if (table === "logs") {
-      return `${body} ON CONFLICT(archive_id, kind) DO UPDATE SET rel_path=excluded.rel_path`;
     }
     return `${body} ON CONFLICT DO NOTHING`;
   }

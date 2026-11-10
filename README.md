@@ -59,14 +59,15 @@ docker run -d --name rclone-extractor \
   -e SECRET_KEY=change-me-too \
   -p 8080:8080 \
   -v rclone-data:/app/data \
-  -v /path/to/rclone.conf:/data/app/rclone.conf:ro \
+  -v /path/to/rclone.conf:/app/data/rclone.conf:ro \
   ghcr.io/<owner>/rclone-extractor:latest
 ```
 
-Every rclone invocation gets `--config /data/app/rclone.conf` baked in. Mount
+Every rclone invocation gets `--config /app/data/rclone.conf` baked in. Mount
 your `rclone.conf` there (or store one in the app / `RCLONE_CONF` env, which
-is written to that path before each run). `remote_flags` never needs a
-`--config`.
+is written to that path before each run; if the path is not writable for any
+reason the working copy is kept at `/tmp/app/data/rclone.conf` instead, with a
+warning and a toast). `remote_flags` never needs a `--config`.
 
 Open <http://localhost:8080> and sign in with `APP_PASSWORD`.
 
@@ -130,6 +131,10 @@ The local filesystem is only needed for **SQLite** and the transient
 - **Recommended for persistence:** set `DATABASE_URL` and store everything in
   Postgres — the container filesystem can then be read-only, and data survives
   redeploys.
+- **If `/app/data` (or `DATA_DIR`) is not writable for any reason**, the
+  stored `rclone.conf` working copy is kept at **`/tmp/app/data/rclone.conf`**
+  instead; the app logs a warning and shows a toast. Everything else (SQLite)
+  still needs a writable `DATA_DIR`.
 - **If using SQLite on a host with a mounted disk**, note the mount may be
   **root-owned** (Render persistent disks are), which the non-root `bun` user
   cannot write and produces `EACCES`. Either:
@@ -155,7 +160,7 @@ SECRET_KEY=change-me-too               # passphrase for encrypting stored secret
 
 # --- database (leave DATABASE_URL empty to use local SQLite) ---
 DATABASE_URL=                          # e.g. postgres://user:pass@host:5432/db?sslmode=require
-DATA_DIR=/app/data                     # SQLite file (only needed for SQLite); rclone.conf lives at /data/app/rclone.conf
+DATA_DIR=/app/data                     # SQLite file (only needed for SQLite); rclone.conf working copy lives here too (falls back to /tmp/app/data if not writable)
 
 # --- rclone ---
 RCLONE_CONF=                           # generate with: base64 -w0 rclone.conf
@@ -190,7 +195,7 @@ database. They can also be seeded from environment variables.
 | `PG_POOL_MAX` | `4` | Max connections this app opens to Postgres (keep small; see below). |
 | `COOKIE_SECURE` | `1` | Session cookie is `Secure` (HTTPS only). Set `0` only when serving over plain HTTP. |
 | `TRUST_PROXY` | `0` | Trust `X-Forwarded-For`/`X-Real-IP` for the login throttle. Set `1` only behind a reverse proxy that sets them. |
-| `DATA_DIR` | `/app/data` | Directory for the SQLite file and the working `rclone.conf`. Only needed when using SQLite. |
+| `DATA_DIR` | `/app/data` | Directory for the SQLite file and the transient `rclone.conf` working copy (falls back to `/tmp/app/data` if not writable for any reason). Only needed when using SQLite or a stored `rclone_conf`. |
 | `BIND` | `0.0.0.0` | HTTP bind address. |
 | `PORT` | `8080` | HTTP port. |
 
@@ -199,7 +204,7 @@ database. They can also be seeded from environment variables.
 | Setting | Description |
 |---|---|
 | `scan_root` | rclone remote or path to scan, e.g. `s3:bucket/archives` or `/data/in`. |
-| `remote_flags` | Extra flags appended to every rclone command. `--config /data/app/rclone.conf` is passed unconditionally (any `--config` here is ignored). |
+| `remote_flags` | Extra flags appended to every rclone command. `--config /app/data/rclone.conf` is passed unconditionally (any `--config` here is ignored; when `/app/data` is not writable the `/tmp/app/data/rclone.conf` fallback is used). |
 | `queue_max` | Maximum archives queued per run (default `500`). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
@@ -207,7 +212,7 @@ database. They can also be seeded from environment variables.
 | `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
 | `tmp_dir` | Where rclone extracts archives temporarily (default `.rclone-extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`interrupted`. |
-| `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. When set, it is written to `/data/app/rclone.conf` before rclone runs; otherwise the mounted `/data/app/rclone.conf` is used as-is. |
+| `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. When set, it is written to `/app/data/rclone.conf` before rclone runs — if that path is not writable for any reason, it is written to `/tmp/app/data/rclone.conf` instead (warning in the server log and a toast). Otherwise the file at `/app/data/rclone.conf` (e.g. a mounted rclone.conf) is used as-is. |
 
 Most settings are shown as compact rows on the Configuration page, each with a
 single terse line of help. Click **Edit** to unfold a field, then **Save**.
@@ -261,8 +266,9 @@ filesystem keeps all state across restarts:
 | Run history & counters | `runs` table |
 | Log output (run + per-archive) | `log_lines` table |
 
-Only a transient working copy of `rclone.conf` is written to `DATA_DIR` when
-rclone needs to read it.
+Only a transient working copy of `rclone.conf` is written to
+`/app/data/rclone.conf` when rclone needs to read it (or to
+`/tmp/app/data/rclone.conf` when `/app/data` is not writable for any reason).
 
 ---
 
@@ -315,8 +321,10 @@ every command; `--dry-run` is added when `dry_run` is on (`archive list` is
 read-only and never gets `--dry-run`). All rclone output streams are stored
 verbatim: the run log carries human-readable annotations plus every command
 the app runs, while each per-archive archive log holds the binary's raw
-output only (no app wording). The **Errors** page and per-archive downloads
-show that raw output.
+output only (no app wording) — except for failures that produce no binary
+output at all, which store a single diagnostic line so downloads are never
+empty 404s (see the Errors page note below). The **Errors** page and
+per-archive downloads show that raw output.
 
 `promote` passes `--exclude /<tmp-top-segment>/**` (only when `tmp_dir` is a
 relative path nested inside the scan root) because `rclone move` refuses to
@@ -354,8 +362,8 @@ all are disabled while a task is running except **Clear queues**):
 - **Clear History** wipes the queue, run count and the archive cache along
   with run/archive logs, and resets the ids — the next run starts from #1
   (dry-run aware temp purge kept).
-- **Clear logs** wipes logs and errors only — log lines, the logs registry
-  and the `/errors` failure index (`error_kind`). Runs and archives are kept.
+- **Clear logs** wipes logs and errors only — log lines and the `/errors`
+  failure index (`error_kind`). Runs and archives are kept.
 - **Clear tmp directory** purges stale app-owned numeric run dirs (honors
   `dry_run`).
 - **Clear everything** wipes queue, history, logs, errors and the tmp
@@ -383,6 +391,14 @@ If the listing error mentions a password, the skip reason is `password`
 (same as a password failure during extraction). Skipped archives are never
 re-queued on later runs and stay in place; the reason is visible on the
 Errors page (as the error-kind pill).
+
+Error rows store the underlying diagnostics. Failures caused by the **rclone
+binary** write its raw output to the per-archive log; failures caused by the
+**web app** (e.g. `unsafe_path`, `interrupted`, and the skip classifications
+above, which are made by the app after a successful listing) store a
+web-app-written diagnostic line instead, so the error row's **Copy/Download**
+always shows something — never a bare 404. Binary failures that produce no
+output at all likewise get a single `exit N (no output)` diagnostic line.
 
 ### Queue and re-runs
 
@@ -497,7 +513,7 @@ src/
     pages.ts       GET /  /config  /logs  /errors
     auth.ts        login/logout, DB sessions, CSRF middleware
     dashboard.ts   GET /dashboard/fragment (progress panel poll target)
-    actions.ts     POST /run/start  /run/stop  /config  /rclone-conf
+    actions.ts     POST /run/start  /run/stop  /config
     logsapi.ts     GET /logs/fragment  /errors/fragment  + downloads
     data.ts        POST /export  POST /import
 public/
@@ -520,7 +536,7 @@ GET  /dashboard/controls   run controls         (auth)
 GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
 POST /run/start  /run/stop                     (auth)
-POST /config  /rclone-conf  /config/rclone-clear  (auth)
+POST /config  /config/rclone-clear  (auth)
 POST /maintenance/queues  /maintenance/runs  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)
 POST /export  /import                          (auth)
@@ -534,11 +550,12 @@ GET  /public/*             static files (no auth)
 
 On the Configuration page:
 
-- **Export JSON** downloads `settings`, `archives`, `runs`, `logs`, and
+- **Export JSON** downloads `settings`, `archives`, `runs`, and
   `log_lines` (capped at 50,000 rows; the export notes `log_lines_truncated`
   when capped). Secrets (`rclone.conf`, `database_url`) are included only if
   you tick *include secrets*; they are re-encrypted with the current key on
-  import. A legacy `password` setting in an old export is ignored on import.
+  import. A legacy `password` setting in an old export is ignored on import;
+  so are the `logs` table rows present in pre-cleanup exports.
 - **Import** reads a previously exported JSON and merges it into the active
   database.
 - Both actions run in place: a spinner shows progress and a toast reports the

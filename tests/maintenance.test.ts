@@ -59,7 +59,7 @@ test("clear history is refused while a task is running", async () => {
   engineState.running = true;
   const id = await insertRun();
   await store.run(
-    "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES('run', ?, 'main', 0, 't', 'INFO', 'busy')",
+    "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES('run', ?, 'main', 't', 'INFO', 'busy')",
     [id],
   );
   const res = await app.request("/maintenance/runs", { method: "POST" });
@@ -86,7 +86,7 @@ test("clear history wipes history, queue and caches, resets sequence and purges 
 
   const id = await insertRun();
   await store.run(
-    "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES('run', ?, 'main', 0, 't', 'INFO', 'busy')",
+    "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES('run', ?, 'main', 't', 'INFO', 'busy')",
     [id],
   );
   await store.run(
@@ -137,7 +137,7 @@ test("clear everything wipes archives too", async () => {
     "INSERT OR REPLACE INTO archives(path, size, status, created_at, updated_at) VALUES('wipe-me.zip', 5, 'queued', 't', 't')",
   );
   await store.run(
-    "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES('archive', 1, 'extract', 0, 't', NULL, 'x')",
+    "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES('archive', 1, 'extract', 't', NULL, 'x')",
   );
   const ok = await app.request("/maintenance/all", { method: "POST" });
   expect(await ok.text()).toContain("Cleared everything");
@@ -152,7 +152,7 @@ test("clear queues is allowed while running and keeps run count, history and cac
   engineState.running = true;
   const id = await insertRun();
   await store.run(
-    "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES('run', ?, 'main', 0, 't', 'INFO', 'busy')",
+    "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES('run', ?, 'main', 't', 'INFO', 'busy')",
     [id],
   );
   for (const [path, status] of [
@@ -168,7 +168,7 @@ test("clear queues is allowed while running and keeps run count, history and cac
   }
   const q1 = await store.get1<{ id: number }>("SELECT id FROM archives WHERE path='q1.zip'");
   await store.run(
-    "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES('archive', ?, 'extract', 0, 't', NULL, 'x')",
+    "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES('archive', ?, 'extract', 't', NULL, 'x')",
     [Number(q1?.id ?? 0)],
   );
 
@@ -195,7 +195,6 @@ test("clear queues is allowed while running and keeps run count, history and cac
   await store.run("DELETE FROM log_lines WHERE scope='run'");
   await store.run("DELETE FROM runs WHERE id = ?", [id]);
   await store.run("DELETE FROM archives");
-  await store.run("DELETE FROM logs");
 });
 
 test("clear logs wipes logs and errors but keeps runs and archives", async () => {
@@ -209,7 +208,7 @@ test("clear logs wipes logs and errors but keeps runs and archives", async () =>
     "INSERT OR REPLACE INTO archives(path, size, status, error_kind, created_at, updated_at) VALUES('err.zip', 5, 'failed', 'extract', 't', 't')",
   );
   await store.run(
-    "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES('run', ?, 'errors', 0, 't', 'ERROR', 'x')",
+    "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES('run', ?, 'errors', 't', 'ERROR', 'x')",
     [id],
   );
   const res = await app.request("/maintenance/logs", { method: "POST" });
@@ -225,7 +224,6 @@ test("clear logs wipes logs and errors but keeps runs and archives", async () =>
   // cleanup
   await store.run("DELETE FROM runs WHERE id = ?", [id]);
   await store.run("DELETE FROM archives WHERE path='err.zip'");
-  await store.run("DELETE FROM logs");
 });
 
 test("tmp-purge is refused while a task is running", async () => {

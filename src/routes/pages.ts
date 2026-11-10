@@ -126,15 +126,30 @@ pages.get("/config", async (c) => {
           var res = await fetch(exportForm.action, {
             method: "POST",
             body: new FormData(exportForm),
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" },
           });
           var contentType = res.headers.get("content-type") || "";
-          if (!res.ok || res.redirected || contentType.indexOf("application/json") === -1) {
-            throw new Error("export failed (HTTP " + res.status + ")");
+          var text = await res.text();
+          if (res.status === 401) {
+            throw new Error("your session expired — reload the page and sign in again");
+          }
+          // Proxies/CDNs may rewrite the Content-Type of a download response
+          // (or fetch may follow a redirect), so validate the payload instead
+          // of trusting headers.
+          var parsed = null;
+          try { parsed = JSON.parse(text); } catch (_) { /* not JSON */ }
+          var isPayload = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+          if (!res.ok || !isPayload) {
+            var why = "HTTP " + res.status +
+              (contentType ? ", " + contentType : "") +
+              (res.redirected ? ", redirected" : "");
+            throw new Error("unexpected response from /export (" + why + ")");
           }
           var disposition = res.headers.get("content-disposition") || "";
           var match = /filename="?([^";]+)"?/.exec(disposition);
           var filename = match ? match[1] : "export-" + Date.now() + ".json";
-          var blob = await res.blob();
+          var blob = new Blob([text], { type: "application/json" });
           var url = URL.createObjectURL(blob);
           var link = document.createElement("a");
           link.href = url;
@@ -221,9 +236,6 @@ pages.get("/logs", async (c) => {
       ? asked
       : Number(runs[0]?.id ?? 0);
   if (!runs.some((r) => Number(r.id) === selectedId)) {
-    selectedId = running ? engineState.runId : Number(runs[0]?.id ?? 0);
-  }
-  if (!runs.some((r) => Number(r.id) === selectedId)) {
     selectedId = Number(runs[0]?.id ?? 0);
   }
 
@@ -238,12 +250,16 @@ pages.get("/logs", async (c) => {
   const hasLog = lastId > 0;
   const showLog = isLive || hasLog;
 
+  const runSecs = (r: { started_at: string; finished_at: string | null }): number =>
+    r.finished_at
+      ? Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+      : 0;
+  const durLabel = (secs: number, fallback: string): string =>
+    secs > 0 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : fallback;
+
   const options = runs
     .map((r) => {
-      const dur = r.finished_at
-        ? Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000)
-        : 0;
-      const durStr = dur > 0 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : "…";
+      const durStr = durLabel(runSecs(r), "…");
       return `<option value="${r.id}"${Number(r.id) === selectedId ? " selected" : ""}>Run #${r.id} · ${esc(r.started_at).slice(11, 16)} · ${durStr} · ${r.done} done</option>`;
     })
     .join("");
@@ -271,10 +287,7 @@ pages.get("/logs", async (c) => {
         interrupted ? "Interrupted" : selected.finished_at ? "Finished" : "Incomplete"
       }</span>`;
 
-  const dur = selected.finished_at
-    ? Math.round((new Date(selected.finished_at).getTime() - new Date(selected.started_at).getTime()) / 1000)
-    : 0;
-  const durStr = dur > 0 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : "running";
+  const durStr = durLabel(runSecs(selected), "running");
 
   const summary = `<div class="session-summary">
     ${statusPill}
@@ -289,10 +302,6 @@ pages.get("/logs", async (c) => {
 
   const downloadHref = `/download/run/${selected.id}?kind=${kind}`;
   const copyToolbar = `<div class="log-actions" role="toolbar" aria-label="Log actions">
-      <div class="log-filters">
-        <button class="btn small filter-chip active" data-filter="all">All</button>
-        <button class="btn small filter-chip" data-filter="warnerr">Warnings &amp; Errors</button>
-      </div>
       <span class="log-actions-right">
         <button class="btn small" type="button" data-copy-url="${esc(downloadHref)}">Copy all</button>
         <a class="btn small ghost" href="${esc(downloadHref)}">Download ${kind === "errors" ? "errors" : "log"}</a>

@@ -1,26 +1,20 @@
 import { Hono } from "hono";
 import { store, setSetting, allSettings, getSetting } from "../db";
 import { engineState, runEngine, stopEngine, forceStopEngine } from "../engine";
-import { esc } from "../ui";
+import { esc, toastTriggerHeaders } from "../ui";
 import { encryptionEnabled } from "../crypto";
 import { APP_PASSWORD, RCLONE_CONF } from "../config";
 import { normalizeRcloneConf } from "../rcloneconf";
-import { Rclone } from "../rclone";
+import { Rclone, pendingRcloneConfNotice } from "../rclone";
 import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "../tmpdir";
+import { loadTmpDirSettings } from "../tmpsweep";
 import { parseTrashSubdir } from "../archive";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
 /** HX-Trigger response header: ask the client to show a toast. */
 function toastHeaders(message: string, kind: "ok" | "err" = "ok"): HeadersInit {
-  // Header values must be ISO-8859-1; strip anything else (e.g. em-dashes).
-  const safe = message
-    .replace(/[^\x20-\x7e]/g, "-")
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/[\r\n]+/g, " ")
-    .trim();
-  return { "HX-Trigger": JSON.stringify({ appToast: { message: safe, kind } }) };
+  return toastTriggerHeaders(message, kind);
 }
 
 export const actions = new Hono();
@@ -55,8 +49,17 @@ actions.post("/run/start", async (c) => {
       [new Date().toISOString()],
     );
     await setSetting("cancel", "0");
+    // Settle the rclone.conf working copy up front so a read-only DATA_DIR
+    // surfaces as a toast on this response (not just in the server log).
+    try {
+      await Rclone.fromSettings();
+    } catch (e) {
+      console.warn("rclone conf pre-sync failed:", String(e));
+    }
+    const confNotice = pendingRcloneConfNotice();
     // runEngine never rejects (it handles errors internally); log defensively.
     void runEngine().catch((e) => console.error("engine crashed:", String(e)));
+    if (confNotice) return c.html(controlsFragment(), 200, toastHeaders(confNotice, "err"));
     return c.html(controlsFragment(), 200, toastHeaders("Task started."));
   }
   return c.html(controlsFragment(), 200, toastHeaders("A task is already running.", "err"));
@@ -211,23 +214,30 @@ actions.post("/config", async (c) => {
   if (maxArchiveSizeStored !== undefined) {
     await setSetting("max_archive_size", maxArchiveSizeStored);
   }
-  if (normalizedConf !== null) await setSetting("rclone_conf", normalizedConf);
+  if (normalizedConf !== null) {
+    await setSetting("rclone_conf", normalizedConf);
+    // Keep the working copy in sync right away so a read-only DATA_DIR is
+    // reported (and toasted) on this response, not on the next run.
+    try {
+      await Rclone.fromSettings();
+    } catch (e) {
+      console.warn("rclone conf sync failed:", String(e));
+    }
+  }
   await setSetting("dry_run", form.get("dry_run") !== null ? "1" : "0");
   await setSetting("resume", form.get("resume") !== null ? "1" : "0");
+  const confNotice = pendingRcloneConfNotice();
+  if (confNotice) {
+    return c.html(
+      await configForm(`<p class="note warn-line">${esc(confNotice)}</p>`),
+      200,
+      toastHeaders(confNotice, "err"),
+    );
+  }
   return c.html(
     await configForm(`<p class="note">Saved.</p>`),
     200,
     toastHeaders("Settings saved."),
-  );
-});
-
-actions.post("/rclone-conf", async (c) => {
-  const body = await c.req.text();
-  const parsed = normalizeRcloneConf(body);
-  if (!parsed.ok) return c.text(parsed.error, 400);
-  await setSetting("rclone_conf", parsed.base64);
-  return c.html(
-    `<p class="note">Stored rclone.conf (${esc(Buffer.byteLength(parsed.text, "utf8"))} bytes).</p>`,
   );
 });
 
@@ -240,8 +250,9 @@ actions.post("/config/rclone-clear", async (c) => {
     );
   }
   await setSetting("rclone_conf", "");
-  // Never delete the file at RCLONE_CONF_PATH: it may be the user's mounted
-  // /data/app/rclone.conf. A stored conf is overwritten on the next save.
+  // Never delete the file at RCLONE_CONF_PATH (or its /tmp fallback): it may
+  // be the user's mounted rclone.conf. A stored conf is overwritten on the
+  // next save.
   return c.html(
     await configForm(`<p class="note">rclone.conf cleared.</p>`),
     200,
@@ -271,17 +282,14 @@ async function purgeAppTempDirs(): Promise<
   | { ok: true; dryRun: boolean; purged: number; failed: number }
   | { ok: false }
 > {
-  const dryRun = (await getSetting("dry_run", "0")) === "1";
-  const scanRoot = (await getSetting("scan_root", "")) ?? "";
-  const trash = (await getSetting("trash_subdir", "trash")) ?? "trash";
-  const raw = ((await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT).trim();
-  const spec = raw
-    ? parseTmpDir(raw, scanRoot, trash)
-    : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
-  if (!spec) return { ok: false };
+  const tmp = await loadTmpDirSettings();
+  if (!tmp.spec) return { ok: false };
   const rc = await Rclone.fromSettings();
-  const res = await rc.purgeStaleTemp(tmpRootPath(scanRoot, spec), dryRun);
-  return { ok: true, dryRun, purged: res.purged.length, failed: res.failed.length };
+  const res = await rc.purgeStaleTemp(
+    tmpRootPath(tmp.scanRoot, tmp.spec),
+    tmp.dryRun,
+  );
+  return { ok: true, dryRun: tmp.dryRun, purged: res.purged.length, failed: res.failed.length };
 }
 
 function tempPurgeNote(p: Awaited<ReturnType<typeof purgeAppTempDirs>>): string {
@@ -306,12 +314,27 @@ actions.post("/maintenance/queues", async (c) => {
       `DELETE FROM log_lines WHERE scope='archive' AND ref_id IN (${placeholders})`,
       ids,
     );
-    await store.run(`DELETE FROM logs WHERE archive_id IN (${placeholders})`, ids);
     await store.run("DELETE FROM archives WHERE status='queued'");
   }
   const msg = ids.length > 0 ? `Cleared queue (${ids.length} archive(s)).` : "Queue is already empty.";
   return c.html(`<p class="note">${esc(msg)}</p>`, 200, toastHeaders(msg));
 });
+
+// Shared wipe behind /maintenance/runs and /maintenance/all: clears the
+// queue, run count and the archive cache, along with run/archive logs and
+// the run counter (dry-run aware temp purge kept). Returns the purge note.
+async function wipeEverything(): Promise<string> {
+  await store.run("DELETE FROM log_lines");
+  await store.run("DELETE FROM runs");
+  await store.run("DELETE FROM archives");
+  await resetSequences(["archives", "runs", "log_lines"]);
+  await setSetting("last_run_id", "0");
+  try {
+    return tempPurgeNote(await purgeAppTempDirs());
+  } catch (e) {
+    return ` Temp purge failed: ${String(e)}`;
+  }
+}
 
 // Clear History: wipes the queue, run count and the archive cache, along
 // with run/archive logs and the run counter (dry-run aware temp purge
@@ -320,18 +343,7 @@ actions.post("/maintenance/runs", async (c) => {
   if (engineState.running) {
     return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
   }
-  await store.run("DELETE FROM log_lines");
-  await store.run("DELETE FROM logs");
-  await store.run("DELETE FROM runs");
-  await store.run("DELETE FROM archives");
-  await resetSequences(["archives", "runs", "log_lines"]);
-  await setSetting("last_run_id", "0");
-  let purgeNote = "";
-  try {
-    purgeNote = tempPurgeNote(await purgeAppTempDirs());
-  } catch (e) {
-    purgeNote = ` Temp purge failed: ${String(e)}`;
-  }
+  const purgeNote = await wipeEverything();
   return c.html(
     `<p class="note">Cleared history, queue and caches.${esc(purgeNote)} Next run starts from #1.</p>`,
     200,
@@ -345,7 +357,6 @@ actions.post("/maintenance/logs", async (c) => {
     return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
   }
   await store.run("DELETE FROM log_lines");
-  await store.run("DELETE FROM logs");
   await store.run("UPDATE archives SET error_kind=NULL");
   return c.html(
     `<p class="note">Cleared logs and errors.</p>`,
@@ -361,11 +372,12 @@ actions.post("/maintenance/tmp-purge", async (c) => {
   }
   try {
     const p = await purgeAppTempDirs();
+    const confNotice = pendingRcloneConfNotice();
     if (!p.ok) {
       return c.html(
         `<p class="note err">tmp_dir is invalid; nothing purged.</p>`,
         200,
-        toastHeaders("tmp_dir is invalid", "err"),
+        toastHeaders(confNotice ?? "tmp_dir is invalid", "err"),
       );
     }
     const none = p.purged === 0 && p.failed === 0;
@@ -378,9 +390,9 @@ actions.post("/maintenance/tmp-purge", async (c) => {
         : `Purged ${p.purged} stale item(s)`;
     const detail = p.failed ? ` ${p.failed} could not be purged.` : "";
     return c.html(
-      `<p class="note${p.failed ? " err" : ""}">${esc(msg)}.${esc(detail)}</p>`,
+      `<p class="note${p.failed ? " err" : ""}">${esc(msg)}.${esc(detail)}${confNotice ? ` ${esc(confNotice)}` : ""}</p>`,
       200,
-      toastHeaders(msg + detail, p.failed ? "err" : "ok"),
+      toastHeaders(confNotice ?? msg + detail, confNotice || p.failed ? "err" : "ok"),
     );
   } catch (e) {
     return c.html(
@@ -395,18 +407,7 @@ actions.post("/maintenance/all", async (c) => {
   if (engineState.running) {
     return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
   }
-  await store.run("DELETE FROM log_lines");
-  await store.run("DELETE FROM logs");
-  await store.run("DELETE FROM runs");
-  await store.run("DELETE FROM archives");
-  await resetSequences(["archives", "runs", "log_lines"]);
-  await setSetting("last_run_id", "0");
-  let purgeNote = "";
-  try {
-    purgeNote = tempPurgeNote(await purgeAppTempDirs());
-  } catch (e) {
-    purgeNote = ` Temp purge failed: ${String(e)}`;
-  }
+  const purgeNote = await wipeEverything();
   return c.html(
     `<p class="note">Cleared everything — queue, history, logs, errors and temp dir.${esc(purgeNote)} Next run starts from #1.</p>`,
     200,

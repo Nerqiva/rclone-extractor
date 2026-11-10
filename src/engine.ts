@@ -7,9 +7,8 @@ import {
   tmpArchiveDir,
   tmpStemDir,
   tmpTopSegment,
-  parseTmpDir,
-  TMP_DIR_DEFAULT,
 } from "./tmpdir";
+import { loadTmpDirSettings } from "./tmpsweep";
 import {
   isTrashPath,
   normalizeRel,
@@ -37,7 +36,6 @@ export const engineState = {
   startedAt: "",
   finishedAt: "",
   lastError: "",
-  scanRoot: "",
   // Live progress of the rclone command currently in flight, when it emits
   // --stats (extract/move/moveto). Null for non-transfer commands (lsf,
   // archive list, purge, rmdir) and between commands.
@@ -136,10 +134,21 @@ export async function recoverStale(recoverArchives = true): Promise<number> {
         [now()],
       );
     } else {
+      // No binary output exists for these; store a webapp diagnostic per
+      // archive so the error row's Copy/Download is not an empty 404.
+      const rows = await store.query<{ id: number | string }>(
+        "SELECT id FROM archives WHERE status='extracting'",
+      );
       await store.run(
         "UPDATE archives SET status='failed', error_kind='interrupted', updated_at=? WHERE status='extracting'",
         [now()],
       );
+      for (const row of rows) {
+        await appendRawLines(
+          { scope: "archive", refId: Number(row.id), kind: "extract" },
+          ["interrupted: app restarted before extraction finished"],
+        ).catch(() => {});
+      }
     }
   }
   // A run row with no finish time is a run from a previous process. Close it so
@@ -170,7 +179,6 @@ export async function runEngine(): Promise<void> {
   engineState.forceStop = false;
 
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
-  engineState.scanRoot = scanRoot;
   if (!scanRoot) {
     engineState.stage = "error";
     engineState.lastError = "scan_root not set";
@@ -187,14 +195,11 @@ export async function runEngine(): Promise<void> {
     engineState.running = false;
     return;
   }
-  const tmpRawValue = (await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT;
-  const tmpRaw = tmpRawValue.trim();
-  const tmpSpec = tmpRaw
-    ? parseTmpDir(tmpRaw, scanRoot, trashSubdirValidated)
-    : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
+  const tmpSettings = await loadTmpDirSettings(trashSubdirValidated);
+  const tmpSpec = tmpSettings.spec;
   if (!tmpSpec) {
     engineState.stage = "error";
-    engineState.lastError = `tmp_dir is invalid: ${tmpRawValue}`;
+    engineState.lastError = `tmp_dir is invalid: ${tmpSettings.raw}`;
     engineState.running = false;
     return;
   }
@@ -431,6 +436,12 @@ export async function runEngine(): Promise<void> {
           "UPDATE archives SET status='failed', error_kind='unsafe_path', updated_at=? WHERE id=?",
           [now(), row.id],
         );
+        // No binary output exists; store the webapp diagnostic so the
+        // error row's Copy/Download shows something instead of a 404.
+        await appendRawLines(
+          { scope: "archive", refId: row.id, kind: "extract" },
+          [`unsafe archive path rejected by app: ${JSON.stringify(rel)}`],
+        ).catch(() => {});
         warn(`skipped unsafe stored path: ${JSON.stringify(rel)}`);
         engineState.failed++;
         await store.run("UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?", [
@@ -455,11 +466,6 @@ export async function runEngine(): Promise<void> {
       const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
       let result: "done" | "failed" | "skipped" = "failed";
       let tmpAttempted = false;
-
-      await store.run(
-        "INSERT OR REPLACE INTO logs(archive_id, kind, rel_path) VALUES(?, 'extract', ?)",
-        [row.id, `archive-${row.id}-extract.log`],
-      );
 
       try {
         // Inspect the archive before any extraction happens. Archives that
@@ -486,6 +492,12 @@ export async function runEngine(): Promise<void> {
           await store.run(
             "UPDATE archives SET status='skipped', error_kind=?, updated_at=? WHERE id=?",
             [skipReason, now(), row.id],
+          );
+          // Webapp-made diagnosis (no binary output is produced for skip
+          // classifications); store it so Copy/Download on the error row is
+          // not an empty 404.
+          await appendRawLines(ref, [`skipped (${skipReason}): ${detail}`]).catch(
+            () => {},
           );
           warn(`skipped (${skipReason}): ${rel} [${detail}]`);
           result = "skipped";
@@ -577,9 +589,10 @@ export async function runEngine(): Promise<void> {
           "UPDATE archives SET status='failed', error_kind='spawn', updated_at=? WHERE id=?",
           [now(), row.id],
         );
-        // No binary output exists when the spawn itself failed; store the
-        // (only) diagnostic so the error row's Copy/Download is not empty.
-        await appendRawLines(ref, [String(e)]).catch(() => {});
+        // No binary output exists when the webapp itself throws (spawn
+        // failure, DB error, ...); store the diagnostic so the error row's
+        // Copy/Download is not empty.
+        await appendRawLines(ref, [`archive error: ${String(e)}`]).catch(() => {});
         fail(`archive error: ${rel}`, String(e));
       } finally {
         if (engineState.forceStop) {

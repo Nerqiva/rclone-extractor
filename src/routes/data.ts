@@ -25,7 +25,6 @@ data.post("/export", async (c) => {
     settings: includeSecrets ? settings : omitSecrets(settings),
     archives: await store.query("SELECT * FROM archives ORDER BY id"),
     runs: await store.query("SELECT * FROM runs ORDER BY id"),
-    logs: await store.query("SELECT * FROM logs ORDER BY archive_id, kind"),
     log_lines: logLines,
     log_lines_truncated: logLines.length >= EXPORT_LOG_LINES_LIMIT,
   };
@@ -90,16 +89,9 @@ interface ValidatedLogLine {
   scope: "run" | "archive";
   ref_id: number;
   kind: string;
-  seq: number;
   ts: string;
   level: string | null;
   line: string;
-}
-
-interface ValidatedLog {
-  archive_id: number;
-  kind: string;
-  rel_path: string;
 }
 
 function validateArchives(raw: unknown): ValidatedArchive[] | string {
@@ -160,31 +152,13 @@ function validateLogLines(raw: unknown): ValidatedLogLine[] | string {
     if (!scope) return `log_lines[${i}].scope must be "run" or "archive"`;
     const ref_id = asInt(l.ref_id);
     const kind = asStr(l.kind, 32);
-    const seq = asInt(l.seq ?? 0) ?? 0;
     if (ref_id === null) return `log_lines[${i}].ref_id is not an integer`;
     if (!kind) return `log_lines[${i}].kind is missing`;
     const ts = asStr(l.ts, 64) ?? new Date().toISOString();
     const level = asOptStr(l.level, 16);
     if (level === undefined) return `log_lines[${i}].level is not a string`;
     const line = asStr(l.line, 100_000) ?? "";
-    out.push({ scope, ref_id, kind, seq, ts, level, line });
-  }
-  return out;
-}
-
-function validateLogs(raw: unknown): ValidatedLog[] | string {
-  if (!Array.isArray(raw)) return "logs must be an array";
-  const out: ValidatedLog[] = [];
-  for (let i = 0; i < raw.length; i++) {
-    const l = raw[i] as RawRecord;
-    if (!l || typeof l !== "object") return `logs[${i}] is not an object`;
-    const archive_id = asInt(l.archive_id);
-    const kind = asStr(l.kind, 32);
-    const rel_path = asStr(l.rel_path, 4096);
-    if (archive_id === null) return `logs[${i}].archive_id is not an integer`;
-    if (!kind) return `logs[${i}].kind is missing`;
-    if (!rel_path) return `logs[${i}].rel_path is missing`;
-    out.push({ archive_id, kind, rel_path });
+    out.push({ scope, ref_id, kind, ts, level, line });
   }
   return out;
 }
@@ -226,8 +200,8 @@ data.post("/import", async (c) => {
   if (typeof runs === "string") return c.json({ ok: false, message: runs }, 400);
   const logLines = backup.log_lines === undefined ? [] : validateLogLines(backup.log_lines);
   if (typeof logLines === "string") return c.json({ ok: false, message: logLines }, 400);
-  const logs = backup.logs === undefined ? [] : validateLogs(backup.logs);
-  if (typeof logs === "string") return c.json({ ok: false, message: logs }, 400);
+  // Backups from before the `logs` table was dropped may carry a `logs`
+  // array; it is accepted and ignored (nothing ever read it).
 
   const settings = backup.settings as Record<string, unknown> | undefined;
 
@@ -257,7 +231,6 @@ data.post("/import", async (c) => {
         const conflictIds = conflicts.map((r) => Number(r.id)).filter((n) => n !== a.id);
         if (conflictIds.length > 0) {
           const ph = conflictIds.map(() => "?").join(", ");
-          await tx.run(`DELETE FROM logs WHERE archive_id IN (${ph})`, conflictIds);
           await tx.run(
             `DELETE FROM log_lines WHERE scope = 'archive' AND ref_id IN (${ph})`,
             conflictIds,
@@ -266,7 +239,6 @@ data.post("/import", async (c) => {
         }
         // The backup row itself may collide on either unique key with a row
         // that shares its id (same backup re-imported) — delete then insert.
-        await tx.run("DELETE FROM logs WHERE archive_id = ?", [a.id]);
         await tx.run("DELETE FROM log_lines WHERE scope = 'archive' AND ref_id = ?", [a.id]);
         await tx.run("DELETE FROM archives WHERE id = ? OR path = ?", [a.id, a.path]);
         await tx.run(
@@ -286,18 +258,10 @@ data.post("/import", async (c) => {
       }
       if (runs.length > 0) counts.push(`${runs.length} runs`);
 
-      for (const l of logs) {
-        await tx.run(
-          "INSERT INTO logs(archive_id, kind, rel_path) VALUES(?, ?, ?) ON CONFLICT(archive_id, kind) DO UPDATE SET rel_path=excluded.rel_path",
-          [l.archive_id, l.kind, l.rel_path],
-        );
-      }
-      if (logs.length > 0) counts.push(`${logs.length} logs`);
-
       for (const l of logLines) {
         await tx.run(
-          "INSERT INTO log_lines(scope, ref_id, kind, seq, ts, level, line) VALUES(?, ?, ?, ?, ?, ?, ?)",
-          [l.scope, l.ref_id, l.kind, l.seq, l.ts, l.level, l.line],
+          "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES(?, ?, ?, ?, ?, ?)",
+          [l.scope, l.ref_id, l.kind, l.ts, l.level, l.line],
         );
       }
       if (logLines.length > 0) counts.push(`${logLines.length} log lines`);

@@ -3,24 +3,9 @@
 (function () {
   "use strict";
 
-  var TOAST_TIMEOUT_MS = 3200;
-
+  /* Copy/select helpers rely on window.appToast (injected by the page shell). */
   function toast(message, kind) {
-    var region = document.getElementById("toast-region");
-    if (!region) return;
-    var el = document.createElement("div");
-    el.className = "toast " + (kind || "ok");
-    el.textContent = message;
-    region.appendChild(el);
-    requestAnimationFrame(function () {
-      el.classList.add("show");
-    });
-    window.setTimeout(function () {
-      el.classList.remove("show");
-    }, TOAST_TIMEOUT_MS);
-    window.setTimeout(function () {
-      el.remove();
-    }, TOAST_TIMEOUT_MS + 400);
+    if (typeof window.appToast === "function") window.appToast(message, kind);
   }
 
   function isSecureContext() {
@@ -65,67 +50,25 @@
     return response.text();
   }
 
-  function selectionText(selector) {
-    var sel = window.getSelection();
-    if (!sel) return "";
-    if (selector) {
-      var target = document.querySelector(selector);
-      if (!target) return "";
-      if (!target.contains(sel.anchorNode) && !target.contains(sel.focusNode)) {
-        return "";
-      }
-    }
-    return sel.toString();
-  }
-
-  function selectAll(selector) {
-    var target = document.querySelector(selector);
-    if (!target) return false;
-    var range = document.createRange();
-    range.selectNodeContents(target);
-    var sel = window.getSelection();
-    if (!sel) return false;
-    sel.removeAllRanges();
-    sel.addRange(range);
-    return true;
-  }
-
   function tableAsText(selector) {
     var container = document.querySelector(selector);
     if (!container) return "";
-    // Card-based error grid
     var cards = container.querySelectorAll(".error-card");
-    if (cards.length > 0) {
-      var lines = ["archive\tkind\tlast update"];
-      cards.forEach(function (card) {
-        var name = card.querySelector(".error-name");
-        var pill = card.querySelector(".pill");
-        var muted = card.querySelector(".error-card-foot .muted");
-        lines.push(
-          [
-            (name ? name.textContent : "").trim(),
-            (pill ? pill.textContent : "").trim(),
-            (muted ? muted.getAttribute("title") || muted.textContent : "").trim(),
-          ].join("\t"),
-        );
-      });
-      return lines.join("\n");
-    }
-    // Fallback: legacy table
-    var rows = container.querySelectorAll("tbody tr");
-    var tlines = ["archive\tkind\tlast update"];
-    rows.forEach(function (row) {
-      var cells = row.querySelectorAll("td");
-      if (cells.length < 3) return;
-      tlines.push(
-        [cells[0], cells[1], cells[2]]
-          .map(function (c) {
-            return (c.textContent || "").trim().replace(/\s+/g, " ");
-          })
-          .join("\t"),
+    if (cards.length === 0) return "";
+    var lines = ["archive\tkind\tlast update"];
+    cards.forEach(function (card) {
+      var name = card.querySelector(".error-name");
+      var pill = card.querySelector(".pill");
+      var muted = card.querySelector(".error-card-foot .muted");
+      lines.push(
+        [
+          (name ? name.textContent : "").trim(),
+          (pill ? pill.textContent : "").trim(),
+          (muted ? muted.getAttribute("title") || muted.textContent : "").trim(),
+        ].join("\t"),
       );
     });
-    return tlines.join("\n");
+    return lines.join("\n");
   }
 
   async function handleCopyUrl(button) {
@@ -145,21 +88,6 @@
     }
   }
 
-  async function handleCopySelection(button) {
-    var selector = button.getAttribute("data-copy-selection");
-    var text = selectionText(selector);
-    if (!text.trim()) {
-      toast("Nothing selected", "err");
-      return;
-    }
-    try {
-      await copyText(text);
-      toast("Copied selection");
-    } catch (err) {
-      toast("Copy failed", "err");
-    }
-  }
-
   async function handleCopyTable(button) {
     var selector = button.getAttribute("data-copy-table");
     var text = tableAsText(selector);
@@ -175,15 +103,6 @@
     }
   }
 
-  function handleSelect(button) {
-    var selector = button.getAttribute("data-select");
-    if (!selectAll(selector)) {
-      toast("Nothing to select", "err");
-      return;
-    }
-    toast("Selected");
-  }
-
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
@@ -194,41 +113,11 @@
       void handleCopyUrl(urlBtn);
       return;
     }
-    var selBtn = target.closest("[data-copy-selection]");
-    if (selBtn) {
-      event.preventDefault();
-      void handleCopySelection(selBtn);
-      return;
-    }
     var tableBtn = target.closest("[data-copy-table]");
     if (tableBtn) {
       event.preventDefault();
       void handleCopyTable(tableBtn);
       return;
-    }
-    var selectBtn = target.closest("[data-select]");
-    if (selectBtn) {
-      event.preventDefault();
-      handleSelect(selectBtn);
-    }
-  });
-
-  /* ---- log filter chips ---- */
-  document.addEventListener("click", function (event) {
-    var target = event.target;
-    if (!(target instanceof Element)) return;
-    var chip = target.closest(".filter-chip");
-    if (!chip) return;
-    var viewer = document.getElementById("logViewer");
-    if (!viewer) return;
-    var chips = viewer.parentElement ? viewer.parentElement.querySelectorAll(".filter-chip") : [];
-    chips.forEach(function (c) { c.classList.remove("active"); });
-    chip.classList.add("active");
-    var mode = chip.getAttribute("data-filter");
-    if (mode === "warnerr") {
-      viewer.classList.add("filter-warnerr");
-    } else {
-      viewer.classList.remove("filter-warnerr");
     }
   });
 

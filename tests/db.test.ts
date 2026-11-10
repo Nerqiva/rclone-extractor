@@ -22,13 +22,6 @@ test("insert or replace settings -> upsert", () => {
   );
 });
 
-test("insert or replace logs -> composite conflict", () => {
-  const out = toPgInsert(
-    "INSERT OR REPLACE INTO logs(archive_id, kind, rel_path) VALUES(?, 'extract', ?)",
-  );
-  expect(out).toContain("ON CONFLICT(archive_id, kind) DO UPDATE SET rel_path=excluded.rel_path");
-});
-
 test("insert or replace archives -> conflict on path", () => {
   const out = toPgInsert(
     "INSERT OR REPLACE INTO archives(id, path, size, status, error_kind, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)",

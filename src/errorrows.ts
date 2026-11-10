@@ -61,27 +61,6 @@ export function renderErrorCards(rows: ErrorRow[]): string {
     .join("")}</div>`;
 }
 
-/** Legacy table renderer kept for fallback; prefer renderErrorCards. */
-export function renderErrorRows(rows: ErrorRow[]): string {
-  if (rows.length === 0) {
-    return `<tr><td colspan="4" class="muted">No errors.</td></tr>`;
-  }
-  return rows
-    .map(
-      (r) => `<tr>
-      <td class="path">${esc(r.path)}</td>
-      <td><span class="pill warn">${esc(r.error_kind)}</span></td>
-      <td class="muted">${esc(r.updated_at)}</td>
-      <td class="nowrap">
-        <button class="btn small" data-copy-url="/download/archive/${encodeURIComponent(String(r.id))}?kind=extract"
-          title="Copy the full error log (extract output + command)" aria-label="Copy error log for ${esc(r.path)}">Copy</button>
-        <a class="btn small ghost" href="/download/archive/${encodeURIComponent(String(r.id))}?kind=extract" aria-label="Download error log for ${esc(r.path)}">Download</a>
-      </td>
-    </tr>`,
-    )
-    .join("");
-}
-
 export async function readErrorRows(
   store: { query: <T>(sql: string, params?: unknown[]) => Promise<T[]> },
 ): Promise<ErrorRow[]> {

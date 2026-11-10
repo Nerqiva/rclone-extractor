@@ -45,20 +45,6 @@ function sanitizeStem(s: string): string {
   return t;
 }
 
-export function parentRel(rel: string): string {
-  const idx = rel.lastIndexOf("/");
-  return idx === -1 ? "" : rel.slice(0, idx);
-}
-
-export function tmpRel(rel: string, runId: number, archiveId: number): string {
-  const name = rel.slice(rel.lastIndexOf("/") + 1);
-  return `.rclone-extractor-tmp/${runId}/${archiveId}/${stem(name)}`;
-}
-
-export function trashRel(rel: string, subdir: string): string {
-  return `${subdir}/${rel}`;
-}
-
 const TINY_BYTES = 20 * 1024;
 const SMALL_BYTES = 100 * 1024;
 

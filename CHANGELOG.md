@@ -11,6 +11,36 @@ to `main`.
 
 ## [Unreleased]
 
+### Changed
+- The `rclone.conf` working copy now lives at `${DATA_DIR}/rclone.conf`
+  (`/app/data/rclone.conf` by default) instead of the hard-coded
+  `/data/app/rclone.conf`. When that path is not writable **for any reason**
+  (read-only mount, `EACCES`/`EROFS`, full disk, ...), the working copy is
+  written to **`/tmp/app/data/rclone.conf`** instead and every rclone
+  invocation is pointed there; the app logs a warning and shows a toast (on
+  the next Configuration/Run-start response or dashboard poll). `--config`
+  follows whichever location is in effect. The Docker image no longer
+  pre-creates `/data/app`.
+
+### Removed
+- The "Warnings & Errors" filter chips on the Logs page — redundant with the
+  dedicated Errors tab and the per-run Errors log view.
+- Dropped the long-dead `logs` table (only a no-longer-read stub registry);
+  log output lives in `log_lines`. Existing databases are migrated
+  automatically (`DROP TABLE IF EXISTS logs`). Backup exports no longer
+  carry a `logs` key; older backups that still contain one import fine
+  (the key is ignored).
+- Dropped `log_lines.seq` (nothing read it; `id` is the cursor) and its
+  `idx_log_lines_scope` index, and `sessions.created_at`. Older databases
+  are migrated automatically.
+- Removed the unused `POST /rclone-conf` endpoint (settings changes go
+  through `POST /config`), the `?kind=rclone` download branch (never
+  produced), the legacy `renderErrorRows` table renderer, and several
+  unreferenced helpers, CSS rules, and client-side script branches.
+- Documentation drift fixes: `DATA_DIR` no longer documented as holding the
+  working `rclone.conf` (it lives at `${DATA_DIR}/rclone.conf`, falling back
+  to `/tmp/app/data/rclone.conf` when that is not writable).
+
 ### Security
 - Session cookies are now `Secure` (HTTPS-only) by default (`COOKIE_SECURE=0`
   opts out for plain-HTTP deployments), login sessions expire after 7 days
@@ -46,7 +76,7 @@ to `main`.
   a force-stop during listing is treated as "cancelled", not "listing
   failed".
 - Backup import is transactional, validates every record before writing
-  anything, restores the `logs` table, restores rows under their original
+  anything, restores rows under their original
   ids, resets Postgres sequences (`setval`) after restore, skips blanked
   secret values from non-secret exports (importing a safe backup no longer
   wipes stored credentials), and does not duplicate `log_lines` on
@@ -61,6 +91,11 @@ to `main`.
   at 500 entries; log downloads are capped at 50 000 lines.
 - `archives`/`stem()` sanitize archive basenames that produce empty or
   dot-only temp directory names.
+- **Errors page**: error rows whose failure produced no rclone-binary output
+  (`unsafe_path`, `interrupted`, the webapp-made skip classifications
+  `empty`/`torrent`/`website`/`tiny`, and binary commands that exit non-zero
+  with no output) now store a one-line diagnostic in the per-archive log, so
+  the error row's **Copy/Download** no longer returns a bare 404.
 
 ### Changed
 - **Per-command live progress.** The Progress page status badge and the slim
@@ -71,10 +106,13 @@ to `main`.
   the rest show an indeterminate sweeping bar. The overall segmented bar is
   unchanged, and every bar occupies the same thin slot, swapping as stages
   cycle.
-- **`--config /data/app/rclone.conf` is hard-coded.** Every rclone invocation
-  unconditionally receives it; a stored/env `rclone_conf` is written to that
-  path (atomically, mode 0600) before runs, otherwise the mounted file is
-  used as-is. Any `--config` in `remote_flags` is ignored (existing behavior).
+- **`--config` is hard-coded to the rclone.conf working copy.** Every
+  rclone invocation unconditionally receives it; a stored/env `rclone_conf`
+  is written to that path (atomically, mode 0600) before runs, otherwise the
+  file is used as-is. The path is `${DATA_DIR}/rclone.conf`
+  (`/app/data/rclone.conf` by default) and falls back to
+  `/tmp/app/data/rclone.conf` when the primary path is not writable for any
+  reason. Any `--config` in `remote_flags` is ignored (existing behavior).
 - **Stop moved to the bottom of the progress page** and now asks for
   confirmation first — **Soft stop** (the current archive finishes, then the
   run stops) or **Hard stop** (the in-flight rclone process is killed
@@ -82,7 +120,10 @@ to `main`.
   persistent "Stop requested" note.
 - **Archive logs now hold the raw output of the rclone binary only.** The
   `$ command` announcement and app-written skip/failure notes are gone from
-  per-archive logs (raw stderr/stdout is kept verbatim, stats lines excluded).
+  per-archive logs (raw stderr/stdout is kept verbatim, stats lines excluded)
+  — with one exception: failures that produce no binary output at all
+  (webapp-made classifications and silent non-zero exits) store a single
+  diagnostic line so the Errors page never serves an empty 404 download.
   The dedicated **Errors** tab and its Copy/Download show that raw output
   instead of app-generated log lines.
 - **Configuration page greys out while a task is running** — every option
