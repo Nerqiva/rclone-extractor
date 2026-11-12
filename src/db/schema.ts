@@ -22,7 +22,10 @@ CREATE TABLE IF NOT EXISTS runs(
   done INTEGER NOT NULL DEFAULT 0,
   failed INTEGER NOT NULL DEFAULT 0,
   skipped INTEGER NOT NULL DEFAULT 0,
-  interrupted INTEGER NOT NULL DEFAULT 0
+  interrupted INTEGER NOT NULL DEFAULT 0,
+  interrupted_reason TEXT,
+  outcome TEXT NOT NULL DEFAULT '',
+  error_kind TEXT
 );
 
 CREATE TABLE IF NOT EXISTS log_lines(
@@ -74,7 +77,10 @@ CREATE TABLE IF NOT EXISTS runs(
   done INTEGER NOT NULL DEFAULT 0,
   failed INTEGER NOT NULL DEFAULT 0,
   skipped INTEGER NOT NULL DEFAULT 0,
-  interrupted INTEGER NOT NULL DEFAULT 0
+  interrupted INTEGER NOT NULL DEFAULT 0,
+  interrupted_reason TEXT,
+  outcome TEXT NOT NULL DEFAULT '',
+  error_kind TEXT
 );
 
 CREATE TABLE IF NOT EXISTS log_lines(
@@ -168,7 +174,7 @@ export function toPgInsert(sql: string): string {
       return `${body} ON CONFLICT(path) DO UPDATE SET size=excluded.size, status=excluded.status, error_kind=excluded.error_kind, updated_at=excluded.updated_at`;
     }
     if (table === "runs") {
-      return `${body} ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, finished_at=excluded.finished_at, total=excluded.total, done=excluded.done, failed=excluded.failed, skipped=excluded.skipped, interrupted=excluded.interrupted`;
+      return `${body} ON CONFLICT(id) DO UPDATE SET started_at=excluded.started_at, finished_at=excluded.finished_at, total=excluded.total, done=excluded.done, failed=excluded.failed, skipped=excluded.skipped, interrupted=excluded.interrupted, interrupted_reason=excluded.interrupted_reason, outcome=excluded.outcome, error_kind=excluded.error_kind`;
     }
     return `${body} ON CONFLICT DO NOTHING`;
   }

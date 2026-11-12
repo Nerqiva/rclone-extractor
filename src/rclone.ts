@@ -9,6 +9,7 @@ import {
   RCLONE_CONF_FALLBACK_DIR,
   RCLONE_CONF_FALLBACK_PATH,
   RCLONE_BIN,
+  RCLONEX_BIN,
 } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
 import { insertLogLines } from "./log";
@@ -19,9 +20,14 @@ type SpawnError = Error & { code?: string };
 /**
  * Map Bun's raw posix_spawn errors onto a single actionable message. The raw
  * ENOEXEC ("unknown error, posix_spawn 'rclone'") is unusable in a deploy log,
- * so callers get the probable cause and the fix (matching arch, or RCLONE_BIN).
+ * so callers get the probable cause and the fix (matching arch, or the
+ * RCLONE_BIN/RCLONEX_BIN env var).
  */
-export function describeSpawnError(e: unknown, bin: string): string {
+export function describeSpawnError(
+  e: unknown,
+  bin: string,
+  binEnv: string = "RCLONE_BIN",
+): string {
   const err = (e ?? {}) as SpawnError;
   const code = err.code ?? "";
   let hint: string;
@@ -43,8 +49,8 @@ export function describeSpawnError(e: unknown, bin: string): string {
       hint = String(err.message ?? e ?? "unknown error");
   }
   return (
-    `could not start rclone (${code || "unknown error"}): ${hint}. ` +
-    `bin=${bin}. Install the rclone build matching this CPU or set RCLONE_BIN to a full path.`
+    `could not start ${binEnv === "RCLONEX_BIN" ? "rclonex" : "rclone"} (${code || "unknown error"}): ${hint}. ` +
+    `bin=${bin}. Install the build matching this CPU architecture or set ${binEnv} to a full path.`
   );
 }
 
@@ -70,7 +76,9 @@ function spawnBinary(
     });
     return proc;
   } catch (e) {
-    const wrapped = new Error(describeSpawnError(e, bin)) as Error & {
+    // Error text only; the binary name decides which env var we suggest.
+    const binEnv = bin.includes("rclonex") ? "RCLONEX_BIN" : "RCLONE_BIN";
+    const wrapped = new Error(describeSpawnError(e, bin, binEnv)) as Error & {
       code?: string;
     };
     // Keep the original posix_spawn code so callers can format it without
@@ -209,7 +217,10 @@ function assertSafeRel(rel: string): void {
   if (!isSafeRel(rel)) throw new Error(`unsafe archive path refused: ${JSON.stringify(rel)}`);
 }
 
-function parseListLine(line: string): { rel: string; size: number } | null {
+function parseListLine(
+  line: string,
+  rclonex = false,
+): { rel: string; size: number } | null {
   const idx = line.lastIndexOf(";");
   if (idx === -1) return null;
   let rel = line.slice(0, idx);
@@ -217,7 +228,7 @@ function parseListLine(line: string): { rel: string; size: number } | null {
   if (rel.startsWith("./")) rel = rel.slice(2);
   if (!rel) return null;
   const name = rel.slice(rel.lastIndexOf("/") + 1);
-  if (!isSupported(name)) return null;
+  if (!isSupported(name, rclonex)) return null;
   return { rel, size: Number.isFinite(size) ? size : 0 };
 }
 
@@ -244,18 +255,28 @@ export interface RcloneHealth {
 }
 
 let healthCache: Promise<RcloneHealth> | null = null;
+let healthCacheX: Promise<RcloneHealth> | null = null;
 
 /**
  * Probe the configured rclone once per process. Used at boot (so a broken
  * binary is visible in the deploy logs) and on the config page. Never throws.
  */
 export function checkRclone(): Promise<RcloneHealth> {
-  healthCache ??= probeRclone();
+  healthCache ??= probe(RCLONE_BIN, "rclone");
   return healthCache;
 }
 
-async function probeRclone(): Promise<RcloneHealth> {
-  const bin = RCLONE_BIN;
+/** Probe the configured rclonex once per process; mirrors checkRclone. */
+export function checkRclonex(): Promise<RcloneHealth> {
+  healthCacheX ??= probe(RCLONEX_BIN, "rclonex", "RCLONEX_BIN");
+  return healthCacheX;
+}
+
+async function probe(
+  bin: string,
+  label: string,
+  binEnv: string = "RCLONE_BIN",
+): Promise<RcloneHealth> {
   try {
     const proc = spawnBinary(bin, ["version"], {
       stdout: "pipe",
@@ -270,7 +291,7 @@ async function probeRclone(): Promise<RcloneHealth> {
     clearTimeout(killer);
     if (code === 0) {
       const detail = out.split("\n").map((l) => l.trim()).find(Boolean);
-      return { ok: true, bin, detail: detail ?? "rclone" };
+      return { ok: true, bin, detail: detail ?? label };
     }
     return {
       ok: false,
@@ -278,7 +299,7 @@ async function probeRclone(): Promise<RcloneHealth> {
       detail: (err || out || `exit ${code}`).trim(),
     };
   } catch (e) {
-    return { ok: false, bin, detail: describeSpawnError(e, bin) };
+    return { ok: false, bin, detail: describeSpawnError(e, bin, binEnv) };
   }
 }
 
@@ -381,6 +402,8 @@ export class Rclone {
     public root: string,
     public flags: string[],
     private runLog?: Logger,
+    /** True when RcloneX is enabled and its formats are eligible for queueing. */
+    public rclonexEnabled: boolean = false,
   ) {}
 
   // The --config flag is hard-coded so rclone never falls back to
@@ -394,10 +417,20 @@ export class Rclone {
     return ["--config", effectiveConfPath];
   }
 
-  static async fromSettings(runLog?: Logger): Promise<Rclone> {
+  /**
+   * Build an Rclone runner. By default it targets the rclone binary;
+   * `opts.rclonex` targets the rclonex binary (Nerqiva/rclonex) with the same
+   * flags and --config. The listing filter always reflects the rclonex
+   * setting, so archives queued in a mixed run carry format info correctly.
+   */
+  static async fromSettings(
+    runLog?: Logger,
+    opts: { rclonex?: boolean } = {},
+  ): Promise<Rclone> {
     const root = (await getSetting("scan_root", "")) ?? "";
     const flagsRaw = (await getSetting("remote_flags", "")) ?? "";
     const flags = stripConfFlags(flagsRaw.split(/\s+/).filter((f) => f.length > 0));
+    const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
 
     const storedConf = (await getSetting("rclone_conf", "")) ?? "";
     let conf = "";
@@ -421,7 +454,13 @@ export class Rclone {
       if (notice) runLog?.warn(notice);
     }
 
-    return new Rclone(RCLONE_BIN, root, flags, runLog);
+    return new Rclone(
+      opts.rclonex ? RCLONEX_BIN : RCLONE_BIN,
+      root,
+      flags,
+      runLog,
+      rclonexEnabled,
+    );
   }
 
   private announce(args: string[]): string {
@@ -467,7 +506,7 @@ export class Rclone {
     let streamError: string | undefined;
 
     const consume = async (line: string): Promise<boolean> => {
-      const parsed = parseListLine(line.replace(/\r$/, ""));
+      const parsed = parseListLine(line.replace(/\r$/, ""), this.rclonexEnabled);
       if (!parsed) return true;
       const more = await onFile(parsed.rel, parsed.size);
       return more !== false;
@@ -712,6 +751,7 @@ export class Rclone {
     dry: boolean,
     ref: RcloneRef,
     onStats?: (stats: ExtractStats) => void,
+    extraFlags: string[] = [],
   ): Promise<Outcome> {
     assertSafeRel(rel);
     const args = [
@@ -719,6 +759,7 @@ export class Rclone {
       "extract",
       `${this.root}/${rel}`,
       this.fullPath(tmp),
+      ...extraFlags,
       "--stats",
       "1s",
       "--stats-one-line",

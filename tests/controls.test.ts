@@ -6,6 +6,8 @@ beforeEach(() => {
   engineState.running = false;
   engineState.stopRequested = false;
   engineState.forceStop = false;
+  engineState.stage = "idle";
+  engineState.activity = "";
 });
 
 test("idle shows the Start button", () => {
@@ -43,4 +45,50 @@ test("force stop shows a disabled stopping state that polls itself", () => {
   expect(html).toContain("disabled");
   expect(html).toContain("is-loading");
   expect(html).toContain("every 1s");
+});
+
+test("idle shows the reuse checkbox unchecked and a Start button", () => {
+  const html = controlsFragment();
+  expect(html).toContain('name="reuse_scan" value="1"');
+  expect(html).toContain("Reuse previous scan results");
+  expect(html).not.toContain('name="reuse_scan" value="1" checked');
+  expect(html).not.toContain("Skip listing");
+});
+
+test("listing stage shows Skip listing only", () => {
+  engineState.running = true;
+  engineState.stage = "listing";
+  const html = controlsFragment();
+  expect(html).toContain("Skip listing");
+  expect(html).not.toContain("Skip archive");
+  expect(html).not.toContain("Skip inspection");
+});
+
+test("queueing stage shows no skip controls", () => {
+  engineState.running = true;
+  engineState.stage = "queueing";
+  const html = controlsFragment();
+  expect(html).not.toContain("Skip listing");
+  expect(html).not.toContain("Skip archive");
+  expect(html).not.toContain("Skip inspection");
+});
+
+test("inspecting an archive shows Skip inspection and Skip archive", () => {
+  engineState.running = true;
+  engineState.stage = "extracting";
+  engineState.activity = "Inspecting archive";
+  const html = controlsFragment();
+  expect(html).toContain("Skip inspection");
+  expect(html).toContain("Skip archive");
+  expect(html).not.toContain("Skip listing");
+});
+
+test("extracting an archive shows only Skip archive", () => {
+  engineState.running = true;
+  engineState.stage = "extracting";
+  engineState.activity = "Extracting";
+  const html = controlsFragment();
+  expect(html).toContain("Skip archive");
+  expect(html).not.toContain("Skip inspection");
+  expect(html).not.toContain("Skip listing");
 });

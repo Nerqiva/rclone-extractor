@@ -72,29 +72,43 @@ test("classifyArchive: >=60% .torrent", () => {
   ).toBeNull();
 });
 
-test("classifyArchive: website markers and >=20% small files", () => {
+test("classifyArchive: two or more distinct web extensions classify as website dump", () => {
+  // Distinct extensions count, not files: 3 distinct exts, big files welcome.
   const website = statsFor([
-    ["index.html", 500],
-    ["a.css", 500],
-    ["b.js", 500],
-    ["c.jpg", 150 * 1024],
+    ["index.html", 150 * 1024],
+    ["assets/style.css", 150 * 1024],
+    ["assets/app.js", 150 * 1024],
+    ["downloads/big-movie.bin", 200 * 1024],
   ]);
   expect(classifyArchive(website)).toBe("website");
 
-  // marker present but <20% small files
-  const big = statsFor([
-    ["index.html", 500],
-    ["a.jpg", 200 * 1024],
-    ["b.jpg", 200 * 1024],
-    ["c.jpg", 200 * 1024],
-    ["d.jpg", 200 * 1024],
-    ["e.jpg", 200 * 1024],
-    ["f.jpg", 200 * 1024],
+  // A single distinct web extension, however many files, is not a website dump.
+  const one = statsFor([
+    ["index.html", 200 * 1024],
+    ["a.html", 200 * 1024],
+    ["b.html", 200 * 1024],
   ]);
-  expect(classifyArchive(big)).toBeNull();
+  expect(classifyArchive(one)).toBeNull();
+
+  // Nested directories count toward distinct extensions.
+  const nested = statsFor([
+    ["site/pages/home.html", 500],
+    ["site/assets/css/main.scss", 500],
+    ["site/assets/fonts/inter.woff2", 500],
+    ["docs/readme.bin", 500],
+  ]);
+  expect(classifyArchive(nested)).toBe("website");
+
+  // Case-insensitive extension matching.
+  const upper = statsFor([
+    ["INDEX.HTML", 500],
+    ["STYLE.CSS", 500],
+    ["X.JS", 500],
+  ]);
+  expect(classifyArchive(upper)).toBe("website");
 });
 
-test("classifyArchive: extension and marker matching is case-insensitive", () => {
+test("classifyArchive: extension matching is case-insensitive", () => {
   const upper = statsFor([
     ["INDEX.HTML", 500],
     ["STYLE.CSS", 500],

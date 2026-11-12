@@ -19,25 +19,45 @@ scan  →  extract  →  promote  →  trash
 
 - **Scan any rclone remote** (S3, SFTP, Google Drive, local path, …) for
   supported archives: `.zip .tar .tar.gz .tgz .taz .tar.bz2 .tb2 .tbz .tbz2
-  .tz2 .tar.lz .tar.lz4 .tar.xz .txz .tar.zst .tzst .tar.br .tar.sz .tar.mz`
+  .tz2 .tar.lz .tar.lz4 .tar.xz .txz .tar.zst .tzst .tar.br .tar.sz .tar.mz`,
+  plus (when RcloneX is enabled) `.rar .7z .iso` and multivolume archives
+  (`.partN.rar`, `.7z.NNN`).
 - **Extract → promote → trash** pipeline, one archive at a time, fully
   cancellable mid-run.
+- **RcloneX integration** (optional) — when enabled, RAR/RAR5, multivolume
+  RAR, 7Z, multivolume 7Z and ISO archives are extracted with
+  [Nerqiva/rclonex](https://github.com/Nerqiva/rclonex); everything else
+  (ZIP, TAR, …) stays on rclone's native `archive extract`. Encrypted
+  archives and entry-error tolerance are exposed as Configuration-page
+  checkboxes.
 - **Content filters before extraction** — every archive is inspected with
   `rclone archive list --files-only`; torrent/website/tiny/empty or
   unreadable archives are skipped, never extracted. Archives in `trash_subdir`
-  are not queued.
+  are not queued. Archives classified as website dumps (two or more distinct
+  web-development extensions anywhere in the archive) are skipped entirely.
 - **Live progress page** — KPI cards, a segmented progress bar, stage text,
   per-run rate/ETA, the active rclone command, done/failed/skipped counters,
   and a slim live bar that follows the in-flight rclone command: real progress
   (bytes/speed/ETA) for transfer commands (extract / move / moveto), an
   indeterminate sweeping bar for the rest (lsf, archive list, purge, rmdir).
   Updates every second without a page reload.
+- **Skip controls** — skip the listing stage, the current archive's
+  inspection, or the current archive entirely. Skips are temporary, this run
+  only, and never persist; a skipped archive stays queued for the next run.
+- **Reuse Previous Scan Results** — an opt-in, non-sticky checkbox on the
+  Progress page that reuses the cached archive list from the last completed
+  scan of the same `scan_root` instead of rescanning the remote (falls back
+  to a fresh scan when the cache is unusable).
 - **Mobile-friendly logs** — the log and error views are selectable text with
   Copy all / Copy selection / Select all / Download controls.
 - **Continue previous task** — resumable runs. If the app crashes or is
   restarted mid-job, archives stuck in *extracting* are automatically re-queued.
-  Runs closed by crash recovery are shown as **Interrupted** (not *Completed*)
-  on the progress and logs pages.
+  Runs have an explicit outcome: a **user stop** ends as **Interrupted**, a
+  **host/process stop** (deploy `SIGTERM`, SIGKILL, OOM, crash) ends as
+  **Killed**, and an **app-caused error** ends as **Error** with an error code
+  (see the Logs page, Errors tab, and the run log). The finished/ended time is
+  shown on the progress page when a run is not running, and the cause and time
+  appear alongside the badge.
 - **Choose your database** — SQLite by default, or a remote **PostgreSQL**
   server (e.g. Aiven, Supabase, RDS). Everything persists in the DB, so an
   ephemeral container filesystem loses nothing.
@@ -84,9 +104,10 @@ docker run -d --name rclone-extractor \
 
 When `DATABASE_URL` is set, Postgres is used and the schema is created
 automatically on first boot. Existing databases are migrated automatically on
-boot as well (currently: the `runs.interrupted` flag used to show crashed-but-
-closed runs as **Interrupted**, the dropped legacy `logs` table, and the
-dropped `log_lines.seq` / `sessions.created_at` columns). Index DDL failures
+boot as well (currently: the `runs.interrupted` flag, and the newer
+`outcome`/`error_kind` columns — runs closed by crash recovery before them
+read as **Killed** — the dropped legacy `logs` table, and the dropped
+`log_lines.seq` / `sessions.created_at` columns). Index DDL failures
 during schema install are logged and skipped rather than crashing the
 process; a critical table that is missing or unreadable fails with a clear
 error naming it.
@@ -169,14 +190,16 @@ DATA_DIR=/app/data                     # SQLite file (only needed for SQLite); r
 # --- rclone ---
 RCLONE_CONF=                           # generate with: base64 -w0 rclone.conf
 RCLONE_BIN=rclone                      # full path to rclone (arch-matching build, for hosts without /usr/local/bin/rclone)
+RCLONEX_BIN=rclonex                    # full path to the rclonex binary (the Docker image installs it at /usr/local/bin/rclonex)
 
 # --- http ---
 BIND=0.0.0.0                           # bind address
 PORT=8080                              # listen port
+APP_TZ=Asia/Omsk                       # timezone used for every time shown in the UI (DB and backups stay UTC)
 ```
 
 > The remaining settings (`scan_root`, `remote_flags`, `queue_max`,
-> `max_archive_size`, `sort_by`,
+> `max_archive_size`, `min_archive_size`, `sort_by`,
 > `sort_dir`, `trash_subdir`, `dry_run`, `resume`) are configured on the
 > **Configuration** page and stored in the database. See the tables below.
 
@@ -195,6 +218,7 @@ database. They can also be seeded from environment variables.
 | `SECRET_KEY` | *(empty)* | Passphrase for encrypting stored secrets. **Omit to disable encryption.** |
 | `RCLONE_CONF` | *(empty)* | Base64-encoded `rclone.conf`, used as a fallback when the stored `rclone_conf` setting is empty. Generate with `base64 -w0 rclone.conf`. |
 | `RCLONE_BIN` | `rclone` | Path to the rclone binary. Set this to a full path if your host does not have rclone on `PATH`, or if you must install the build that matches your CPU (arm64 vs amd64). |
+| `RCLONEX_BIN` | `rclonex` | Path to the rclonex binary. The Docker image installs it at `/usr/local/bin/rclonex` via the official [install script](https://github.com/Nerqiva/rclonex) (always the latest release, checksum-verified). |
 | `DATABASE_URL` | *(empty)* | Postgres connection string. When empty, SQLite at `DATA_DIR/app.db` is used. |
 | `PG_POOL_MAX` | `4` | Max connections this app opens to Postgres (keep small; see below). |
 | `COOKIE_SECURE` | `1` | Session cookie is `Secure` (HTTPS only). Set `0` only when serving over plain HTTP. |
@@ -202,6 +226,7 @@ database. They can also be seeded from environment variables.
 | `DATA_DIR` | `/app/data` | Directory for the SQLite file and the transient `rclone.conf` working copy (falls back to `/tmp/app/data` if not writable for any reason). Only needed when using SQLite or a stored `rclone_conf`. |
 | `BIND` | `0.0.0.0` | HTTP bind address. |
 | `PORT` | `8080` | HTTP port. |
+| `APP_TZ` | `Asia/Omsk` | IANA timezone used for every time shown in the UI (e.g. `Europe/Berlin`). The database and backups stay in UTC. Invalid values warn at boot and fall back to `Asia/Omsk`. |
 
 ### Settings (Configuration page)
 
@@ -210,12 +235,19 @@ database. They can also be seeded from environment variables.
 | `scan_root` | rclone remote or path to scan, e.g. `s3:bucket/archives` or `/data/in`. |
 | `remote_flags` | Extra flags appended to every rclone command. `--config /app/data/rclone.conf` is passed unconditionally (any `--config` here is ignored; when `/app/data` is not writable the `/tmp/app/data/rclone.conf` fallback is used). |
 | `queue_max` | Maximum archives queued per run (default `500`). |
+| `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
+| `rclonex` | **Enable RcloneX** (default off). When on, archives whose format rclone cannot handle — RAR/RAR5, multivolume RAR (`x.partN.rar` / `x.r00…`), 7Z, split/multivolume 7Z (`x.7z.NNN`), and ISO9660 — are queued and extracted with rclonex, including multivolume sets (only the first volume is queued: `part1.rar` / `.7z.001` / plain `.rar`). Everything else stays on rclone's native `archive extract`. When off, these formats are not queued at all. |
+| `rclonex_skip_inspection` | Skip the archive content inspection for archives handled by RcloneX (default on — rclonex does not implement `archive list` for RAR/7Z/ISO). Other formats are always inspected. When off, inspection runs for RcloneX formats via rclonex; an inspection failure marks the archive `unreadable` and it is never extracted. |
+| `auto_skip_known` | Keep reappearing archives classified as a torrent or website dump skipped automatically (default on — they are never re-queued/re-inspected). Uncheck to re-inspect such reappearing archives on later runs. |
+| `rclonex_continue_on_error` | RcloneX flag `--archive-continue-on-error` (default off): keep extracting when an archive entry fails instead of aborting the archive. |
+| `rclonex_archive_password_enabled` + `rclonex_archive_password` | RcloneX flag `--archive-password` (default off): password for encrypted RAR/7Z archives (multivolume sets included). The password is stored encrypted at rest; leaving the field blank on save keeps the stored value, and the **Clear** button removes it (disables the flag). |
+| `rclonex_window_size_enabled` + `rclonex_window_size` | RcloneX flag `--archive-window-size` (default off, rclonex keeps its own 16 MiB): sliding-window cache size in bytes for random-access formats read by rclonex (7Z, ISO). `0` disables caching. |
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
 | `dry_run` | When on, rclone runs with `--dry-run`; nothing is moved or deleted. |
 | `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
 | `tmp_dir` | Where rclone extracts archives temporarily (default `.rclone-extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
-| `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`interrupted`. |
+| `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`killed`. |
 | `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. When set, it is written to `/app/data/rclone.conf` before rclone runs — if that path is not writable for any reason, it is written to `/tmp/app/data/rclone.conf` instead (warning in the server log and a toast). Otherwise the file at `/app/data/rclone.conf` (e.g. a mounted rclone.conf) is used as-is. |
 
 Most settings are shown as compact rows on the Configuration page, each with a
@@ -307,8 +339,9 @@ For each archive at `<ROOT>/<REL>`:
 
 ```
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";"
-inspect: rclone archive list <ROOT>/<REL> --files-only
+inspect: rclone archive list <ROOT>/<REL> --files-only (skipped for RcloneX formats by default)
 extract: rclone archive extract <ROOT>/<REL> <TMPDIR>/<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
+         (or `rclonex archive extract` for RcloneX-handled formats, with the configured --archive-* flags)
 promote: rclone move <TMPDIR>/<runid>/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
 cleanup: rclone purge <TMPDIR>/<runid>/<archiveid>/<stem>
 rmdir:   rclone rmdir <TMPDIR>/<runid>/<archiveid> (then <runid>/ and the tmp root; falls back to purge when not empty)
@@ -373,11 +406,45 @@ all are disabled while a task is running except **Clear queues**):
 - **Clear everything** wipes queue, history, logs, errors and the tmp
   directory; next run starts from #1.
 
+### RcloneX (optional)
+
+[Nerqiva/rclonex](https://github.com/Nerqiva/rclonex) is a public fork of
+rclone that extends `archive extract` with streaming remote-to-remote
+extraction for **RAR/RAR5, multivolume RAR, 7Z, multivolume 7Z and ISO9660**.
+Enable it with **Enable RcloneX** on the Configuration page.
+
+- **Extractor selection is deterministic** — rclonex handles exactly the
+  formats above; everything else (ZIP, TAR family, …) always uses rclone's
+  native `archive extract`. Promotion/move/trash/rmdir are rclone operations
+  in both modes.
+- **Multivolume sets** — only the first volume is queued and extracted:
+  `name.part1.rar` (or `part01.rar`), `name.rar` (old-style `.r00…` sets), and
+  `name.7z.001`. Volumes 2..N are never queued. The stem used for temp
+  extraction names strips the multivolume marker.
+- **RAR5** is supported as part of the RAR format — no separate toggle.
+- When RcloneX is disabled, those formats are not queueable at all (they are
+  filtered out of the listing exactly like `.sqfs`), and every archive-family
+  capability beyond upstream rclone is off.
+- **Inspection is skipped by default** for RcloneX-handled archives (rclonex
+  does not implement `archive list` for RAR/7Z/ISO), controlled by the
+  **Skip inspection for RcloneX formats** option — off means inspection runs
+  through rclonex; an inspection failure marks the archive `unreadable` and
+  it is never extracted. ZIP/TAR/etc. always inspect as before.
+- **Flags**: `--archive-continue-on-error`, `--archive-password` (encrypted at
+  rest, blank field on save keeps the stored value, **Clear** removes it), and
+  `--archive-window-size` (bytes; `0` disables caching) are exposed as
+  Configuration checkboxes, all **off by default**.
+- **Docker**: the image installs the latest rclonex release (or the newest
+  pre-release when no stable exists) via the official install script, with
+  sha256 checksums verified, installed to `/usr/local/bin/rclonex`. Outside
+  Docker set `RCLONEX_BIN` to a full path. The config page shows an rclonex
+  version row when the feature is enabled.
+
 ### Content filters (before extraction)
 
 Every archive is inspected before anything is extracted, using
 `rclone archive list --files-only`. Only files are counted — directories are
-excluded — and all extension/name matching is case-insensitive. Sizes are in
+excluded — and all extension matching is case-insensitive. Sizes are in
 bytes, and KB means 1024 bytes.
 
 An archive is **skipped** (`status='skipped'`, never extracted) when ANY of
@@ -387,18 +454,20 @@ these holds:
 |---|---|
 | `empty` | The archive lists 0 files. |
 | `torrent` | ≥ 60% of files are `.torrent`. |
-| `website` | At least one file is a website marker (`.html .htm .xhtm .xhtml .css .js .woff .woff2 .eot`, `robots.txt`, `index.html`, `sitemap.xml`) **and** ≥ 20% of files are smaller than 100 KB. |
+| `website` | Two or more **distinct** recognized web-development file extensions (`.html .htm .xhtml .xhtm .css .scss .less .js .mjs .cjs .map .php .asp .aspx .jsp .vue .svelte .astro .woff .woff2 .eot`) are found anywhere in the archive — root or any nested directory. File sizes are not considered. |
 | `tiny` | ≥ 60% of files are smaller than 20 KB. |
 | `unreadable` | `archive list` fails (corrupt, truncated, or otherwise unreadable/unsupported). |
 
 If the listing error mentions a password, the skip reason is `password`
 (same as a password failure during extraction). Skipped archives are never
 re-queued on later runs and stay in place; the reason is visible on the
-Errors page (as the error-kind pill).
+Errors page (as the error-kind pill). Archives previously skipped as a
+torrent or website dump that reappear in a later listing are auto-skipped by
+default (see `auto_skip_known`).
 
 Error rows store the underlying diagnostics. Failures caused by the **rclone
 binary** write its raw output to the per-archive log; failures caused by the
-**web app** (e.g. `unsafe_path`, `interrupted`, and the skip classifications
+**web app** (e.g. `unsafe_path`, `killed`, and the skip classifications
 above, which are made by the app after a successful listing) store a
 web-app-written diagnostic line instead, so the error row's **Copy/Download**
 always shows something — never a bare 404. Binary failures that produce no
@@ -406,11 +475,11 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
 
 ### Queue and re-runs
 
-- `max_archive_size` (in bytes; `0` = no limit) is enforced while listing —
-  over-limit archives are ignored entirely (never inserted into the queue) and
-  re-evaluated on every run — and again when a run selects queued rows, so
-  rows that were queued before the limit was set are skipped too. Raising the
-  limit takes effect on the next listing/run.
+- `max_archive_size` / `min_archive_size` (in bytes; `0` = no limit) are
+  enforced while listing — out-of-range archives are ignored entirely (never
+  inserted into the queue) and re-evaluated on every run — and again when a
+  run selects queued rows, so rows queued before the limits were set are
+  skipped too. An archive sized exactly at a limit is kept.
 - `queue_max` (clamped to a positive integer) caps both how many paths are
   accepted while listing and how many queued rows are selected for a run.
 - New paths are added as `queued`. Archives whose path lives under
@@ -419,36 +488,85 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
 - A path already marked `done` that appears in
   the listing again is treated as a new upload and re-queued — except in
   dry-run mode, where the original archive is never moved and re-queueing would
-  repeat the same work every run.
+  repeat the same work every run. A reappearing path previously classified as
+  a torrent or website dump is likewise skipped by default (see
+  `auto_skip_known`).
 - **Start** re-queues archives in the `failed` state and clears their
   `error_kind`. Stale `extracting` rows are also recovered on boot/Start
-  (re-queued with `resume` on, marked `interrupted` with it off).
-- **Stop** sits at the bottom of the progress page and asks for confirmation
+  (re-queued with `resume` on, marked `killed` with it off).
+- **Stop** sits at the bottom of the progress page (pinned in place after the
+  controls row so it no longer shifts when clicked) and asks for confirmation
   first (no explanation text — just the two choices): **Soft stop** lets the
-  current archive finish (the run ends with the `cancelled` stage); **Hard
+  current archive finish; **Hard
   stop** kills the in-flight rclone process immediately, re-queues the
   interrupted archive (never counted as done/failed/skipped) and ends the run
-  as `cancelled`. The panel shows a persistent "Stop requested" message while
+  with `outcome = interrupted`. The panel shows a persistent "Stop requested" message while
   a soft stop is pending.
+- **Skip** controls appear in the same row, only while they apply, and are
+  never persisted: **Skip listing** (while the archive scan is running) treats
+  the listing as completed and goes straight to the queue using the archives
+  already stored — the scan is stopped early, not cancelled; **Skip
+  inspection** (while an archive is being inspected) treats the inspection as
+  passed and extracts the archive; **Skip archive** stops the current archive
+  and leaves it queued — it is retried on the next run (it is also counted as
+  skipped for this run's counters). A skip affects only the archive/stage in
+  flight — never subsequent archives, later runs, or the queue order.
+- **Reuse Previous Scan Results** is an opt-in checkbox on the **Start** row
+  (unchecked by default). When ticked, the run does not rescan the remote; it
+  rebuilds the queue from the archives already stored in the database, reusing
+  the last **completed** scan of the same `scan_root`. If the cached scan is
+  missing, incomplete, or for a different root, the app falls back to a fresh
+  scan automatically. The checkbox is not remembered — every run starts
+  unchecked, and the cached data itself is never modified or deleted.
 - All action buttons share the same feedback: a spinner and disabled state
   while the request is in flight, then a toast (via the `HX-Trigger` response
   header) reporting the outcome.
 - An archive becomes `done` only when extract, promote, cleanup, and trash all
   succeed. Cleanup failure is logged as a warning; extract, promote, or trash
-  failure marks the archive `failed`. A run stopped by the user ends with the
-  `cancelled` stage, and unfinished runs are closed on the next boot and marked
-  `interrupted`, so the UI shows them as **Interrupted** rather than *Completed*.
+  failure marks the archive `failed`. A run stopped by the user ends with
+  `outcome = interrupted` (``interrupted = 1``) and ends with **Interrupted**
+  shown in the UI; a run the host stops (crash, SIGKILL/OOM, or `SIGTERM`/
+  `SIGINT` at shutdown) ends with `outcome = killed` (**Killed**), and a run
+  the app itself fails ends with `outcome = error` and an `error_kind` code
+  (**Error**). App errors never show as Interrupted or Completed. The cause
+  (or code) and time are recorded on the run and shown on both the progress
+  and logs pages (e.g. `stopped by user (hard stop)`,
+  `received SIGTERM (deploy or restart)`, or `previous process exited mid-run
+  (crash or kill)` detected at the next boot); the progress page also shows
+  the **Ended** time when a run is not running.
 
 ### Continue previous task (resume)
 
 - On **boot** and on **Start**, archives left in `extracting` by a crash are
   handled again (when `resume` is on): they are reset to `queued`.
 - When `resume` is off, those archives are instead marked `failed` with
-  `error_kind = interrupted`, so they never sit in `extracting` forever. They
+  `error_kind = killed`, so they never sit in `extracting` forever. They
   show up on the Errors page and are re-queued on the next **Start** like any
   other failed archive.
+- A run left unfinished (crash, hard kill, or the process receiving
+  `SIGTERM`/`SIGINT` mid-run) is closed with `outcome = killed`, `interrupted = 1`,
+  and a recorded cause and time — a graceful stop records
+  `received SIGTERM/SIGINT` at the moment it happens; a hard kill is recorded
+  at the next boot instead. The cause and time are shown on the progress and
+  logs pages.
+- An **app-caused error** (misconfiguration, a listing failure the app
+  surfaces as an exception, a database error) closes the run with
+  `outcome = error` and an `error_kind` code — `no_scan_root`,
+  `invalid_trash_subdir`, `invalid_tmp_dir`, `listing_failed`, or
+  `engine_error` — plus log lines in the run's `errors` log. App errors never
+  show as Interrupted or Completed.
 
-This makes an interrupted run safe to resume by simply restarting the app.
+This makes an interrupted or killed run safe to resume by simply restarting
+the app.
+
+### Browser navigation
+
+Navigating away with the URL bar's **Back/Forward** buttons never stops a
+run. Stop and Skip are POST-only endpoints (plus CSRF) and the run executes
+server-side, so no history entry can trigger them. Pages are served with
+`Cache-Control: no-store`, and a page restored from the back-forward cache
+reloads itself instead of showing a stale run state — clicking a stale Stop
+button is not possible.
 
 ### Authentication & sessions
 
@@ -517,7 +635,7 @@ src/
     pages.ts       GET /  /config  /logs  /errors
     auth.ts        login/logout, DB sessions, CSRF middleware
     dashboard.ts   GET /dashboard/fragment (progress panel poll target)
-    actions.ts     POST /run/start  /run/stop  /config
+    actions.ts     POST /run/start  /run/stop  /run/skip  /config  /config/rclonex-clear
     logsapi.ts     GET /logs/fragment  /errors/fragment  + downloads
     data.ts        POST /export  POST /import
 public/
@@ -539,8 +657,8 @@ GET  /dashboard/fragment   live progress panel  (auth)
 GET  /dashboard/controls   run controls         (auth)
 GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
-POST /run/start  /run/stop                     (auth)
-POST /config  /config/rclone-clear  (auth)
+POST /run/start  /run/stop  /run/skip               (auth)
+POST /config  /config/rclone-clear  /config/rclonex-clear  (auth)
 POST /maintenance/queues  /maintenance/runs  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)
 POST /export  /import                          (auth)
@@ -600,7 +718,7 @@ SECRET_KEY=dev-key APP_PASSWORD=dev bun run src/server.ts
 | Runtime | Bun 1.4.x |
 | HTTP | Hono 4.x |
 | Database | `bun:sqlite` or `Bun.SQL` (Postgres) |
-| Processes | `Bun.spawn` (rclone) |
+| Processes | `Bun.spawn` (rclone / rclonex) |
 | Encryption | Node `crypto` (AES-256-GCM) |
 | UI | htmx 2.0.11, server-rendered |
 

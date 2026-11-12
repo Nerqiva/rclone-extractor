@@ -1,3 +1,5 @@
+import { APP_TZ } from "./config";
+
 /** Sanitize a message for an HX-Trigger appToast header (ASCII-safe). */
 function sanitizeToast(message: string): string {
   return message
@@ -28,6 +30,47 @@ export function esc(s: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/**
+ * Every time shown in the UI renders in the configured display timezone
+ * (APP_TZ, default Asia/Omsk). The DB and backups stay in UTC. Falls back to
+ * "—" for unparseable input. `withDate` includes the date (used for Ended/
+ * Started); otherwise only the time is shown (used for log lines).
+ */
+export function fmtDisplayTime(iso: string, withDate = false): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  const opts: Intl.DateTimeFormatOptions = withDate
+    ? {
+        timeZone: APP_TZ,
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZoneName: "short",
+      }
+    : {
+        timeZone: APP_TZ,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      };
+  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(t));
+}
+
+/**
+ * Small superscript "(i)" indicator beside a control. Hover/focus shows the
+ * tooltip on desktop; tapping toggles it on touch devices (and hides it via
+ * the shared .open class). Rendered as a real button so it is keyboard
+ * accessible; the full tip is the accessible name.
+ */
+export function info(tip: string): string {
+  return `<button type="button" class="info-i" data-tip="${esc(tip)}" aria-label="${esc(tip)}">i</button>`;
 }
 
 // Shared toast + busy-state behaviour for every page. htmx buttons show a
@@ -83,6 +126,36 @@ const GLOBAL_SCRIPT = `<script>
     var detail = event.detail || {};
     if (typeof detail === "string") { toast(detail, "ok"); return; }
     toast(detail.message || "", detail.kind || "ok");
+  });
+
+  // Superscript "(i)" info indicators: tap toggles the tooltip (touch
+  // devices); Escape or a tap elsewhere closes it. Hover/focus styling is
+  // handled in CSS, so desktop needs no JS at all.
+  function closeInfoTips() {
+    var open = document.querySelectorAll(".info-i.open");
+    for (var i = 0; i < open.length; i++) open[i].classList.remove("open");
+  }
+  document.body.addEventListener("click", function (event) {
+    var tip = event.target.closest ? event.target.closest(".info-i") : null;
+    if (!tip) {
+      if (!event.target.closest || !event.target.closest(".info-i")) closeInfoTips();
+      return;
+    }
+    // Keep a tap from activating the surrounding label/button.
+    event.preventDefault();
+    event.stopPropagation();
+    var wasOpen = tip.classList.contains("open");
+    closeInfoTips();
+    if (!wasOpen) tip.classList.add("open");
+  }, true);
+  // A page restored from the back-forward cache can show a stale run state
+  // (e.g. an old Stop button). Re-fetch fresh instead.
+  window.addEventListener("pageshow", function (event) {
+    if (event.persisted) window.location.reload();
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") closeInfoTips();
   });
 
   function showModal(id) {

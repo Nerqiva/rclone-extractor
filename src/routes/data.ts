@@ -83,6 +83,9 @@ interface ValidatedRun {
   failed: number;
   skipped: number;
   interrupted: number;
+  interrupted_reason: string | null;
+  outcome: string;
+  error_kind: string | null;
 }
 
 interface ValidatedLogLine {
@@ -134,7 +137,24 @@ function validateRuns(raw: unknown): ValidatedRun[] | string {
     const failed = asInt(r.failed ?? 0) ?? 0;
     const skipped = asInt(r.skipped ?? 0) ?? 0;
     const interrupted = asInt(r.interrupted ?? 0) ?? 0;
-    out.push({ id, started_at, finished_at, total, done, failed, skipped, interrupted });
+    // Backups written before interrupted_reason existed import with null.
+    const interrupted_reason = asOptStr(r.interrupted_reason, 500);
+    if (interrupted_reason === undefined) {
+      return `runs[${i}].interrupted_reason is not a string`;
+    }
+    // Backups written before outcome/error_kind existed import as empty.
+    const outcome = asOptStr(r.outcome, 32) ?? "";
+    if (outcome === undefined) {
+      return `runs[${i}].outcome is not a string`;
+    }
+    const outcomeValue = ["", "finished", "interrupted", "killed", "error"].includes(outcome)
+      ? outcome
+      : "";
+    const error_kind = asOptStr(r.error_kind, 64);
+    if (error_kind === undefined) {
+      return `runs[${i}].error_kind is not a string`;
+    }
+    out.push({ id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome: outcomeValue, error_kind });
   }
   return out;
 }
@@ -252,8 +272,8 @@ data.post("/import", async (c) => {
         await tx.run("DELETE FROM log_lines WHERE scope = 'run' AND ref_id = ?", [r.id]);
         await tx.run("DELETE FROM runs WHERE id = ?", [r.id]);
         await tx.run(
-          "INSERT INTO runs(id, started_at, finished_at, total, done, failed, skipped, interrupted) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-          [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped, r.interrupted],
+          "INSERT INTO runs(id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped, r.interrupted, r.interrupted_reason, r.outcome, r.error_kind],
         );
       }
       if (runs.length > 0) counts.push(`${runs.length} runs`);

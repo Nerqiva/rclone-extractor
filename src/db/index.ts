@@ -14,7 +14,7 @@ export interface Store {
   close(): Promise<void>;
 }
 
-export const SECRET_KEYS = new Set(["rclone_conf", "database_url"]);
+export const SECRET_KEYS = new Set(["rclone_conf", "database_url", "rclonex_archive_password"]);
 
 export const store: Store = DATABASE_URL
   ? new PostgresStore(DATABASE_URL)
@@ -25,6 +25,7 @@ const defaults: Record<string, string> = {
   remote_flags: "",
   queue_max: "500",
   max_archive_size: "0",
+  min_archive_size: "0",
   sort_by: "path",
   sort_dir: "asc",
   dry_run: "0",
@@ -34,6 +35,16 @@ const defaults: Record<string, string> = {
   database_url: DATABASE_URL,
   rclone_conf: "",
   last_run_id: "0",
+  rclonex: "0",
+  rclonex_skip_inspection: "1",
+  rclonex_continue_on_error: "0",
+  rclonex_archive_password_enabled: "0",
+  rclonex_archive_password: "",
+  rclonex_window_size_enabled: "0",
+  rclonex_window_size: "16777216",
+  auto_skip_known: "1",
+  scan_cache_key: "",
+  scan_cache_state: "incomplete",
 };
 
 const INIT_ATTEMPTS = 5;
@@ -61,6 +72,10 @@ export async function initDb(): Promise<void> {
 async function initDbOnce(): Promise<void> {
   await store.init();
   await migrateRunsInterrupted();
+  await migrateRunsInterruptedReason();
+  await migrateRunsOutcome();
+  await migrateRunsErrorKind();
+  await migrateBackfillRunOutcome();
   await migrateDropLogs();
   await migrateDropLogLinesSeq();
   await migrateDropSessionsCreatedAt();
@@ -100,6 +115,74 @@ async function migrateRunsInterrupted(): Promise<void> {
       throw e;
     }
   }
+}
+
+/**
+ * Add the `runs.interrupted_reason` column: why the run was closed by
+ * crash recovery (NULL for runs that finished normally or predate this
+ * migration). Idempotent; the fresh-install schema already includes it.
+ */
+async function migrateRunsInterruptedReason(): Promise<void> {
+  try {
+    await store.run(
+      "ALTER TABLE runs ADD COLUMN interrupted_reason TEXT",
+    );
+    console.log("migrated: added runs.interrupted_reason");
+  } catch (e) {
+    const msg = String(e).toLowerCase();
+    if (!msg.includes("duplicate") && !msg.includes("already exists")) {
+      throw e;
+    }
+  }
+}
+
+/**
+ * Add `runs.outcome`: one of '', finished, interrupted (user stop), killed
+ * (host stopped the process: crash, SIGKILL/OOM, SIGTERM/SIGINT deploy), or
+ * error (the app itself failed). Idempotent; fresh installs already have it.
+ */
+async function migrateRunsOutcome(): Promise<void> {
+  try {
+    await store.run("ALTER TABLE runs ADD COLUMN outcome TEXT NOT NULL DEFAULT ''");
+    console.log("migrated: added runs.outcome");
+  } catch (e) {
+    const msg = String(e).toLowerCase();
+    if (!msg.includes("duplicate") && !msg.includes("already exists")) {
+      throw e;
+    }
+  }
+}
+
+/**
+ * Add `runs.error_kind`: short app-error code recorded when outcome='error'
+ * (no_scan_root, invalid_trash_subdir, invalid_tmp_dir, listing_failed,
+ * engine_error). Idempotent; fresh installs already have it.
+ */
+async function migrateRunsErrorKind(): Promise<void> {
+  try {
+    await store.run("ALTER TABLE runs ADD COLUMN error_kind TEXT");
+    console.log("migrated: added runs.error_kind");
+  } catch (e) {
+    const msg = String(e).toLowerCase();
+    if (!msg.includes("duplicate") && !msg.includes("already exists")) {
+      throw e;
+    }
+  }
+}
+
+/**
+ * Backfill outcome for runs closed before the outcome column existed. Every
+ * historical interrupted=1 row was a host/process death (SIGTERM at shutdown
+ * or crash/kill detected at boot) — never a user stop — so they read as
+ * killed. Rows with a finish time and no interrupted flag read as finished.
+ */
+async function migrateBackfillRunOutcome(): Promise<void> {
+  await store.run(
+    "UPDATE runs SET outcome='killed' WHERE outcome='' AND interrupted=1",
+  );
+  await store.run(
+    "UPDATE runs SET outcome='finished' WHERE outcome='' AND interrupted=0 AND finished_at IS NOT NULL",
+  );
 }
 
 /**

@@ -324,6 +324,13 @@ textarea {
 .check input {
   width: auto;
 }
+.check-input {
+  width: 14em;
+  margin-left: 2px;
+}
+.check-input.small-num {
+  width: 9em;
+}
 
 /* ---- buttons ---- */
 .btn {
@@ -373,6 +380,34 @@ textarea {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+/* Controls row on the progress page: one line, Stop pinned at the dock's
+   right edge so it never shifts as the note/skip buttons come and go. */
+.controls-row {
+  flex-wrap: nowrap;
+}
+.controls-row .stop-note,
+.controls-row .muted {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(420px, 100%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.controls-row .btn-stop {
+  flex: 0 0 auto;
+  min-width: 120px;
+  justify-content: center;
+}
+.status-badge.is-killed {
+  color: var(--err);
+}
+.status-badge.is-killed .dot {
+  background: var(--err);
+}
+.progress-panel.is-killed {
+  border-color: rgba(248, 113, 113, 0.45);
 }
 
 /* ---- pills ---- */
@@ -1042,6 +1077,76 @@ textarea {
   min-width: 72px;
 }
 
+/* ---- superscript info indicator + tooltip ---- */
+.info-i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+  font-style: italic;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: super;
+  padding: 0;
+  margin-left: 4px;
+  flex: none;
+}
+.info-i:hover,
+.info-i:focus-visible,
+.info-i.open {
+  color: var(--accent);
+  border-color: var(--accent);
+  outline: none;
+}
+.info-i {
+  position: relative;
+}
+.info-i::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(2px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  padding: 6px 9px;
+  width: max-content;
+  max-width: 240px;
+  white-space: normal;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 30;
+}
+.info-i:hover::after,
+.info-i:focus-visible::after,
+.info-i.open::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+@media (max-width: 719px) {
+  .info-i::after {
+    max-width: 180px;
+  }
+}
+
 .btn.small {
   padding: 3px 9px;
   font-size: 11px;
@@ -1300,4 +1405,18 @@ button[disabled] {
   display: flex;
   justify-content: flex-end;
   margin-top: 14px;
+}
+.controls-idle {
+  display: flex;
+  justify-content: flex-end;
+}
+.controls-start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+.controls-start .check {
+  margin-bottom: 0;
+  font-size: 13px;
 }

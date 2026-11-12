@@ -33,7 +33,7 @@ test("resume on re-queues stale extracting rows", async () => {
   expect(row?.status).toBe("queued");
 });
 
-test("resume off marks stale extracting rows failed/interrupted", async () => {
+test("resume off marks stale extracting rows failed/killed", async () => {
   await insertExtracting("resume-off.zip");
   const n = await recoverStale(false);
   expect(n).toBeGreaterThanOrEqual(1);
@@ -41,5 +41,5 @@ test("resume off marks stale extracting rows failed/interrupted", async () => {
     "SELECT status, error_kind FROM archives WHERE path='resume-off.zip'",
   );
   expect(row?.status).toBe("failed");
-  expect(row?.error_kind).toBe("interrupted");
+  expect(row?.error_kind).toBe("killed");
 });

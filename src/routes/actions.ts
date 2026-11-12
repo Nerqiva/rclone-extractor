@@ -1,7 +1,15 @@
 import { Hono } from "hono";
 import { store, setSetting, allSettings, getSetting } from "../db";
-import { engineState, runEngine, stopEngine, forceStopEngine } from "../engine";
-import { esc, toastTriggerHeaders } from "../ui";
+import {
+  engineState,
+  runEngine,
+  stopEngine,
+  forceStopEngine,
+  requestSkipListing,
+  requestSkipInspection,
+  requestSkipArchive,
+} from "../engine";
+import { esc, toastTriggerHeaders, info } from "../ui";
 import { encryptionEnabled } from "../crypto";
 import { APP_PASSWORD, RCLONE_CONF } from "../config";
 import { normalizeRcloneConf } from "../rcloneconf";
@@ -11,6 +19,20 @@ import { loadTmpDirSettings } from "../tmpsweep";
 import { parseTrashSubdir } from "../archive";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Parse an MB/GB size field into bytes. "0" (or an empty field, stored by the
+ * caller) means "no limit". Returns null when the value is unusable.
+ */
+function parseSizeInput(raw: string, unit: string): number | null {
+  const n = Number(raw);
+  const multiplier = unit === "GB" ? 1024 ** 3 : 1024 ** 2;
+  const bytes = Math.round(n * multiplier);
+  if (!Number.isFinite(n) || n < 0 || !Number.isSafeInteger(bytes)) {
+    return null;
+  }
+  return bytes;
+}
 
 /** HX-Trigger response header: ask the client to show a toast. */
 function toastHeaders(message: string, kind: "ok" | "err" = "ok"): HeadersInit {
@@ -22,28 +44,62 @@ export const actions = new Hono();
 export function controlsFragment(): string {
   const running = engineState.running;
   if (!running) {
-    return `<div id="controls" class="btn-row">
-    <button class="btn primary" hx-post="/run/start" hx-target="#controls" hx-swap="outerHTML"><span class="spinner" aria-hidden="true"></span>Start</button>
+    return `<div id="controls" class="controls-idle">
+    <form class="controls-start" hx-post="/run/start" hx-target="#controls" hx-swap="outerHTML">
+      <label class="check"><input type="checkbox" name="reuse_scan" value="1"> Reuse previous scan results${info(
+        "Reuse the cached archive list from the last completed scan of this scan_root instead of rescanning the remote. Falls back to a fresh scan when the cache is missing, stale, or for a different scan_root. This choice is not remembered for future runs.",
+      )}</label>
+      <div class="btn-row">
+        <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Start</button>
+      </div>
+    </form>
   </div>`;
   }
   if (engineState.forceStop) {
-    return `<div id="controls" class="btn-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
-    <button class="btn danger solid is-loading" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
+    return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
     <span class="note warn-line stop-note">Stopping immediately — the current archive was aborted…</span>
+    <button class="btn danger solid is-loading btn-stop" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
   </div>`;
   }
   // The Stop button opens the shared stop modal (Soft stop / Hard stop).
+  const stage = engineState.stage;
+  const activity = engineState.activity;
+  const skips: string[] = [];
+  if (stage === "listing") {
+    skips.push(
+      `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"listing"}' hx-target="#controls" hx-swap="outerHTML">Skip listing</button>${info(
+        "Stop the scan now and continue with the queue built from the archives already stored. Treated as completed, this run only.",
+      )}`,
+    );
+  }
+  if (activity === "Inspecting archive") {
+    skips.push(
+      `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"inspection"}' hx-target="#controls" hx-swap="outerHTML">Skip inspection</button>${info(
+        "Treat the inspection as passed for the current archive only and extract it. Temporary, this archive only.",
+      )}`,
+    );
+  }
+  if (stage === "extracting") {
+    skips.push(
+      `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>${info(
+        "Stop the current archive and leave it queued — it is retried on the next run. Temporary, this run only.",
+      )}`,
+    );
+  }
   const note = engineState.stopRequested
     ? `<span class="note warn-line stop-note">Stop requested — finishing the current archive…</span>`
     : `<span class="muted">run in progress…</span>`;
-  return `<div id="controls" class="btn-row">
-    <button class="btn danger" data-modal-open="stop-modal">Stop</button>
+  return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
+    ${skips.join("\n    ")}
     ${note}
+    <button class="btn danger btn-stop" data-modal-open="stop-modal">Stop</button>
   </div>`;
 }
 
 actions.post("/run/start", async (c) => {
   if (!engineState.running) {
+    const form = await c.req.formData().catch(() => null);
+    const reuseScan = form?.get("reuse_scan") === "1";
     await store.run(
       "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE status='failed'",
       [new Date().toISOString()],
@@ -58,7 +114,7 @@ actions.post("/run/start", async (c) => {
     }
     const confNotice = pendingRcloneConfNotice();
     // runEngine never rejects (it handles errors internally); log defensively.
-    void runEngine().catch((e) => console.error("engine crashed:", String(e)));
+    void runEngine({ reuseScan }).catch((e) => console.error("engine crashed:", String(e)));
     if (confNotice) return c.html(controlsFragment(), 200, toastHeaders(confNotice, "err"));
     return c.html(controlsFragment(), 200, toastHeaders("Task started."));
   }
@@ -85,6 +141,29 @@ actions.post("/run/stop", async (c) => {
     200,
     toastHeaders("Stop requested — the current archive will finish first."),
   );
+});
+
+actions.post("/run/skip", async (c) => {
+  const form = await c.req.formData().catch(() => null);
+  const target = form ? String(form.get("target") ?? "") : "";
+  let ok = false;
+  if (target === "listing") ok = requestSkipListing();
+  else if (target === "inspection") ok = requestSkipInspection();
+  else if (target === "archive") ok = requestSkipArchive();
+  if (!ok) {
+    return c.html(
+      controlsFragment(),
+      200,
+      toastHeaders("Nothing to skip right now.", "err"),
+    );
+  }
+  const msg =
+    target === "listing"
+      ? "Listing skipped — building the queue from stored archives."
+      : target === "inspection"
+        ? "Inspection skipped — extracting this archive."
+        : "Archive skipped — it stays queued for the next run.";
+  return c.html(controlsFragment(), 200, toastHeaders(msg));
 });
 
 const SETTING_KEYS = [
@@ -163,6 +242,31 @@ actions.post("/config", async (c) => {
     }
     storedTmpDir = spec.value;
   }
+  let minArchiveSizeStored: string | undefined;
+  const minSizeRaw =
+    form.get("min_archive_size") === null
+      ? undefined
+      : String(form.get("min_archive_size") ?? "").trim();
+  if (minSizeRaw !== undefined) {
+    if (minSizeRaw === "") {
+      minArchiveSizeStored = "0";
+    } else {
+      const minBytes = parseSizeInput(
+        minSizeRaw,
+        String(form.get("min_archive_size_unit") ?? "MB"),
+      );
+      if (minBytes === null) {
+        return c.html(
+          await configForm(
+            `<p class="note err">min_archive_size must be a non-negative number (0 disables the limit).</p>`,
+          ),
+          200,
+          toastHeaders("min_archive_size is invalid", "err"),
+        );
+      }
+      minArchiveSizeStored = String(minBytes);
+    }
+  }
   let maxArchiveSizeStored: string | undefined;
   const maxSizeRaw =
     form.get("max_archive_size") === null
@@ -172,12 +276,11 @@ actions.post("/config", async (c) => {
     if (maxSizeRaw === "") {
       maxArchiveSizeStored = "0";
     } else {
-      const n = Number(maxSizeRaw);
-      const multiplier = String(form.get("max_archive_size_unit") ?? "MB") === "GB"
-        ? 1024 ** 3
-        : 1024 ** 2;
-      const bytes = Math.round(n * multiplier);
-      if (!Number.isFinite(n) || n < 0 || !Number.isSafeInteger(bytes)) {
+      const maxBytes = parseSizeInput(
+        maxSizeRaw,
+        String(form.get("max_archive_size_unit") ?? "MB"),
+      );
+      if (maxBytes === null) {
         return c.html(
           await configForm(
             `<p class="note err">max_archive_size must be a non-negative number (0 disables the limit).</p>`,
@@ -186,7 +289,51 @@ actions.post("/config", async (c) => {
           toastHeaders("max_archive_size is invalid", "err"),
         );
       }
-      maxArchiveSizeStored = String(bytes);
+      maxArchiveSizeStored = String(maxBytes);
+    }
+  }
+  // RcloneX extraction flags. Passwords are write-only here: leaving the
+  // field blank keeps the stored one; clearing happens via the Clear button.
+  const passwordRaw = form.get("rclonex_archive_password");
+  let rclonexPasswordStored: string | undefined;
+  if (passwordRaw !== null) {
+    const pw = String(passwordRaw);
+    if (pw.length > 4096) {
+      return c.html(
+        await configForm(
+          `<p class="note err">rclonex_archive_password is too long (max 4096 characters).</p>`,
+        ),
+        200,
+        toastHeaders("rclonex_archive_password is invalid", "err"),
+      );
+    }
+    if (pw !== "") rclonexPasswordStored = pw; // blank: keep the stored one
+  }
+  const windowRaw = form.get("rclonex_window_size");
+  const windowEnabled = form.get("rclonex_window_size_enabled") !== null;
+  let rclonexWindowStored: string | undefined;
+  if (windowRaw !== null) {
+    const t = String(windowRaw).trim();
+    if (t !== "") {
+      const n = Number(t);
+      if (!Number.isSafeInteger(n) || n < 0) {
+        return c.html(
+          await configForm(
+            `<p class="note err">rclonex_window_size must be a non-negative integer number of bytes (0 disables caching).</p>`,
+          ),
+          200,
+          toastHeaders("rclonex_window_size is invalid", "err"),
+        );
+      }
+      rclonexWindowStored = String(n);
+    } else if (windowEnabled) {
+      return c.html(
+        await configForm(
+          `<p class="note err">Enter a window size in bytes (0 disables caching), or uncheck the override.</p>`,
+        ),
+        200,
+        toastHeaders("rclonex_window_size is invalid", "err"),
+      );
     }
   }
   if (source.trim()) {
@@ -213,6 +360,36 @@ actions.post("/config", async (c) => {
   if (storedTmpDir !== undefined) await setSetting("tmp_dir", storedTmpDir);
   if (maxArchiveSizeStored !== undefined) {
     await setSetting("max_archive_size", maxArchiveSizeStored);
+  }
+  if (minArchiveSizeStored !== undefined) {
+    await setSetting("min_archive_size", minArchiveSizeStored);
+  }
+  await setSetting("rclonex", form.get("rclonex") !== null ? "1" : "0");
+  await setSetting(
+    "rclonex_skip_inspection",
+    form.get("rclonex_skip_inspection") !== null ? "1" : "0",
+  );
+  await setSetting(
+    "auto_skip_known",
+    form.get("auto_skip_known") !== null ? "1" : "0",
+  );
+  await setSetting(
+    "rclonex_continue_on_error",
+    form.get("rclonex_continue_on_error") !== null ? "1" : "0",
+  );
+  await setSetting(
+    "rclonex_archive_password_enabled",
+    form.get("rclonex_archive_password_enabled") !== null ? "1" : "0",
+  );
+  await setSetting(
+    "rclonex_window_size_enabled",
+    form.get("rclonex_window_size_enabled") !== null ? "1" : "0",
+  );
+  if (rclonexPasswordStored !== undefined) {
+    await setSetting("rclonex_archive_password", rclonexPasswordStored);
+  }
+  if (rclonexWindowStored !== undefined) {
+    await setSetting("rclonex_window_size", rclonexWindowStored);
   }
   if (normalizedConf !== null) {
     await setSetting("rclone_conf", normalizedConf);
@@ -257,6 +434,23 @@ actions.post("/config/rclone-clear", async (c) => {
     await configForm(`<p class="note">rclone.conf cleared.</p>`),
     200,
     toastHeaders("Stored rclone.conf cleared."),
+  );
+});
+
+actions.post("/config/rclonex-clear", async (c) => {
+  if (engineState.running) {
+    return c.html(
+      await configForm(`<p class="note err">Task is running — stop it first.</p>`),
+      200,
+      RUNNING_GUARD_HEADERS,
+    );
+  }
+  await setSetting("rclonex_archive_password", "");
+  await setSetting("rclonex_archive_password_enabled", "0");
+  return c.html(
+    await configForm(`<p class="note">Archive password cleared.</p>`),
+    200,
+    toastHeaders("Archive password cleared."),
   );
 });
 
@@ -329,6 +523,7 @@ async function wipeEverything(): Promise<string> {
   await store.run("DELETE FROM archives");
   await resetSequences(["archives", "runs", "log_lines"]);
   await setSetting("last_run_id", "0");
+  await setSetting("scan_cache_state", "incomplete");
   try {
     return tempPurgeNote(await purgeAppTempDirs());
   } catch (e) {
@@ -419,12 +614,12 @@ function settingRow(
   label: string,
   value: string,
   editor: string,
-  opts: { unset?: boolean } = {},
+  opts: { unset?: boolean; info?: string } = {},
 ): string {
   return `<div class="setting">
     <div class="setting-head">
       <div class="setting-info">
-        <span class="setting-label">${esc(label)}</span>
+        <span class="setting-label">${esc(label)}${opts.info ? ` ${info(opts.info)}` : ""}</span>
         <span class="setting-value${opts.unset ? " unset" : ""}">${esc(value)}</span>
       </div>
       <button type="button" class="btn small" data-edit>Edit</button>
@@ -439,16 +634,16 @@ function settingRow(
   </div>`;
 }
 
-/** Format stored max_archive_size bytes for the collapsed row label. */
-function formatMaxArchiveSize(bytes: number): string {
+/** Format a stored size limit in bytes for the collapsed row label. */
+function formatSizeLimit(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "no limit";
   const gb = bytes / 1024 ** 3;
   if (Number.isInteger(gb)) return `${gb} GB`;
   return `${Number((bytes / 1024 ** 2).toFixed(2))} MB`;
 }
 
-/** Split stored max_archive_size bytes into an editable value + unit. */
-function splitMaxArchiveSize(bytes: number): { value: string; unit: "MB" | "GB" } {
+/** Split a stored size limit (bytes) into an editable value + unit. */
+function splitSizeLimit(bytes: number): { value: string; unit: "MB" | "GB" } {
   if (bytes >= 1024 ** 3 && bytes % 1024 ** 3 === 0) {
     return { value: String(bytes / 1024 ** 3), unit: "GB" };
   }
@@ -472,7 +667,12 @@ export async function configForm(note = ""): Promise<string> {
   const maxSizeRaw = Number(s.max_archive_size ?? "0");
   const maxSizeBytes =
     Number.isFinite(maxSizeRaw) && maxSizeRaw > 0 ? Math.floor(maxSizeRaw) : 0;
-  const maxSizeSplit = splitMaxArchiveSize(maxSizeBytes);
+  const maxSizeSplit = splitSizeLimit(maxSizeBytes);
+  const minSizeRaw = Number(s.min_archive_size ?? "0");
+  const minSizeBytes =
+    Number.isFinite(minSizeRaw) && minSizeRaw > 0 ? Math.floor(minSizeRaw) : 0;
+  const minSizeSplit = splitSizeLimit(minSizeBytes);
+  const maxSizeTooHigh = maxSizeBytes > 0 && minSizeBytes > 0 && maxSizeBytes < minSizeBytes;
   // While a task is running every setting on this page is out of reach;
   // Clear queues (Maintenance) stays usable. The fieldset disables all
   // nested controls; server-side guards remain as the real enforcement.
@@ -487,74 +687,103 @@ export async function configForm(note = ""): Promise<string> {
     <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">APP_PASSWORD ${esc(pwWorks)}</span>
   </p>
   <fieldset class="bare-fieldset"${dis}>
+  ${maxSizeTooHigh ? `<p class="note warn-line">max_archive_size is below min_archive_size — every archive is excluded.</p>` : ""}
   ${settingRow(
     "scan_root",
     s.scan_root || "not set",
-    `<label class="field"><span>scan_root</span>
-      <input type="text" name="scan_root" value="${esc(s.scan_root ?? "")}" placeholder="remote:path or /local/path"></label>`,
-    { unset: !s.scan_root },
+    `<label class="field"><input type="text" name="scan_root" value="${esc(s.scan_root ?? "")}" placeholder="remote:path or /local/path" aria-label="scan_root"></label>`,
+    {
+      unset: !s.scan_root,
+      info: "Remote or path to scan for archives, e.g. s3:bucket/archives or /data/in.",
+    },
   )}
-  <label class="field"><span>remote_flags</span>
+  <label class="field"><span>remote_flags ${info("Extra flags appended to every rclone command. --config is passed unconditionally; a --config here is ignored.")}</span>
     <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list"></label>
   ${settingRow(
     "rclone_conf",
     confLabel,
-    `<label class="field"><span>rclone.conf</span>
-      <input type="file" name="rclone_conf_file" accept=".conf,text/plain"></label>
+    `<label class="field"><input type="file" name="rclone_conf_file" accept=".conf,text/plain" aria-label="rclone.conf"></label>
     <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored rclone.conf?|Clear"><span class="spinner" aria-hidden="true"></span>Clear stored config</button>`,
-    { unset: !effectiveConf },
+    {
+      unset: !effectiveConf,
+      info: "rclone config, stored encrypted and written to /app/data/rclone.conf (or /tmp fallback) before rclone runs. Falls back to the RCLONE_CONF env var when empty.",
+    },
   )}
   ${settingRow(
     "queue_max",
     s.queue_max ?? "500",
-    `<label class="field"><span>queue_max</span>
-      <input type="number" name="queue_max" min="1" value="${esc(s.queue_max ?? "500")}"></label>`,
+    `<label class="field"><input type="number" name="queue_max" min="1" value="${esc(s.queue_max ?? "500")}" aria-label="queue_max"></label>`,
+    { info: "Maximum archives queued and processed per run." },
+  )}
+  ${settingRow(
+    "min_archive_size",
+    formatSizeLimit(minSizeBytes),
+    `<label class="field"><div class="field-inline">
+        <input type="number" name="min_archive_size" min="0" step="any" value="${esc(minSizeSplit.value)}" placeholder="0" aria-label="min_archive_size">
+        <select name="min_archive_size_unit" aria-label="min_archive_size unit">
+          <option value="MB"${minSizeSplit.unit === "MB" ? " selected" : ""}>MB</option>
+          <option value="GB"${minSizeSplit.unit === "GB" ? " selected" : ""}>GB</option>
+        </select>
+      </div></label>`,
+    {
+      unset: minSizeBytes <= 0,
+      info: "Ignore archives smaller than this — never queued, and skipped when previously queued. Entered in MB or GB (stored in bytes); 0 = no limit (default).",
+    },
   )}
   ${settingRow(
     "max_archive_size",
-    formatMaxArchiveSize(maxSizeBytes),
-    `<label class="field"><span>max_archive_size</span>
-      <div class="field-inline">
-        <input type="number" name="max_archive_size" min="0" step="any" value="${esc(maxSizeSplit.value)}" placeholder="0">
-        <select name="max_archive_size_unit">
+    formatSizeLimit(maxSizeBytes),
+    `<label class="field"><div class="field-inline">
+        <input type="number" name="max_archive_size" min="0" step="any" value="${esc(maxSizeSplit.value)}" placeholder="0" aria-label="max_archive_size">
+        <select name="max_archive_size_unit" aria-label="max_archive_size unit">
           <option value="MB"${maxSizeSplit.unit === "MB" ? " selected" : ""}>MB</option>
           <option value="GB"${maxSizeSplit.unit === "GB" ? " selected" : ""}>GB</option>
         </select>
       </div></label>`,
-    { unset: maxSizeBytes <= 0 },
+    {
+      unset: maxSizeBytes <= 0,
+      info: "Ignore archives larger than this — never queued, and skipped when previously queued; raising the limit takes effect on the next run. Entered in MB or GB (stored in bytes); 0 = no limit (default).",
+    },
   )}
   ${settingRow(
     "trash_subdir",
     s.trash_subdir ?? "trash",
-    `<label class="field"><span>trash_subdir</span>
-      <input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? "trash")}"></label>`,
+    `<label class="field"><input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? "trash")}" aria-label="trash_subdir"></label>`,
+    { info: "Folder processed archives are moved into." },
   )}
   ${settingRow(
     "tmp_dir",
     s.tmp_dir || TMP_DIR_DEFAULT,
-    `<label class="field"><span>tmp_dir</span>
-      <input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}"></label>`,
+    `<label class="field"><input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}" aria-label="tmp_dir"></label>`,
+    { info: "Where archives are extracted temporarily (default .rclone-extractor-tmp). A relative path resolves inside scan_root." },
   )}
   ${settingRow(
     "sort_by",
     s.sort_by ?? "path",
-    `<label class="field"><span>sort_by</span>
-      <select name="sort_by">
+    `<label class="field"><select name="sort_by" aria-label="sort_by">
         <option value="path"${sel(s.sort_by ?? "path", "path")}>path</option>
         <option value="size"${sel(s.sort_by ?? "path", "size")}>size</option>
       </select></label>`,
+    { info: "Process archives by path or by size." },
   )}
   ${settingRow(
     "sort_dir",
     s.sort_dir ?? "asc",
-    `<label class="field"><span>sort_dir</span>
-      <select name="sort_dir">
+    `<label class="field"><select name="sort_dir" aria-label="sort_dir">
         <option value="asc"${sel(s.sort_dir ?? "asc", "asc")}>asc</option>
         <option value="desc"${sel(s.sort_dir ?? "asc", "desc")}>desc</option>
       </select></label>`,
+    { info: "Queue order direction (asc or desc)." },
   )}
-  <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run</label>
-  <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> resume</label>
+  <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run${info("Run all rclone commands with --dry-run — nothing is moved or deleted.")}</label>
+  <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> resume${info("Re-queue archives interrupted mid-run on the next start; when off they are marked failed/interrupted.")}</label>
+  <label class="check"><input type="checkbox" name="auto_skip_known"${(s.auto_skip_known ?? "1") === "1" ? " checked" : ""}> auto_skip_known${info("Archives previously classified as a torrent or website dump that reappear are skipped automatically, without re-inspection. Uncheck to re-inspect them on later runs.")}</label>
+  <h2 class="section-title" style="margin:4px 0 12px">RcloneX</h2>
+  <label class="check"><input type="checkbox" name="rclonex"${s.rclonex === "1" ? " checked" : ""}> Enable RcloneX${info("Extract RAR/RAR5, multivolume RAR (.partN.rar, .rNN), 7Z and split 7Z (.7z.NNN), and ISO via Nerqiva/rclonex. Everything else stays on rclone; when disabled those formats are not queued.")}</label>
+  <label class="check"><input type="checkbox" name="rclonex_skip_inspection"${(s.rclonex_skip_inspection ?? "1") === "1" ? " checked" : ""}> Skip inspection for RcloneX formats${info("Skips the archive content inspection for archives handled by RcloneX (default — rclonex does not list rar/7z/iso). Other formats are always inspected.")}</label>
+  <label class="check"><input type="checkbox" name="rclonex_continue_on_error"${s.rclonex_continue_on_error === "1" ? " checked" : ""}> Continue on entry errors${info("--archive-continue-on-error: keep extracting when an archive entry fails instead of aborting the whole archive.")}</label>
+  <div class="check"><input type="checkbox" name="rclonex_archive_password_enabled" id="rclonex-pw"${s.rclonex_archive_password_enabled === "1" ? " checked" : ""}> <label for="rclonex-pw">Archive password${info("--archive-password: password for encrypted RAR and 7Z archives (also multivolume sets). Blank keeps the stored password; Clear removes it. Stored encrypted at rest.")}</label><input class="check-input" type="password" name="rclonex_archive_password" placeholder="${s.rclonex_archive_password ? "leave blank to keep stored" : "not set"}" autocomplete="new-password" aria-label="rclonex archive password"><button type="button" class="btn small" hx-post="/config/rclonex-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored archive password?|Clear password"><span class="spinner" aria-hidden="true"></span>Clear</button></div>
+  <div class="check"><input type="checkbox" name="rclonex_window_size_enabled" id="rclonex-win"${s.rclonex_window_size_enabled === "1" ? " checked" : ""}> <label for="rclonex-win">Override window size${info("--archive-window-size: sliding-window cache in bytes for random-access formats read by rclonex (7Z, ISO). 0 disables caching. Unchecked keeps rclonex's 16 MiB default.")}</label><input class="check-input small-num" type="number" min="0" name="rclonex_window_size" value="${esc(s.rclonex_window_size ?? "16777216")}" aria-label="rclonex window size"></div>
   <div class="btn-row">
     <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>
   </div>

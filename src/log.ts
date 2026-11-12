@@ -1,5 +1,5 @@
 import { store } from "./db";
-import { esc } from "./ui";
+import { esc, fmtDisplayTime } from "./ui";
 
 const DASHES = "-".repeat(72);
 const DASH_RE = /^-{40,}$/;
@@ -27,8 +27,9 @@ function formatRow(row: LogRow): string {
 }
 
 function fmtTime(ts: string): string {
-  const m = ts.match(/T(\d{2}:\d{2}:\d{2})/);
-  return m ? m[1] : ts.slice(11, 19) || ts;
+  // Log lines are stored in UTC; show them in the display timezone (APP_TZ,
+  // default Asia/Omsk). Downloads keep the raw ISO value.
+  return fmtDisplayTime(ts);
 }
 
 export interface RenderedEntry {

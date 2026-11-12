@@ -11,7 +11,77 @@ to `main`.
 
 ## [Unreleased]
 
+### Added
+- **RcloneX integration** (off by default): when **Enable RcloneX** is set on
+  the Configuration page, archives whose formats upstream rclone cannot handle
+  — RAR/RAR5, multivolume RAR (`x.partN.rar`/`x.rNN`), 7Z and split 7Z
+  (`x.7z.NNN`), and ISO9660 — are queued and extracted with
+  [Nerqiva/rclonex](https://github.com/Nerqiva/rclonex), including multivolume
+  sets (only the first volume is queued: `part1.rar`/`.7z.001`/plain `.rar`).
+  Everything else (ZIP, TAR family, …) keeps using rclone's native
+  `archive extract`. A `RCLONEX_BIN` env var (default `rclonex`) selects the
+  binary; the Configuration page shows a version probe when the feature is
+  enabled. When disabled, these formats are not queued at all.
+- **RcloneX archive inspection** — skipped by default for RcloneX-handled
+  formats (`rclonex_skip_inspection`; default on). When off, inspection runs
+  through rclonex and an inspection failure marks the archive `unreadable`.
+  Other formats always inspect as before.
+- **RcloneX flags** on the Configuration page (all unchecked by default):
+  `--archive-continue-on-error`, `--archive-password` (encrypted at rest;
+  write-only — blank field keeps the stored value, Clear removes it) and
+  `--archive-window-size` (`0` disables caching; default keeps rclonex's own
+  16 MiB).
+- **Skip controls** on the Progress page: **Skip listing** (stop the scan and
+  go straight to the queue), **Skip inspection** (treat the current archive's
+  inspection as passed), and **Skip archive** (stop the current archive,
+  re-queue it, count it as skipped for the run). All are temporary — never
+  persisted, never affect subsequent archives or runs.
+- **Reuse Previous Scan Results** checkbox on the Progress page (unchecked by
+  default, not remembered between runs): reuse the cached archive list from
+  the last completed scan of the same `scan_root` instead of rescanning the
+  remote. Falls back to a fresh scan when the cache is missing, incomplete or
+  for a different root. Queue data itself is never modified or deleted.
+- **`min_archive_size` setting** alongside the existing `max_archive_size`
+  (same MB/GB UI, bytes in the database, `0` = no limit; enforced both at
+  listing time and when the queue is selected).
+- **Dedicated info tooltip indicators** (superscript “i”) beside every
+  configuration option and the new controls; tap/hover/keyboard accessible,
+  following the existing design language.
+- **RcloneX installation in Docker** — the image installs the latest rclonex
+  release via the official install script (falls back to the newest
+  pre-release; sha256-verified; `/usr/local/bin/rclonex`; fails the build
+  clearly on error).
+- **Interruption cause and time** — `runs.interrupted_reason` records why a
+  run was marked interrupted (e.g. `received SIGTERM (deploy or restart)` at
+  the moment the app handles the signal, or `previous process exited mid-run
+  (crash or kill)` detected at the next boot) and is shown on the progress
+  and logs pages. Existing databases are migrated automatically.
+- **`auto_skip_known` setting** — reappearing archives previously classified
+  as torrent/website dumps stay skipped without re-inspection (default on,
+  preserving prior behavior). Uncheck to re-inspect such reappearing archives.
+- **Run outcome and app-error codes** — `runs` gained `outcome`
+  (`finished` | `interrupted` | `killed` | `error`) and `error_kind`. A run
+  the user stops ends as **Interrupted** (`stopped by user (soft|hard stop)`);
+  a run the host stops (crash, SIGKILL/OOM, `SIGTERM`/`SIGINT` at shutdown)
+  ends as **Killed**; a run the app itself fails ends as **Error** with an
+  `error_kind` code (`no_scan_root`, `invalid_trash_subdir`, `invalid_tmp_dir`,
+  `listing_failed`, `engine_error`) plus error-log lines — never as Completed
+  or Interrupted. Pre-flight failures (e.g. missing `scan_root`) now create a
+  run row with the same treatment, so they persist across reloads. Backup
+  export/import round-trips both fields; existing databases migrate
+  automatically (legacy crashed runs backfill to `outcome = killed`).
+- **`APP_TZ`** (default `Asia/Omsk`) — IANA timezone used for every time
+  shown in the UI (progress page, Logs page, log line times). The database
+  and backups stay in UTC.
+
 ### Changed
+- Website dump detection now classifies by **distinct recognized
+  web-development extensions** found anywhere in the archive (root or nested
+  directories; counting distinct extensions, not files): two or more of
+  `.html .htm .xhtml .xhtm .css .scss .less .js .mjs .cjs .map .php .asp
+  .aspx .jsp .vue .svelte .astro .woff .woff2 .eot` marks a website dump,
+  which is never extracted. The file-size ratio and name-based marker lists
+  were dropped to avoid false positives.
 - The `rclone.conf` working copy now lives at `${DATA_DIR}/rclone.conf`
   (`/app/data/rclone.conf` by default) instead of the hard-coded
   `/data/app/rclone.conf`. When that path is not writable **for any reason**
@@ -21,6 +91,13 @@ to `main`.
   the next Configuration/Run-start response or dashboard poll). `--config`
   follows whichever location is in effect. The Docker image no longer
   pre-creates `/data/app`.
+- The **Stop button stays in place** on the Progress page: it is pinned as
+  the last item of the controls row with a fixed width, so clicking it (or
+  the note/skip controls appearing and disappearing) no longer shifts it.
+- HTML responses are served with `Cache-Control: no-store`, and a page
+  restored from the back-forward cache reloads itself — Back/Forward in the
+  URL bar can no longer resurrect a stale progress view or a stale Stop
+  button. Navigating with the URL bar has no effect on a running task.
 
 ### Removed
 - The "Warnings & Errors" filter chips on the Logs page — redundant with the
@@ -55,6 +132,10 @@ to `main`.
   `DATA_DIR` is created with mode `0700`.
 
 ### Fixed
+- A user-stopped or app-errored run was shown as **Completed** after a page
+  reload. Runs now show their real outcome: **Interrupted** (stopped by the
+  user), **Killed** (host/deploy/crash), or **Error** (the app itself, with
+  the `error_kind` code and the Ended time on the progress page).
 - **Postgres connection exhaustion** (`53300: remaining connection slots are
   reserved for roles with the SUPERUSER attribute`): the app now opens at
   most `PG_POOL_MAX` connections (default 4), recycles idle connections after

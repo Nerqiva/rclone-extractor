@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import { store } from "../db";
-import { layout, esc } from "../ui";
+import { store, getSetting } from "../db";
+import { layout, esc, fmtDisplayTime } from "../ui";
 import { csrfFor } from "./auth";
 import { configForm } from "./actions";
 import { encryptionEnabled } from "../crypto";
 import { engineState } from "../engine";
-import { checkRclone } from "../rclone";
+import { checkRclone, checkRclonex } from "../rclone";
 import { tailRendered, LOG_TAIL_LIMIT } from "../log";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 
@@ -33,16 +33,28 @@ pages.get("/config", async (c) => {
   const runtimeRow = runtime.ok
     ? `<dt>rclone</dt><dd><code>${esc(runtime.detail)}</code><br><span class="muted">${esc(runtime.bin)}</span></dd>`
     : `<dt>rclone</dt><dd><span class="note err">not runnable</span><br><code>${esc(runtime.detail)}</code></dd>`;
+  const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
+  const rclonexRuntime = rclonexEnabled ? await checkRclonex() : null;
+  const rclonexRow = rclonexRuntime
+    ? rclonexRuntime.ok
+      ? `<dt>rclonex</dt><dd><code>${esc(rclonexRuntime.detail)}</code><br><span class="muted">${esc(rclonexRuntime.bin)}</span></dd>`
+      : `<dt>rclonex</dt><dd><span class="note err">not runnable</span><br><code>${esc(rclonexRuntime.detail)}</code></dd>`
+    : "";
   const running = engineState.running;
   const dis = running ? " disabled" : "";
   const backupCls = running ? "card is-disabled" : "card";
   const extra = `<div class="card">
     <h2 class="section-title" style="margin-top:0">Runtime</h2>
-    <dl class="detail-grid">${runtimeRow}</dl>
+    <dl class="detail-grid">${runtimeRow}${rclonexRow}</dl>
     ${
       runtime.ok
         ? ""
-        : `<p class="muted">The extractor cannot run rclone. Install the build matching your CPU architecture (arm64 vs amd64) or set <code>RCLONE_BIN</code>, then redeploy.</p>`
+        : `<p class="muted">rclone not runnable — see deploy logs (<code>RCLONE_BIN</code>, arch match).</p>`
+    }
+    ${
+      rclonexRuntime && !rclonexRuntime.ok
+        ? `<p class="muted">RcloneX is enabled but not runnable — RAR/7Z/ISO extraction will fail. Install the newest rclonex release or set <code>RCLONEX_BIN</code>.</p>`
+        : ""
     }
   </div>
   <div class="${backupCls}">
@@ -213,8 +225,11 @@ pages.get("/logs", async (c) => {
     failed: number;
     skipped: number;
     interrupted: number | null;
+    interrupted_reason: string | null;
+    outcome: string | null;
+    error_kind: string | null;
   }>(
-    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted FROM runs ORDER BY id DESC LIMIT 50",
+    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind FROM runs ORDER BY id DESC LIMIT 50",
   );
 
   if (runs.length === 0) {
@@ -260,7 +275,7 @@ pages.get("/logs", async (c) => {
   const options = runs
     .map((r) => {
       const durStr = durLabel(runSecs(r), "…");
-      return `<option value="${r.id}"${Number(r.id) === selectedId ? " selected" : ""}>Run #${r.id} · ${esc(r.started_at).slice(11, 16)} · ${durStr} · ${r.done} done</option>`;
+      return `<option value="${r.id}"${Number(r.id) === selectedId ? " selected" : ""}>Run #${r.id} · ${esc(fmtDisplayTime(r.started_at, true))} · ${durStr} · ${r.done} done</option>`;
     })
     .join("");
 
@@ -280,24 +295,51 @@ pages.get("/logs", async (c) => {
     <a class="log-tab${kind === "errors" ? " active" : ""}" href="/logs?run=${selectedId}&amp;kind=errors">Errors</a>
   </div>`;
 
-  const interrupted = Number(selected.interrupted ?? 0) === 1;
+  // Prefer the stored outcome; fall back to the legacy interrupted flag for
+  // rows written before it existed.
+  const outcome =
+    selected.outcome && selected.outcome !== ""
+      ? selected.outcome
+      : Number(selected.interrupted ?? 0) === 1
+        ? "killed"
+        : "";
+  const reason = selected.interrupted_reason ?? "";
+  const outcomeTime = selected.finished_at
+    ? ` · ${fmtDisplayTime(String(selected.finished_at), true)}`
+    : "";
+  const badOutcome =
+    outcome === "interrupted" || outcome === "killed" || outcome === "error";
+  const outcomeDetail = badOutcome
+    ? `${
+        outcome === "error" && selected.error_kind
+          ? `Error (${esc(selected.error_kind)})`
+          : outcome[0].toUpperCase() + outcome.slice(1)
+      }${reason ? ` — ${esc(reason)}` : ""}${outcomeTime}`
+    : "";
   const statusPill = isLive
     ? `<span class="pill warn" id="livePill">Live</span>`
-    : `<span class="pill ${selected.finished_at && !interrupted ? "ok" : "warn"}">${
-        interrupted ? "Interrupted" : selected.finished_at ? "Finished" : "Incomplete"
-      }</span>`;
+    : outcome === "interrupted"
+      ? `<span class="pill warn">Interrupted</span>`
+      : outcome === "killed"
+        ? `<span class="pill err">Killed</span>`
+        : outcome === "error"
+          ? `<span class="pill err">Error</span>`
+          : `<span class="pill ${selected.finished_at ? "ok" : "warn"}">${
+              selected.finished_at ? "Finished" : "Incomplete"
+            }</span>`;
 
   const durStr = durLabel(runSecs(selected), "running");
 
   const summary = `<div class="session-summary">
     ${statusPill}
-    <span>Run #${selected.id} · ${esc(selected.started_at).slice(11, 16)} · ${durStr}</span>
+    <span>Run #${selected.id} · ${esc(fmtDisplayTime(selected.started_at, true))} · ${durStr}</span>
     <span class="summary-counts">
       <span class="muted">done ${selected.done}</span> ·
       <a href="/errors" class="muted">failed ${selected.failed}</a> ·
       <span class="muted">skipped ${selected.skipped}</span>
     </span>
     ${isLive ? `<span class="muted live-note" id="liveNote">polling 2s</span>` : ""}
+    ${outcomeDetail ? `<span class="warn-line">${outcomeDetail}</span>` : ""}
   </div>`;
 
   const downloadHref = `/download/run/${selected.id}?kind=${kind}`;

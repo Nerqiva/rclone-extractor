@@ -19,6 +19,7 @@ const KIND_CLASS: Record<string, string> = {
   trash: "err",
   spawn: "err",
   interrupted: "warn",
+  killed: "warn",
 };
 
 function relativeTime(iso: string): string {

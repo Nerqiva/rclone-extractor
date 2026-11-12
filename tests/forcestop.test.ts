@@ -85,7 +85,7 @@ await store.close();
   expect(line).toBeTruthy();
   const state = JSON.parse(line!.slice("PROBE ".length));
 
-  expect(state.stage).toBe("cancelled");
+  expect(state.stage).toBe("interrupted");
   expect(state.running).toBe(false);
   expect(state.stopRequested).toBe(false);
   expect(state.forceStop).toBe(false);

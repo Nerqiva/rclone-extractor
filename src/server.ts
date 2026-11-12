@@ -33,7 +33,7 @@ if (recovered > 0) {
   console.log(
     resume
       ? `boot: recovered ${recovered} stale archive(s)`
-      : `boot: marked ${recovered} interrupted archive(s) as failed`,
+      : `boot: marked ${recovered} killed archive(s) as failed`,
   );
 }
 
@@ -77,6 +77,24 @@ async function shutdown(signal: string): Promise<void> {
   } catch (e) {
     console.warn(`error flushing logs: ${String(e)}`);
   }
+  // Mark any in-flight run killed with the actual cause and time, instead
+  // of leaving it for the next boot to discover. Signal-driven
+  // (deploy/restart) is how most "unintentional" kills happen;
+  // a hard kill still falls back to the boot-time recovery below.
+  try {
+    const resume = (await getSetting("resume", "1")) === "1";
+    const recovered = await recoverStale(
+      resume,
+      `received ${signal} (deploy or restart)`,
+    );
+    if (recovered > 0) {
+      console.log(
+        `shutdown: marked ${recovered} killed archive(s) for recovery`,
+      );
+    }
+  } catch (e) {
+    console.warn(`error settling interrupted run: ${String(e)}`);
+  }
   try {
     await store.close();
   } catch (e) {
@@ -88,6 +106,20 @@ process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
 
 app.get("/healthz", (c) => c.text("ok"));
+
+// HTML is live run state, never cacheable — the browser must not serve a
+// stale progress page on Back/Forward. /public/* assets keep default caching;
+// the log download already marks itself no-store.
+app.use("*", async (c, next) => {
+  await next();
+  if (
+    !c.req.path.startsWith("/public/") &&
+    !c.req.path.startsWith("/healthz") &&
+    !c.res.headers.has("Cache-Control")
+  ) {
+    c.header("Cache-Control", "no-store");
+  }
+});
 
 app.use("/public/*", serveStatic({ root: "./" }));
 

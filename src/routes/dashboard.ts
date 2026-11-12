@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { engineState } from "../engine";
 import { store, getSetting } from "../db";
-import { esc, toastTriggerHeaders } from "../ui";
+import { esc, toastTriggerHeaders, fmtDisplayTime } from "../ui";
 import type { ExtractStats } from "../rclone";
 import { pendingRcloneConfNotice } from "../rclone";
 import { controlsFragment } from "./actions";
@@ -24,6 +24,12 @@ interface Snapshot {
   scanRoot: string;
   commandStats: ExtractStats | null;
   activity: string;
+  /** Why the run was closed abnormally ("" for normal runs). */
+  interruptReason: string;
+  /** '' while running/legacy, else finished|interrupted|killed|error. */
+  outcome: string;
+  /** App-error code; set only when outcome === "error". */
+  errorKind: string;
 }
 
 const STAGE_LABEL: Record<string, string> = {
@@ -32,9 +38,10 @@ const STAGE_LABEL: Record<string, string> = {
   queueing: "Building queue",
   extracting: "Extracting",
   finished: "Completed",
+  interrupted: "Interrupted",
+  killed: "Killed",
   cancelled: "Cancelled",
   error: "Error",
-  interrupted: "Interrupted",
 };
 
 function stageLabel(stage: string): string {
@@ -43,17 +50,12 @@ function stageLabel(stage: string): string {
 
 function stateClass(stage: string, running: boolean): string {
   if (stage === "error") return "is-error";
+  if (stage === "killed") return "is-killed";
   if (stage === "cancelled") return "is-cancelled";
   if (stage === "interrupted") return "is-interrupted";
   if (running) return "is-running";
   if (stage === "finished") return "is-done";
   return "is-idle";
-}
-
-function clock(ts: string): string {
-  const t = Date.parse(ts);
-  if (!Number.isFinite(t)) return "—";
-  return `${new Date(t).toISOString().slice(11, 19)} UTC`;
 }
 
 function duration(ms: number): string {
@@ -119,6 +121,21 @@ async function snapshot(): Promise<Snapshot> {
       scanRoot,
       commandStats: engineState.commandStats,
       activity: engineState.activity,
+      interruptReason:
+        engineState.stage === "interrupted" || engineState.stage === "cancelled"
+          ? engineState.stopReason
+          : engineState.lastError
+            ? String(engineState.lastError)
+            : "",
+      outcome:
+        engineState.stage === "interrupted" || engineState.stage === "cancelled"
+          ? "interrupted"
+          : engineState.stage === "error"
+            ? "error"
+            : engineState.stage === "finished"
+              ? "finished"
+              : "",
+      errorKind: engineState.errorCode || "",
     };
   }
 
@@ -131,8 +148,11 @@ async function snapshot(): Promise<Snapshot> {
     failed: number;
     skipped: number;
     interrupted: number | null;
+    interrupted_reason: string | null;
+    outcome: string | null;
+    error_kind: string | null;
   }>(
-    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted FROM runs ORDER BY id DESC LIMIT 1",
+    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind FROM runs ORDER BY id DESC LIMIT 1",
   );
   if (!row) {
     return {
@@ -151,13 +171,35 @@ async function snapshot(): Promise<Snapshot> {
       scanRoot,
       commandStats: null,
       activity: "",
+      interruptReason: "",
+      outcome: "",
+      errorKind: "",
     };
   }
 
+  // Prefer the stored outcome; fall back to the legacy interrupted flag for
+  // rows written before it existed.
+  const outcome =
+    row.outcome && row.outcome !== ""
+      ? row.outcome
+      : Number(row.interrupted ?? 0) === 1
+        ? "killed"
+        : row.finished_at
+          ? "finished"
+          : "";
   return {
     running: false,
     runId: Number(row.id),
-    stage: Number(row.interrupted ?? 0) === 1 ? "interrupted" : row.finished_at ? "finished" : "idle",
+    stage:
+      outcome === "interrupted"
+        ? "interrupted"
+        : outcome === "killed"
+          ? "killed"
+          : outcome === "error"
+            ? "error"
+            : row.finished_at
+              ? "finished"
+              : "idle",
     currentRel: "",
     currentCommand: "",
     total: Number(row.total),
@@ -170,6 +212,9 @@ async function snapshot(): Promise<Snapshot> {
     scanRoot,
     commandStats: null,
     activity: "",
+    interruptReason: row.interrupted_reason ?? "",
+    outcome,
+    errorKind: row.error_kind ?? "",
   };
 }
 
@@ -229,10 +274,18 @@ export async function progressPanel(): Promise<string> {
         ? `<p class="warn-line">Stopping immediately — the in-flight archive was aborted.</p>`
         : `<p class="warn-line">Stop requested — the current archive will finish, then the task stops. Click <strong>Force stop</strong> to stop immediately.</p>`
       : "";
-  const interruptedNote =
-    s.stage === "interrupted"
-      ? `<p class="warn-line">This run did not finish — it restarted mid-task. In-progress archives resume on the next start when resume is enabled.</p>`
-      : "";
+  const reason = s.interruptReason;
+  const timeSuffix = s.finishedAt
+    ? ` · ${esc(fmtDisplayTime(s.finishedAt, true))}`
+    : "";
+  const outcomeNote =
+    s.outcome === "interrupted"
+      ? `<p class="warn-line">Interrupted — ${esc(reason || "stopped by user")}${timeSuffix}.</p>`
+      : s.outcome === "killed"
+        ? `<p class="warn-line">Killed — ${esc(reason || "previous process exited mid-run")}${timeSuffix}. In-progress archives resume on the next start when resume is enabled.</p>`
+        : s.outcome === "error"
+          ? `<p class="warn-line">Error — ${esc(s.errorKind || "engine_error")}${reason ? `: ${esc(reason)}` : ""}${timeSuffix}. See the Logs page (Errors tab) for details.</p>`
+          : "";
   // One thin bar slot shared by every in-flight rclone command; transfer
   // commands (extract/move/moveto) show their live byte progress, everything
   // else shows an indeterminate sweep.
@@ -270,8 +323,9 @@ export async function progressPanel(): Promise<string> {
         ${s.running ? `<span class="live-pill">Live</span>` : ""}
       </div>
       <div class="run-times">
-        ${s.startedAt ? `<span>Started <strong>${esc(clock(s.startedAt))}</strong></span>` : ""}
+        ${s.startedAt ? `<span>Started <strong>${esc(fmtDisplayTime(s.startedAt, true))}</strong></span>` : ""}
         <span>Elapsed <strong>${esc(elapsed)}</strong></span>
+        ${s.finishedAt && !s.running ? `<span>Ended <strong>${esc(fmtDisplayTime(s.finishedAt, true))}</strong></span>` : ""}
       </div>
     </header>
 
@@ -327,7 +381,7 @@ export async function progressPanel(): Promise<string> {
     </dl>
 
     ${mutedNote}
-    ${interruptedNote}
+    ${outcomeNote}
     ${stopNote}
     ${s.lastError ? `<p class="err-line">${esc(s.lastError)}</p>` : ""}
   </section>`;

@@ -20,13 +20,14 @@ import {
   stem,
   isSafeRel,
   parseTrashSubdir,
+  selectExtractor,
   type SkipReason,
 } from "./archive";
 
 export const engineState = {
   running: false,
   runId: 0,
-  stage: "idle", // idle|listing|queueing|extracting|finished|cancelled|error
+  stage: "idle", // idle|listing|queueing|extracting|finished|interrupted|error
   currentRel: "",
   currentCommand: "",
   total: 0,
@@ -44,14 +45,27 @@ export const engineState = {
   // flight ("Listing archives", "Extracting", ...). Drives the per-command
   // progress bar and status badge in the dashboard.
   activity: "",
+  // Short app-error code for outcome='error' (no_scan_root, listing_failed,
+  // ...). Shown on the progress panel after an app-caused failure.
+  errorCode: "",
+  // Why the user stopped the run ("stopped by user (soft|hard stop)").
+  // Persisted at finalization and kept in memory so the panel can show the
+  // exact reason until the page reloads (the DB has it permanently).
+  stopReason: "",
   // UI state for the stop button: stopRequested = soft stop asked (current
   // archive finishes first), forceStop = hard stop asked (rclone killed
   // immediately). Set/reset by stopEngine/forceStopEngine and runEngine.
   stopRequested: false,
   forceStop: false,
+  // Temporary, per-run skip flags (never persisted to the database). Each is
+  // consumed by the archive/stage in flight and does not carry over to the
+  // next archive, stage, or run.
+  skipListing: false,
+  skipInspection: false,
+  skipArchive: false,
 };
 
-/** Soft stop: finish the current archive, then stop. */
+// Soft stop: finish the current archive, then stop.
 export function stopEngine(): void {
   if (!engineState.running) return;
   engineState.stopRequested = true;
@@ -71,6 +85,51 @@ export function forceStopEngine(): void {
   killActiveProcs();
 }
 
+/**
+ * Stage/archive skips. Temporary and in-memory only — never persisted to the
+ * database — and consumed by the one archive/stage in flight at most once.
+ * Each request kills the in-flight binary (listing/archive list/extract) so
+ * the engine proceeds without waiting for it to finish.
+ */
+export function requestSkipListing(): boolean {
+  if (!engineState.running || engineState.stage !== "listing") return false;
+  engineState.skipListing = true;
+  killActiveProcs();
+  return true;
+}
+
+export function requestSkipInspection(): boolean {
+  if (
+    !engineState.running ||
+    engineState.stage !== "extracting" ||
+    engineState.activity !== "Inspecting archive"
+  ) {
+    return false;
+  }
+  engineState.skipInspection = true;
+  killActiveProcs();
+  return true;
+}
+
+export function requestSkipArchive(): boolean {
+  if (!engineState.running || engineState.stage !== "extracting") return false;
+  engineState.skipArchive = true;
+  killActiveProcs();
+  return true;
+}
+
+/** Sentinel unwinding an archive the user asked to skip (re-queued, not failed). */
+class ArchiveSkipRequested extends Error {
+  constructor() {
+    super("archive skipped by user");
+    this.name = "ArchiveSkipRequested";
+  }
+}
+
+function throwIfSkipArchive(): void {
+  if (engineState.skipArchive) throw new ArchiveSkipRequested();
+}
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -87,9 +146,9 @@ function clampQueueMax(raw: string | undefined): number {
   return Math.min(n, 100_000);
 }
 
-// max_archive_size is stored as bytes ("0" = no limit). Invalid values are
+// Archive sizes are stored as bytes ("0" = no limit). Invalid values are
 // treated as "no limit" rather than silently capping at some minimum.
-function clampMaxArchiveSize(raw: string | undefined): number {
+function clampArchiveSize(raw: string | undefined): number {
   const n = Math.floor(Number(raw ?? "0"));
   if (!Number.isFinite(n) || n <= 0) return 0;
   return Math.min(n, Number.MAX_SAFE_INTEGER);
@@ -117,12 +176,20 @@ async function cancelRequestedCached(): Promise<boolean> {
 }
 
 /**
- * Close runs left unfinished by a crash and settle archives left mid-extraction.
- * With `recoverArchives` (resume on) they go back to the queue; otherwise they
- * are marked failed/interrupted so they never sit in 'extracting' forever —
- * they stay visible, re-runnable via Start, and count as failed for the run.
+ * Close runs left unfinished by a previous process and settle archives left
+ * mid-extraction. With `recoverArchives` (resume on) they go back to the
+ * queue; otherwise they are marked failed/killed so they never sit in
+ * 'extracting' forever.
+ *
+ * A killed run is one the host stopped: a run row with no finish time left
+ * behind by a process that did not finalize (crash, SIGKILL, OOM, or a
+ * signal handler that exits early). `reason` is recorded on the run so the
+ * Progress and Logs pages can show why it was killed.
  */
-export async function recoverStale(recoverArchives = true): Promise<number> {
+export async function recoverStale(
+  recoverArchives = true,
+  reason = "previous process exited mid-run (crash or kill)",
+): Promise<number> {
   const before = await store.query<{ c: number }>(
     "SELECT COUNT(*) AS c FROM archives WHERE status='extracting'",
   );
@@ -140,13 +207,13 @@ export async function recoverStale(recoverArchives = true): Promise<number> {
         "SELECT id FROM archives WHERE status='extracting'",
       );
       await store.run(
-        "UPDATE archives SET status='failed', error_kind='interrupted', updated_at=? WHERE status='extracting'",
+        "UPDATE archives SET status='failed', error_kind='killed', updated_at=? WHERE status='extracting'",
         [now()],
       );
       for (const row of rows) {
         await appendRawLines(
           { scope: "archive", refId: Number(row.id), kind: "extract" },
-          ["interrupted: app restarted before extraction finished"],
+          ["killed: app stopped before extraction finished"],
         ).catch(() => {});
       }
     }
@@ -154,13 +221,15 @@ export async function recoverStale(recoverArchives = true): Promise<number> {
   // A run row with no finish time is a run from a previous process. Close it so
   // the logs page and progress panel do not show it as indefinitely running.
   await store.run(
-    "UPDATE runs SET finished_at=?, interrupted=1 WHERE finished_at IS NULL",
-    [now()],
+    "UPDATE runs SET finished_at=?, outcome='killed', interrupted=1, interrupted_reason=? WHERE finished_at IS NULL",
+    [now(), reason],
   );
   return n;
 }
 
-export async function runEngine(): Promise<void> {
+export async function runEngine(
+  opts: { reuseScan?: boolean } = {},
+): Promise<void> {
   if (engineState.running) return;
   engineState.running = true;
   engineState.lastError = "";
@@ -177,39 +246,26 @@ export async function runEngine(): Promise<void> {
   engineState.activity = "";
   engineState.stopRequested = false;
   engineState.forceStop = false;
+  engineState.errorCode = "";
+  engineState.stopReason = "";
+  engineState.skipListing = false;
+  engineState.skipInspection = false;
+  engineState.skipArchive = false;
 
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
-  if (!scanRoot) {
-    engineState.stage = "error";
-    engineState.lastError = "scan_root not set";
-    engineState.running = false;
-    return;
-  }
   // Validate tmp_dir up front so misconfiguration fails fast instead of
   // producing a half-extracted archive outside the expected tree.
   const trashRaw = (await getSetting("trash_subdir", "trash")) ?? "trash";
   const trashSubdirValidated = parseTrashSubdir(trashRaw);
-  if (!trashSubdirValidated) {
-    engineState.stage = "error";
-    engineState.lastError = `trash_subdir is invalid: ${trashRaw}`;
-    engineState.running = false;
-    return;
-  }
-  const tmpSettings = await loadTmpDirSettings(trashSubdirValidated);
-  const tmpSpec = tmpSettings.spec;
-  if (!tmpSpec) {
-    engineState.stage = "error";
-    engineState.lastError = `tmp_dir is invalid: ${tmpSettings.raw}`;
-    engineState.running = false;
-    return;
-  }
-
-  await setSetting("cancel", "0");
-  resetCancelCache();
+  const tmpSettings = trashSubdirValidated
+    ? await loadTmpDirSettings(trashSubdirValidated)
+    : null;
+  const tmpSpec = tmpSettings?.spec ?? null;
 
   let runRowId = 0;
   let logger: Logger | null = null;
   let errorLog: Logger | null = null;
+  let errorCode = "engine_error";
 
   const fail = (msg: string, detail?: string) => {
     logger?.error(msg, detail);
@@ -220,6 +276,76 @@ export async function runEngine(): Promise<void> {
     errorLog?.warn(msg);
   };
 
+  // App errors — before or after the run row exists — close the run with
+  // outcome='error' and a short error code, and leave log lines behind, so
+  // they never masquerade as a finish or a host kill.
+  const abortWithError = async (code: string, msg: string) => {
+    errorCode = code;
+    engineState.errorCode = code;
+    engineState.stage = "error";
+    engineState.lastError = msg;
+    engineState.finishedAt = now();
+    fail(`engine error code=${code}: ${msg}`);
+    if (runRowId) {
+      await store
+        .run(
+          "UPDATE runs SET finished_at=?, outcome='error', error_kind=?, interrupted=0, interrupted_reason=? WHERE id=?",
+          [engineState.finishedAt, code, msg, runRowId],
+        )
+        .catch((e) =>
+          console.error("could not finalize errored run:", String(e)),
+        );
+    }
+    await logger?.flush();
+    await errorLog?.flush();
+    engineState.running = false;
+  };
+
+  // Create the run row and logger up front so even a pre-flight failure
+  // (missing scan_root, bad trash_subdir/tmp_dir) persists with a code and
+  // shows up on the Logs page after a reload.
+  const startedAt = now();
+  try {
+    runRowId = await store.insertReturningId(
+      "INSERT INTO runs(started_at, total) VALUES(?, 0)",
+      [startedAt],
+    );
+  } catch (e) {
+    // The database is unreachable; nothing can be persisted. Surface
+    // in-memory only.
+    console.error("could not create run row:", String(e));
+    engineState.stage = "error";
+    engineState.lastError = String(e);
+    engineState.finishedAt = now();
+    engineState.running = false;
+    return;
+  }
+  await setSetting("last_run_id", String(runRowId));
+  logger = new Logger({ scope: "run", refId: runRowId, kind: "main" });
+  errorLog = new Logger({ scope: "run", refId: runRowId, kind: "errors" });
+  logger.info(`run ${runRowId} started`);
+  engineState.runId = runRowId;
+  engineState.startedAt = startedAt;
+
+  if (!scanRoot) {
+    await abortWithError("no_scan_root", "scan_root not set");
+    return;
+  }
+  if (!trashSubdirValidated) {
+    await abortWithError("invalid_trash_subdir", `trash_subdir is invalid: ${trashRaw}`);
+    return;
+  }
+  if (!tmpSpec) {
+    await abortWithError(
+      "invalid_tmp_dir",
+      `tmp_dir is invalid: ${tmpSettings?.raw ?? "?"}`,
+    );
+    return;
+  }
+
+  await setSetting("cancel", "0");
+  resetCancelCache();
+
   try {
     const resumeEnabled = (await getSetting("resume", "1")) === "1";
     const recovered = await recoverStale(resumeEnabled);
@@ -227,23 +353,10 @@ export async function runEngine(): Promise<void> {
       console.log(
         resumeEnabled
           ? `resumed ${recovered} stale archive(s)`
-          : `marked ${recovered} interrupted archive(s) as failed`,
+          : `marked ${recovered} killed archive(s) as failed`,
       );
     }
 
-    const startedAt = now();
-    runRowId = await store.insertReturningId(
-      "INSERT INTO runs(started_at, total) VALUES(?, 0)",
-      [startedAt],
-    );
-    await setSetting("last_run_id", String(runRowId));
-
-    logger = new Logger({ scope: "run", refId: runRowId, kind: "main" });
-    errorLog = new Logger({ scope: "run", refId: runRowId, kind: "errors" });
-    logger.info(`run ${runRowId} started`);
-
-    engineState.runId = runRowId;
-    engineState.startedAt = startedAt;
     engineState.stage = "listing";
     logger.info(`scan_root=${scanRoot}`);
 
@@ -278,26 +391,99 @@ export async function runEngine(): Promise<void> {
     }
 
     const queueMax = clampQueueMax(await getSetting("queue_max", "500"));
-    const maxArchiveSize = clampMaxArchiveSize(
+    const maxArchiveSize = clampArchiveSize(
       await getSetting("max_archive_size", "0"),
     );
+    const minArchiveSize = clampArchiveSize(
+      await getSetting("min_archive_size", "0"),
+    );
+    const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
+    const rclonexSkipInspection =
+      (await getSetting("rclonex_skip_inspection", "1")) === "1";
+    // RcloneX-specific extraction flags (default off). A stored archive
+    // password is only passed when its checkbox enabled it.
+    const rclonexContinueOnError =
+      (await getSetting("rclonex_continue_on_error", "0")) === "1";
+    const rclonexPasswordEnabled =
+      (await getSetting("rclonex_archive_password_enabled", "0")) === "1";
+    const rclonexPassword =
+      (await getSetting("rclonex_archive_password", "")) ?? "";
+    const rclonexWindowEnabled =
+      (await getSetting("rclonex_window_size_enabled", "0")) === "1";
+    const rclonexWindowSize = Number(
+      await getSetting("rclonex_window_size", "16777216"),
+    );
+    const rclonexFlags: string[] = [];
+    if (rclonexContinueOnError) rclonexFlags.push("--archive-continue-on-error");
+    if (rclonexPasswordEnabled && rclonexPassword) {
+      rclonexFlags.push("--archive-password", rclonexPassword);
+    }
+    if (
+      rclonexWindowEnabled &&
+      Number.isFinite(rclonexWindowSize) &&
+      rclonexWindowSize >= 0
+    ) {
+      rclonexFlags.push(
+        "--archive-window-size",
+        String(Math.floor(rclonexWindowSize)),
+      );
+    }
+    const autoSkipKnown = (await getSetting("auto_skip_known", "1")) === "1";
     const dryRun = (await getSetting("dry_run", "0")) === "1";
     const trashSubdir = trashSubdirValidated;
     const trashDir = normalizeRel(trashSubdir);
+    // Fingerprint of every setting that changes what a listing produces or
+    // how paths get inserted during one. The cached-scan marker is only
+    // reused when the current fingerprint matches exactly, so changing any
+    // of these forces a fresh scan instead of silently reusing stale cache.
+    const scanFingerprint = [
+      scanRoot,
+      String(maxArchiveSize),
+      String(minArchiveSize),
+      String(queueMax),
+      dryRun ? "1" : "0",
+      trashDir,
+      autoSkipKnown ? "1" : "0",
+    ].join("|");
+    // Validate cached scan results for the "Reuse Previous Scan Results"
+    // option: a complete marker with a matching fingerprint only, plus the
+    // regular queue guards below. Anything stale/incomplete/mismatched falls
+    // back to a fresh scan.
+    const cacheKey = (await getSetting("scan_cache_key", "")) ?? "";
+    const cacheState =
+      (await getSetting("scan_cache_state", "incomplete")) ?? "";
+    const reuseRequested = opts.reuseScan === true;
+    const reuseScan =
+      reuseRequested && cacheState === "complete" && cacheKey === scanFingerprint;
+    if (reuseRequested && !reuseScan) {
+      logger.info(
+        "reuse-scan requested but no valid cached scan for these settings; scanning fresh",
+      );
+    }
     const existing = new Map(
       (
-        await store.query<{ path: string; status: string }>(
-          "SELECT path, status FROM archives",
-        )
-      ).map((row) => [row.path, row.status]),
+        await store.query<{
+          path: string;
+          status: string;
+          error_kind: string | null;
+        }>("SELECT path, status, error_kind FROM archives")
+      ).map((row) => [row.path, row]),
     );
 
     let queued = 0;
     let skippedUnsafe = 0;
     let ignoredTooLarge = 0;
+    let ignoredTooSmall = 0;
     const createdAt = now();
-    setActivity("Listing archives");
-    const listed = await rc.list(async (rel, size) => {
+    setActivity(reuseScan ? "Reusing cached scan" : "Listing archives");
+    // A skip asked before the listing even starts (e.g. during the temp
+    // purge) short-circuits it entirely — no process is spawned.
+    const skipListingAtStart = engineState.skipListing;
+    const listed =
+      reuseScan || skipListingAtStart
+        ? null
+        : await rc.list(async (rel, size) => {
+      if (engineState.skipListing) return false;
       if (await cancelRequestedCached()) return false;
       // A hostile or corrupt remote could return paths that escape the scan
       // tree ("..", absolute paths, empty segments). Never touch those.
@@ -308,11 +494,14 @@ export async function runEngine(): Promise<void> {
       // Archives already sitting in the trash subdir are not queued again;
       // otherwise a done path there would be re-queued on every run.
       if (isTrashPath(rel, trashSubdir)) return;
-      // Archives above the configured max size are ignored entirely: never
-      // queued, not stored, and re-evaluated on the next run (so raising the
-      // limit takes effect immediately).
+      // Archives outside the configured size window are ignored entirely:
+      // never queued, not stored, and re-evaluated on the next run.
       if (maxArchiveSize > 0 && size > maxArchiveSize) {
         ignoredTooLarge++;
+        return;
+      }
+      if (minArchiveSize > 0 && size < minArchiveSize) {
+        ignoredTooSmall++;
         return;
       }
       if (queued >= queueMax) return false;
@@ -323,20 +512,27 @@ export async function runEngine(): Promise<void> {
           "INSERT OR IGNORE INTO archives(path, size, status, created_at, updated_at) VALUES(?, ?, 'queued', ?, ?)",
           [rel, size, createdAt, createdAt],
         );
-        existing.set(rel, "queued");
+        existing.set(rel, { path: rel, status: "queued", error_kind: null });
         queued++;
         return;
       }
 
       // A done path that is visible again is a new upload (the previous file
-      // was moved to trash). Re-queue it. In dry-run the original is never
-      // moved, so re-queueing would make every run redo the same work.
-      if (prev === "done" && !dryRun) {
+      // was moved to trash). Re-queue it. When the user opted out of
+      // auto-skipping archives previously classified as torrent/website dumps,
+      // those are re-queued too (for re-inspection). In dry-run neither is
+      // re-queued, or every run would redo the same work.
+      const knownSkip =
+        prev.status === "skipped" &&
+        (prev.error_kind === "torrent" || prev.error_kind === "website");
+      const shouldRequeue =
+        !dryRun && (prev.status === "done" || (!autoSkipKnown && knownSkip));
+      if (shouldRequeue) {
         await store.run(
           "UPDATE archives SET size=?, status='queued', error_kind=NULL, updated_at=? WHERE path=?",
           [size, now(), rel],
         );
-        existing.set(rel, "queued");
+        existing.set(rel, { path: rel, status: "queued", error_kind: null });
         queued++;
       }
     });
@@ -349,38 +545,71 @@ export async function runEngine(): Promise<void> {
         `listing ignored ${ignoredTooLarge} archive(s) above max_archive_size`,
       );
     }
-    if (listed.streamError) {
-      const cancelRequested =
-        engineState.forceStop || (await getSetting("cancel", "0")) === "1";
-      // A force-stopped listing is an intentional stop, not a failure.
-      if (!cancelRequested) {
-        const msg = "listing stream failed";
-        fail(
-          msg,
-          `$ ${listed.command}\n${listed.streamError}\n${listed.stderr}`.trim(),
-        );
-        throw new Error(`${msg}: ${listed.streamError}`);
-      }
-      logger.info("listing stopped by user");
-    } else if (listed.stopped) {
-      logger.info("listing stopped early (queue limit or cancel)");
-    } else if (listed.code !== 0) {
-      // A hard stop kills the listing process; a non-zero exit then means
-      // "cancelled", not "the remote broke".
-      const cancelRequested =
-        engineState.forceStop || (await getSetting("cancel", "0")) === "1";
-      if (cancelRequested) {
-        logger.info("listing stopped by user");
+    if (ignoredTooSmall > 0) {
+      logger.info(
+        `listing ignored ${ignoredTooSmall} archive(s) below min_archive_size`,
+      );
+    }
+    if (!listed) {
+      if (engineState.skipListing) {
+        engineState.skipListing = false;
+        logger.info("listing skipped by user");
+        await setSetting("scan_cache_state", "incomplete");
       } else {
-        const msg = `listing failed (exit ${listed.code})`;
-        fail(msg, `$ ${listed.command}\n${listed.stderr}`.trim());
-        throw new Error(msg);
+        logger.info("reused cached scan results; listing skipped");
       }
+    } else {
+      // A skip aborts the listing early; it is not a cache-worthy listing.
+      const skipConsumed = engineState.skipListing;
+      if (skipConsumed) {
+        engineState.skipListing = false;
+        logger.info("listing skipped by user");
+        await setSetting("scan_cache_state", "incomplete");
+      }
+      if (!skipConsumed && listed.streamError) {
+        await setSetting("scan_cache_state", "incomplete");
+        const cancelRequested =
+          engineState.forceStop || (await getSetting("cancel", "0")) === "1";
+        // A force-stopped listing is an intentional stop, not a failure.
+        if (!cancelRequested) {
+          const msg = "listing stream failed";
+          errorCode = "listing_failed";
+          fail(
+            msg,
+            `$ ${listed.command}\n${listed.streamError}\n${listed.stderr}`.trim(),
+          );
+          throw new Error(`${msg}: ${listed.streamError}`);
+        }
+        logger.info("listing stopped by user");
+      } else if (!skipConsumed && listed.stopped) {
+        await setSetting("scan_cache_state", "incomplete");
+        logger.info("listing stopped early (queue limit or cancel)");
+      } else if (!skipConsumed && listed.code !== 0) {
+        await setSetting("scan_cache_state", "incomplete");
+        // A hard stop kills the listing process; a non-zero exit then means
+        // the user interrupted the run, not that the remote broke.
+        const cancelRequested =
+          engineState.forceStop || (await getSetting("cancel", "0")) === "1";
+        if (cancelRequested) {
+          logger.info("listing stopped by user");
+        } else {
+          const msg = `listing failed (exit ${listed.code})`;
+          errorCode = "listing_failed";
+          fail(msg, `$ ${listed.command}\n${listed.stderr}`.trim());
+          throw new Error(msg);
+        }
+      } else if (!skipConsumed) {
+        // The listing ran to completion; cache it for "Reuse Previous Scan
+        // Results". The archive table is never rewritten or corrupted by
+        // this, only the marker settings are stored.
+        await setSetting("scan_cache_key", scanFingerprint);
+        await setSetting("scan_cache_state", "complete");
+      }
+      if (listed.stderr.trim()) {
+        warn(`listing stderr: ${listed.stderr.trim()}`);
+      }
+      logger.info(`listing complete: ${queued} new/requeued archive(s)`);
     }
-    if (listed.stderr.trim()) {
-      warn(`listing stderr: ${listed.stderr.trim()}`);
-    }
-    logger.info(`listing complete: ${queued} new/requeued archive(s)`);
 
     engineState.stage = "queueing";
     setActivity("Building queue");
@@ -388,17 +617,20 @@ export async function runEngine(): Promise<void> {
     const sortDir = (await getSetting("sort_dir", "asc")) === "desc" ? "DESC" : "ASC";
     // Exclude pre-existing queued rows that live in the trash subdir (e.g.
     // enqueued by an older version), so they are never processed.
-    // Archives above the configured max size that were queued before the
-    // limit was set stay queued but are not selected; raising the limit
+    // Archives outside the configured size window that were queued before the
+    // limits were set stay queued but are not selected; relaxing the limit
     // makes them eligible again.
-    const sizeGuard = maxArchiveSize > 0 ? " AND size <= ?" : "";
+    const sizeGuards =
+      (maxArchiveSize > 0 ? " AND size <= ?" : "") +
+      (minArchiveSize > 0 ? " AND size >= ?" : "");
     const queueWhere = trashDir
-      ? `WHERE status='queued' AND path <> ? AND path NOT LIKE ? ESCAPE '\\'${sizeGuard}`
-      : `WHERE status='queued'${sizeGuard}`;
+      ? `WHERE status='queued' AND path <> ? AND path NOT LIKE ? ESCAPE '\\'${sizeGuards}`
+      : `WHERE status='queued'${sizeGuards}`;
     const queueParams: unknown[] = trashDir
       ? [trashDir, `${escapeLike(trashDir)}/%`]
       : [];
     if (maxArchiveSize > 0) queueParams.push(maxArchiveSize);
+    if (minArchiveSize > 0) queueParams.push(minArchiveSize);
     const rows = await store.query<{ id: number; path: string; size: number }>(
       `SELECT id, path, size FROM archives ${queueWhere} ORDER BY ${sortBy} ${sortDir} LIMIT ?`,
       [...queueParams, queueMax],
@@ -411,10 +643,28 @@ export async function runEngine(): Promise<void> {
     engineState.stage = "extracting";
     setActivity("");
 
+    // One runner per binary; rclonex is only created when enabled. Both share
+    // the --config working copy and remote flags. The dashboard "Active
+    // command" shows commands from either binary.
+    const wireCommand = (instance: Rclone) => {
+      instance.onCommand = (command) => {
+        engineState.currentCommand = command;
+      };
+    };
+    const rclonexRc = rclonexEnabled
+      ? await Rclone.fromSettings(logger, { rclonex: true })
+      : null;
+    if (rclonexRc) wireCommand(rclonexRc);
+
     for (const row of rows) {
+      // A pending skip click between archives has no archive in flight:
+      // discard it rather than leaking onto the next archive. Mid-archive
+      // skips are consumed by that archive's guard and cleared in the catch.
+      engineState.skipArchive = false;
+      engineState.skipInspection = false;
       if (await cancelRequestedCached()) {
         logger.info("cancel requested, stopping");
-        engineState.stage = "cancelled";
+        engineState.stage = "interrupted";
         break;
       }
       // Clear-queues maintenance may have deleted this row while the run
@@ -461,6 +711,9 @@ export async function runEngine(): Promise<void> {
       );
 
       const baseName = rel.slice(rel.lastIndexOf("/") + 1);
+      const useRclonex =
+        rclonexRc !== null && selectExtractor(baseName, true) === "rclonex";
+      const extractor = useRclonex && rclonexRc ? rclonexRc : rc;
       const tmp = tmpStemDir(tmpRoot, runRowId, row.id, stem(baseName));
       const archiveTmpDir = tmpArchiveDir(tmpRoot, runRowId, row.id);
       const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
@@ -470,25 +723,52 @@ export async function runEngine(): Promise<void> {
       try {
         // Inspect the archive before any extraction happens. Archives that
         // match the skip rules (empty, torrent, website, tiny) or cannot be
-        // read are skipped and never extracted.
+        // read are skipped and never extracted. For RcloneX-handled formats
+        // the inspection is skipped by default (rclonex does not implement
+        // `archive list` for rar/7z/iso) unless the user enabled it — then it
+        // goes through the same binary selected for extraction. The
+        // inspection-skip setting applies consistently to every archive of
+        // those formats; a per-archive user skip applies only to this one.
         const stats = createArchiveStats();
-        setActivity("Inspecting archive");
-        const listOut = await rc.archiveList(rel, ref, (entry) =>
-          addArchiveEntry(stats, entry.path, entry.size),
-        );
-        setActivity("");
-        const listFailed = Boolean(listOut.streamError) || listOut.code !== 0;
+        let inspectionDetail: string | null = null;
         let skipReason: SkipReason | "unreadable" | "password" | null = null;
-        if (listFailed) {
-          skipReason = /password/i.test(listOut.stderr) ? "password" : "unreadable";
+        if (engineState.skipInspection) {
+          engineState.skipInspection = false; // consumed by this archive only
+          logger.info(`inspection skipped by user: ${rel}`);
+        } else if (useRclonex && rclonexSkipInspection) {
+          logger.info(`skipping archive inspection for ${rel} (rclonex)`);
         } else {
-          skipReason = classifyArchive(stats);
+          const inspector = useRclonex && rclonexRc ? rclonexRc : rc;
+          setActivity("Inspecting archive");
+          const listOut = await inspector.archiveList(rel, ref, (entry) =>
+            addArchiveEntry(stats, entry.path, entry.size),
+          );
+          // Skip-archive takes precedence over the inspection outcome:
+          // re-queue the archive instead of classifying/extracting it.
+          throwIfSkipArchive();
+          setActivity("");
+          if (engineState.skipInspection) {
+            // The user asked to skip while the listing was in flight; treat
+            // the inspection as passed for this archive only.
+            engineState.skipInspection = false;
+            logger.info(`inspection skipped by user: ${rel}`);
+          } else {
+            const listFailed =
+              Boolean(listOut.streamError) || listOut.code !== 0;
+            if (listFailed) {
+              skipReason = /password/i.test(listOut.stderr)
+                ? "password"
+                : "unreadable";
+              inspectionDetail = `listing failed (exit ${listOut.code})`;
+            } else {
+              skipReason = classifyArchive(stats);
+              inspectionDetail = describeArchiveStats(stats);
+            }
+          }
         }
 
         if (skipReason) {
-          const detail = listFailed
-            ? `listing failed (exit ${listOut.code})`
-            : describeArchiveStats(stats);
+          const detail = inspectionDetail ?? describeArchiveStats(stats);
           await store.run(
             "UPDATE archives SET status='skipped', error_kind=?, updated_at=? WHERE id=?",
             [skipReason, now(), row.id],
@@ -504,10 +784,18 @@ export async function runEngine(): Promise<void> {
         } else {
         tmpAttempted = true;
         setActivity("Extracting");
-        const ex = await rc.extract(rel, tmp, dryRun, ref, (stats) => {
-          engineState.commandStats = stats;
-        });
+        const ex = await extractor.extract(
+          rel,
+          tmp,
+          dryRun,
+          ref,
+          (stats) => {
+            engineState.commandStats = stats;
+          },
+          useRclonex ? rclonexFlags : undefined,
+        );
         setActivity("");
+        throwIfSkipArchive();
 
         if (ex.code !== 0) {
           const all = `${ex.tail.join("\n")}\n${ex.stderr}`;
@@ -522,6 +810,7 @@ export async function runEngine(): Promise<void> {
             setActivity("Cleaning up");
             await rc.cleanup(tmp, dryRun, ref);
             setActivity("");
+            throwIfSkipArchive();
             await store.run(
               "UPDATE archives SET status='failed', error_kind='extract', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -537,10 +826,12 @@ export async function runEngine(): Promise<void> {
             engineState.commandStats = stats;
           });
           setActivity("");
+          throwIfSkipArchive();
           if (promoted.code !== 0) {
             setActivity("Cleaning up");
             await rc.cleanup(tmp, dryRun, ref);
             setActivity("");
+            throwIfSkipArchive();
             await store.run(
               "UPDATE archives SET status='failed', error_kind='promote', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -564,6 +855,7 @@ export async function runEngine(): Promise<void> {
               engineState.commandStats = stats;
             });
             setActivity("");
+            throwIfSkipArchive();
             if (trashed.code !== 0) {
               await store.run(
                 "UPDATE archives SET status='failed', error_kind='trash', updated_at=? WHERE id=?",
@@ -585,6 +877,18 @@ export async function runEngine(): Promise<void> {
         }
         }
       } catch (e) {
+        if (e instanceof ArchiveSkipRequested) {
+          // User-initiated archive skip: put the archive back in the queue
+          // (like a force-stop) and count it as skipped for this run. Done
+          // and skipped rows are never resurrected.
+          engineState.skipArchive = false; // consumed by this archive
+          await store.run(
+            "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=? AND status NOT IN ('done','skipped')",
+            [now(), row.id],
+          );
+          warn(`skipped by user (re-queued): ${rel}`);
+          result = "skipped";
+        } else {
         await store.run(
           "UPDATE archives SET status='failed', error_kind='spawn', updated_at=? WHERE id=?",
           [now(), row.id],
@@ -594,6 +898,7 @@ export async function runEngine(): Promise<void> {
         // Copy/Download is not empty.
         await appendRawLines(ref, [`archive error: ${String(e)}`]).catch(() => {});
         fail(`archive error: ${rel}`, String(e));
+        }
       } finally {
         if (engineState.forceStop) {
           // Hard stop while the archive was mid-flight: put it back in the
@@ -671,29 +976,34 @@ export async function runEngine(): Promise<void> {
     setActivity("");
 
     // A stop requested while the last archive was being processed never gets
-    // another loop iteration to notice it, so decide here.
-    if (engineState.stage !== "cancelled") {
-      engineState.stage = engineState.stopRequested ? "cancelled" : "finished";
+    // another loop iteration to notice it, so decide here. A user-stopped run
+    // ends as outcome='interrupted' (reason names the stop mode); a clean run
+    // ends as 'finished'.
+    if (engineState.stage !== "interrupted") {
+      engineState.stage = engineState.stopRequested ? "interrupted" : "finished";
     }
     engineState.finishedAt = now();
-    await store.run("UPDATE runs SET finished_at=? WHERE id=?", [
-      engineState.finishedAt,
-      runRowId,
-    ]);
+    const stopped = engineState.stage === "interrupted";
+    engineState.stopReason = stopped
+      ? engineState.forceStop
+        ? "stopped by user (hard stop)"
+        : "stopped by user (soft stop)"
+      : "";
+    await store.run(
+      "UPDATE runs SET finished_at=?, outcome=?, interrupted=?, interrupted_reason=?, error_kind=NULL WHERE id=?",
+      [
+        engineState.finishedAt,
+        stopped ? "interrupted" : "finished",
+        stopped ? 1 : 0,
+        stopped ? engineState.stopReason : null,
+        runRowId,
+      ],
+    );
     logger.info(
       `run ${runRowId} ${engineState.stage}: done=${engineState.done} failed=${engineState.failed} skipped=${engineState.skipped}`,
     );
   } catch (e) {
-    engineState.lastError = String(e);
-    engineState.stage = "error";
-    engineState.finishedAt = now();
-    fail("engine error", String(e));
-    if (runRowId) {
-      await store.run("UPDATE runs SET finished_at=? WHERE id=?", [
-        engineState.finishedAt,
-        runRowId,
-      ]);
-    }
+    await abortWithError(errorCode, String(e));
   } finally {
     // Let queued log writes land before the run state resets and (on
     // shutdown) the database closes.
@@ -706,5 +1016,8 @@ export async function runEngine(): Promise<void> {
     engineState.activity = "";
     engineState.stopRequested = false;
     engineState.forceStop = false;
+    engineState.skipListing = false;
+    engineState.skipInspection = false;
+    engineState.skipArchive = false;
   }
 }

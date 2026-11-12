@@ -19,6 +19,7 @@ export const SECRET_KEY = process.env.SECRET_KEY ?? ""; // at-rest encryption pa
 export const DATABASE_URL = process.env.DATABASE_URL ?? ""; // remote postgres, optional
 export const RCLONE_CONF = process.env.RCLONE_CONF ?? ""; // base64-encoded rclone.conf fallback
 export const RCLONE_BIN = process.env.RCLONE_BIN ?? "rclone"; // path to the rclone binary
+export const RCLONEX_BIN = process.env.RCLONEX_BIN ?? "rclonex"; // path to the rclonex binary (Nerqiva/rclonex)
 // Max connections this app opens to Postgres. Keep it small: the remote
 // service caps total connections and reserves slots for superusers.
 const pgPoolMax = Number(process.env.PG_POOL_MAX ?? 4);
@@ -28,6 +29,19 @@ export const TRUST_PROXY = process.env.TRUST_PROXY === "1"; // trust proxy heade
 // Session cookie is marked Secure (HTTPS only) by default. Set
 // COOKIE_SECURE=0 when serving the app over plain HTTP (e.g. LAN/testing).
 export const COOKIE_SECURE = process.env.COOKIE_SECURE !== "0";
+// Display timezone for every time shown in the UI (DB and backups stay in
+// UTC). Defaults to Asia/Omsk; set APP_TZ to any IANA zone (e.g.
+// Europe/Berlin). Invalid values fall back to Asia/Omsk.
+export const APP_TZ = (() => {
+  const raw = (process.env.APP_TZ ?? "").trim() || "Asia/Omsk";
+  try {
+    new Intl.DateTimeFormat("en-GB", { timeZone: raw });
+    return raw;
+  } catch {
+    console.warn(`invalid APP_TZ "${raw}" — falling back to Asia/Omsk`);
+    return "Asia/Omsk";
+  }
+})();
 
 // The local filesystem is only needed for the SQLite database and the
 // transient rclone.conf working copy (which falls back to /tmp/app/data when

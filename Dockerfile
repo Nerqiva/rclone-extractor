@@ -4,6 +4,12 @@ FROM oven/bun:1.4-slim
 # hardcoding the amd64 build, which fails with ENOEXEC on arm64 hosts.
 ARG TARGETARCH
 ARG TARGETVARIANT
+# RcloneX (Nerqiva/rclonex) is installed right after rclone via the official
+# install script: resolves the latest release (falling back to the newest
+# pre-release when no stable exists), picks the linux/<arch> build (uname -m
+# reports the target arch under QEMU), verifies the published sha256
+# checksums, and installs to /usr/local/bin/rclonex with mode 0755. Any
+# failure aborts the build.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl unzip tar gzip tzdata \
  && ARCH="${TARGETARCH:-amd64}" \
@@ -20,6 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && cp rclone-*-linux-${RCLONE_ARCH}/rclone /usr/local/bin/rclone \
  && chmod 755 /usr/local/bin/rclone \
  && rclone version \
+ && curl -fsSL https://raw.githubusercontent.com/Nerqiva/rclonex/main/bin/install-rclonex.sh | bash || { code=$?; \
+      if [ "$code" = "3" ]; then echo "rclonex is already the latest release (continuing)"; \
+      else echo "rclonex installation failed (exit $code) — aborting build" >&2; exit "$code"; fi; } \
+ && rclonex version \
  && rm -rf rclone-* \
  && apt-get purge -y curl unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
