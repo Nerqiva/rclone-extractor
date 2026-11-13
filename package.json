@@ -2,6 +2,16 @@
   "name": "rclone-extractor",
   "version": "2026.11.13.2-alpha",
   "type": "module",
+  "description": "Self-hosted web app that scans an rclone remote for archives, extracts them in place, and moves finished archives to trash.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nerqiva/rclone-extractor.git"
+  },
+  "homepage": "https://github.com/Nerqiva/rclone-extractor#readme",
+  "bugs": {
+    "url": "https://github.com/Nerqiva/rclone-extractor/issues"
+  },
   "scripts": {
     "start": "bun run src/server.ts",
     "test": "bun test --isolate"

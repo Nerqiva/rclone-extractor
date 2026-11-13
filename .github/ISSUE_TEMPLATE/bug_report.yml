@@ -1,0 +1,55 @@
+name: Bug report
+description: Something is broken or not working as expected
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in the sections below.
+        Do not report security issues here — use the security advisory link instead.
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: What actually happened? Include error messages if you have them.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the steps needed to reproduce the problem.
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Provide as much detail as you can.
+      placeholder: |
+        - Docker image tag or commit:
+        - Database: SQLite or Postgres
+        - rclone version:
+        - OS / arch:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: App logs
+      description: Paste relevant lines from the app logs. Remove any secrets (passwords, tokens, rclone.conf contents) before posting.
+      render: shell
+    validations:
+      required: false
