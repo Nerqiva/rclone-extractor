@@ -2,33 +2,42 @@ import { Hono } from "hono";
 import { store, getSetting } from "../db";
 import { layout, esc, fmtDisplayTime, info } from "../ui";
 import { csrfFor } from "./auth";
-import { configForm } from "../views";
+import { configForm, controlsFragment } from "../views";
 import { resolveOutcome } from "../runs";
 import { encryptionEnabled } from "../crypto";
 import { engineState } from "../engine";
-import { checkRclone, checkRclonex } from "../rclone";
+import { checkRclone, checkRclonex, pendingRcloneConfNotice } from "../rclone";
 import { tailRendered, LOG_TAIL_LIMIT } from "../log";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
+import { progressPanel } from "./dashboard";
 
 export const pages = new Hono();
 
-pages.get("/", (c) =>
-  c.html(
+// Render the dashboard inline so the first paint is complete — the lazy
+// load used to show an empty box while the controls popped in first.
+pages.get("/", async (c) => {
+  // Boot-time rclone.conf fallbacks are toasted by the first poll normally;
+  // inline it here or it would never be seen on a fresh page load.
+  const confNotice = pendingRcloneConfNotice();
+  const noticeScript = confNotice
+    ? `<script>window.addEventListener("load",function(){window.appToast&&window.appToast(${JSON.stringify(confNotice).replace(/</g, "\u003c")},"err");});</script>`
+    : "";
+  const [panel, controls] = await Promise.all([
+    progressPanel(),
+    Promise.resolve(controlsFragment()),
+  ]);
+  return c.html(
     layout(
       "Progress",
-      `<div hx-get="/dashboard/fragment" hx-trigger="load, every 1s" hx-swap="innerHTML">
-        <p class="muted">Loading…</p>
-      </div>
-      <div class="controls-dock">
-        <div id="controls" hx-get="/dashboard/controls" hx-trigger="load" hx-swap="outerHTML"></div>
-      </div>`,
+      `<div id="dashboard-panel" hx-get="/dashboard/fragment" hx-trigger="every 1s" hx-swap="innerHTML">${panel}</div>
+      <div class="controls-dock">${controls}</div>${noticeScript}`,
       "dashboard",
       csrfFor(c),
       "Start, stop and watch the current task.",
     ),
-  ),
-);
+  );
+});
 
 pages.get("/config", async (c) => {
   const csrf = csrfFor(c);
