@@ -61,7 +61,10 @@ export function isSupported(name: string, rclonex = false): boolean {
 /**
  * Deterministic extractor selection. RcloneX is used only for the formats
  * listed above (including multivolume archives) when enabled; everything
- * else goes through rclone's native archive command.
+ * else goes through rclone's native archive command. Non-first volumes are
+ * not queueable, so they fall back to rclone — which would fail on them,
+ * mirroring the queue-time exclusion instead of silently picking an
+ * extractor that cannot handle them either.
  */
 export function selectExtractor(
   name: string,
@@ -69,7 +72,8 @@ export function selectExtractor(
 ): "rclone" | "rclonex" {
   if (!rclonexEnabled) return "rclone";
   const lower = name.toLowerCase();
-  if (multiVolumePart(lower)) return "rclonex";
+  const mv = multiVolumePart(lower);
+  if (mv) return mv.index === 1 ? "rclonex" : "rclone";
   if (RCLONEX_SUPPORTED.some((suffix) => lower.endsWith(suffix))) {
     return "rclonex";
   }

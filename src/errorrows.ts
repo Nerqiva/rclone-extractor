@@ -22,7 +22,7 @@ const KIND_CLASS: Record<string, string> = {
   killed: "warn",
 };
 
-function relativeTime(iso: string): string {
+export function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   if (!Number.isFinite(diff) || diff < 0) return iso;
   const s = Math.floor(diff / 1000);
@@ -65,7 +65,9 @@ export function renderErrorCards(rows: ErrorRow[]): string {
 export async function readErrorRows(
   store: { query: <T>(sql: string, params?: unknown[]) => Promise<T[]> },
 ): Promise<ErrorRow[]> {
+  // Password-protected archives have their own tab on the Logs page; keep the
+  // Errors page for real failures only.
   return store.query<ErrorRow>(
-    "SELECT id, path, error_kind, updated_at FROM archives WHERE error_kind IS NOT NULL ORDER BY updated_at DESC LIMIT 500",
+    "SELECT id, path, error_kind, updated_at FROM archives WHERE error_kind IS NOT NULL AND error_kind <> 'password' ORDER BY updated_at DESC LIMIT 500",
   );
 }

@@ -106,8 +106,10 @@ When `DATABASE_URL` is set, Postgres is used and the schema is created
 automatically on first boot. Existing databases are migrated automatically on
 boot as well (currently: the `runs.interrupted` flag, and the newer
 `outcome`/`error_kind` columns — runs closed by crash recovery before them
-read as **Killed** — the dropped legacy `logs` table, and the dropped
-`log_lines.seq` / `sessions.created_at` columns). Index DDL failures
+read as **Killed** — the `runs.last_archive` / `runs.last_command` columns
+that keep the in-flight archive and command after an interruption, the
+dropped legacy `logs` table, and the dropped `log_lines.seq` /
+`sessions.created_at` columns). Index DDL failures
 during schema install are logged and skipped rather than crashing the
 process; a critical table that is missing or unreadable fails with a clear
 error naming it.
@@ -238,9 +240,8 @@ database. They can also be seeded from environment variables.
 | `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `rclonex` | **Enable RcloneX** (default off). When on, archives whose format rclone cannot handle — RAR/RAR5, multivolume RAR (`x.partN.rar` / `x.r00…`), 7Z, split/multivolume 7Z (`x.7z.NNN`), and ISO9660 — are queued and extracted with rclonex, including multivolume sets (only the first volume is queued: `part1.rar` / `.7z.001` / plain `.rar`). Everything else stays on rclone's native `archive extract`. When off, these formats are not queued at all. |
-| `rclonex_skip_inspection` | Skip the archive content inspection for archives handled by RcloneX (default on — rclonex does not implement `archive list` for RAR/7Z/ISO). Other formats are always inspected. When off, inspection runs for RcloneX formats via rclonex; an inspection failure marks the archive `unreadable` and it is never extracted. |
+| `rclonex_skip_inspection` | Skip the archive content inspection for archives handled by RcloneX (default on — slow full-stream reads). ISO archives are always skipped (not listable). When off, RAR/7Z inspection runs through rclone (`archive list` reads them fine); an inspection failure marks the archive `unreadable` and it is never extracted. ZIP/TAR family is always inspected. |
 | `auto_skip_known` | Keep reappearing archives classified as a torrent or website dump skipped automatically (default on — they are never re-queued/re-inspected). Uncheck to re-inspect such reappearing archives on later runs. |
-| `rclonex_continue_on_error` | RcloneX flag `--archive-continue-on-error` (default off): keep extracting when an archive entry fails instead of aborting the archive. |
 | `rclonex_archive_password_enabled` + `rclonex_archive_password` | RcloneX flag `--archive-password` (default off): password for encrypted RAR/7Z archives (multivolume sets included). The password is stored encrypted at rest; leaving the field blank on save keeps the stored value, and the **Clear** button removes it (disables the flag). |
 | `rclonex_window_size_enabled` + `rclonex_window_size` | RcloneX flag `--archive-window-size` (default off, rclonex keeps its own 16 MiB): sliding-window cache size in bytes for random-access formats read by rclonex (7Z, ISO). `0` disables caching. |
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
@@ -339,7 +340,7 @@ For each archive at `<ROOT>/<REL>`:
 
 ```
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";"
-inspect: rclone archive list <ROOT>/<REL> --files-only (skipped for RcloneX formats by default)
+inspect: rclone archive list <ROOT>/<REL> --files-only (skipped for RcloneX formats by default, always for ISO)
 extract: rclone archive extract <ROOT>/<REL> <TMPDIR>/<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
          (or `rclonex archive extract` for RcloneX-handled formats, with the configured --archive-* flags)
 promote: rclone move <TMPDIR>/<runid>/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
@@ -425,15 +426,20 @@ Enable it with **Enable RcloneX** on the Configuration page.
 - When RcloneX is disabled, those formats are not queueable at all (they are
   filtered out of the listing exactly like `.sqfs`), and every archive-family
   capability beyond upstream rclone is off.
-- **Inspection is skipped by default** for RcloneX-handled archives (rclonex
-  does not implement `archive list` for RAR/7Z/ISO), controlled by the
-  **Skip inspection for RcloneX formats** option — off means inspection runs
-  through rclonex; an inspection failure marks the archive `unreadable` and
-  it is never extracted. ZIP/TAR/etc. always inspect as before.
-- **Flags**: `--archive-continue-on-error`, `--archive-password` (encrypted at
-  rest, blank field on save keeps the stored value, **Clear** removes it), and
-  `--archive-window-size` (bytes; `0` disables caching) are exposed as
-  Configuration checkboxes, all **off by default**.
+- **Inspection is skipped by default** for RcloneX-handled archives (it
+  means streaming the whole archive through `archive list`), controlled by
+  the **Skip inspection for RcloneX formats** option. ISO9660 archives are
+  always skipped — ISO is only identified on the extract path, so
+  `archive list` can never succeed there. When off, RAR/7Z inspection runs
+  through **rclone** (upstream's `archive list` reads them); an inspection
+  failure marks the archive `unreadable` and it is never extracted.
+  ZIP/TAR/etc. always inspect as before.
+- **Flags**: `--archive-password` (encrypted at rest, blank field on save
+  keeps the stored value, **Clear** removes it) and `--archive-window-size`
+  (bytes; `0` disables caching) are exposed as Configuration checkboxes, all
+  **off by default**. `--archive-*` flags placed in `remote_flags` are passed
+  to rclonex only — they are stripped (with a warning) for the rclone
+  binary, where they would make every command fail.
 - **Docker**: the image installs the latest rclonex release (or the newest
   pre-release when no stable exists) via the official install script, with
   sha256 checksums verified, installed to `/usr/local/bin/rclonex`. Outside
@@ -458,10 +464,11 @@ these holds:
 | `tiny` | ≥ 60% of files are smaller than 20 KB. |
 | `unreadable` | `archive list` fails (corrupt, truncated, or otherwise unreadable/unsupported). |
 
-If the listing error mentions a password, the skip reason is `password`
-(same as a password failure during extraction). Skipped archives are never
-re-queued on later runs and stay in place; the reason is visible on the
-Errors page (as the error-kind pill). Archives previously skipped as a
+If the failure output mentions a password, the skip reason is `password`
+(same as a password failure during extraction). Skipped password archives are
+never re-queued on later runs; they are listed on the Logs page's
+**Password-protected** tab, where they can be downloaded, moved to trash, or
+restored to the queue. Archives previously skipped as a
 torrent or website dump that reappear in a later listing are auto-skipped by
 default (see `auto_skip_known`).
 
@@ -494,23 +501,25 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
 - **Start** re-queues archives in the `failed` state and clears their
   `error_kind`. Stale `extracting` rows are also recovered on boot/Start
   (re-queued with `resume` on, marked `killed` with it off).
-- **Stop** sits at the bottom of the progress page (pinned in place after the
-  controls row so it no longer shifts when clicked) and asks for confirmation
-  first (no explanation text — just the two choices): **Soft stop** lets the
+- **Stop** sits at the right edge of the controls row and asks for
+  confirmation first (just the two choices): **Soft stop** lets the
   current archive finish; **Hard
   stop** kills the in-flight rclone process immediately, re-queues the
   interrupted archive (never counted as done/failed/skipped) and ends the run
   with `outcome = interrupted`. The panel shows a persistent "Stop requested" message while
   a soft stop is pending.
-- **Skip** controls appear in the same row, only while they apply, and are
-  never persisted: **Skip listing** (while the archive scan is running) treats
-  the listing as completed and goes straight to the queue using the archives
-  already stored — the scan is stopped early, not cancelled; **Skip
-  inspection** (while an archive is being inspected) treats the inspection as
-  passed and extracts the archive; **Skip archive** stops the current archive
-  and leaves it queued — it is retried on the next run (it is also counted as
-  skipped for this run's counters). A skip affects only the archive/stage in
-  flight — never subsequent archives, later runs, or the queue order.
+- **Skip** controls appear in the same row, only while they apply to an
+  operation actually in flight, and are never persisted: **Skip listing**
+  (only while the listing binary is running) stops the scan early and builds
+  the queue from the archives already stored; **Skip inspection** (only
+  while an archive is being inspected) treats the inspection as passed and
+  extracts the archive; **Skip archive** (only while an archive is in
+  flight) stops the current archive and leaves it queued — it is retried on
+  the next run, and is counted as skipped for this run's counters. A skip
+  affects only the archive/stage in flight — never subsequent archives,
+  later runs, or the queue order. A skip asked while nothing matching is in
+  flight is refused with a toast instead of being silently dropped.
+  Skipping an archive never moves it to the trash folder.
 - **Reuse Previous Scan Results** is an opt-in checkbox on the **Start** row
   (unchecked by default). When ticked, the run does not rescan the remote; it
   rebuilds the queue from the archives already stored in the database, reusing
@@ -528,7 +537,9 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
   shown in the UI; a run the host stops (crash, SIGKILL/OOM, or `SIGTERM`/
   `SIGINT` at shutdown) ends with `outcome = killed` (**Killed**), and a run
   the app itself fails ends with `outcome = error` and an `error_kind` code
-  (**Error**). App errors never show as Interrupted or Completed. The cause
+  (**Error**). App errors never show as Interrupted or Completed. User stops
+  are likewise recorded with a code — `interrupted_soft`, `interrupted_hard`,
+  or `interrupted_cancel` — in both the run log and the errors log. The cause
   (or code) and time are recorded on the run and shown on both the progress
   and logs pages (e.g. `stopped by user (hard stop)`,
   `received SIGTERM (deploy or restart)`, or `previous process exited mid-run
@@ -548,7 +559,12 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
   and a recorded cause and time — a graceful stop records
   `received SIGTERM/SIGINT` at the moment it happens; a hard kill is recorded
   at the next boot instead. The cause and time are shown on the progress and
-  logs pages.
+  logs pages, and a `[killed] <cause>` line is appended to the run's log and
+  errors log. The same code (`killed`, `interrupted_soft`, `interrupted_hard`
+  or `interrupted_cancel`) is stored on the run as `error_kind` and shown
+  next to the reason on both pages. The progress page also shows the
+  **last archive** and **last command** of the interrupted/killed run (the
+  slots read "Current archive" and "Active command" while a run is live).
 - An **app-caused error** (misconfiguration, a listing failure the app
   surfaces as an exception, a database error) closes the run with
   `outcome = error` and an `error_kind` code — `no_scan_root`,
@@ -588,7 +604,8 @@ button is not possible.
 The **Logs** page opens on the current (latest) session. While a task is
 running, only that live session is shown. When the app is idle, the same log
 window has a session picker so older runs can be viewed without leaving the
-page, plus tabs for the run log and the errors log.
+page, plus tabs for the run log, the errors log and the password-protected
+archives.
 
 - Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
   and appended, and polling stops as soon as the run finishes — finished
@@ -600,10 +617,22 @@ page, plus tabs for the run log and the errors log.
   copies whatever you have selected; **Select all** selects the whole log for
   partial manual copying. Clipboard fallbacks work on plain-HTTP self-hosted
   deployments too.
-- The **Errors** page lists archives with `error_kind` set and has a
-  **Copy all** button for a tab-separated summary. Each row's **Copy** /
-  **Download** button fetches that archive's log, which stores the raw rclone
-  output of the failing command — nothing written by the app is added to it.
+- The **Errors** page lists archives with `error_kind` set (except
+  password-protected archives, see below) and has a **Copy all** button for a
+  tab-separated summary. Each row's **Copy** / **Download** button fetches
+  that archive's log, which stores the raw rclone output of the failing
+  command — nothing written by the app is added to it.
+- The **Password-protected** tab on the Logs page lists every archive that
+  reached a run but needs a password (a warning is logged and the run moves
+  to the next archive; they are never extracted without one). Each row shows
+  the file name and path and its size, a **Log view** for the per-archive
+  log, **Copy log**, a **Download** button that streams the archive itself
+  through the app (`rclone cat`), and **Delete** — which moves the file to
+  the configured trash folder after a confirmation (never outright deletion,
+  and never over anything already in the trash). A deleted archive shows up
+  on the same tab with an **in trash** pill and a **Restore** button that
+  moves it back into the queue (clearing the error kind). Deleting/restoring
+  is blocked while a task is running.
 
 ### Backend adapter
 
@@ -661,6 +690,9 @@ POST /run/start  /run/stop  /run/skip               (auth)
 POST /config  /config/rclone-clear  /config/rclonex-clear  (auth)
 POST /maintenance/queues  /maintenance/runs  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)
+GET  /download/archive-file/:id                   (auth)
+GET  /logs/archive/:id/fragment                   (auth)
+POST /archives/:id/delete  /archives/:id/restore  (auth)
 POST /export  /import                          (auth)
 GET  /healthz              "ok" (no auth)
 GET  /public/*             static files (no auth)

@@ -3,7 +3,7 @@ import { serveStatic } from "hono/bun";
 import { APP_PASSWORD, BIND, PORT } from "./config";
 import { initDb, store, getSetting } from "./db";
 import { recoverStale } from "./engine";
-import { checkRclone, Rclone } from "./rclone";
+import { checkRclone, checkRclonex, Rclone } from "./rclone";
 import { tmpRootPath } from "./tmpdir";
 import { loadTmpDirSettings } from "./tmpsweep";
 import { auth, authMiddleware, csrfMiddleware } from "./routes/auth";
@@ -25,6 +25,20 @@ if (rcloneHealth.ok) {
   console.log(`rclone ok: ${rcloneHealth.detail} (${rcloneHealth.bin})`);
 } else {
   console.warn(`rclone not runnable: ${rcloneHealth.detail}`);
+}
+
+// When RcloneX extraction is enabled, probe its binary at boot too so a
+// missing/wrong-arch build surfaces here instead of as per-archive spawn
+// failures. RAR/7Z/ISO extraction fails without it.
+if ((await getSetting("rclonex", "0")) === "1") {
+  const rclonexHealth = await checkRclonex();
+  if (rclonexHealth.ok) {
+    console.log(`rclonex ok: ${rclonexHealth.detail} (${rclonexHealth.bin})`);
+  } else {
+    console.warn(
+      `rclonex not runnable: ${rclonexHealth.detail} — RAR/7Z/ISO extraction will fail`,
+    );
+  }
 }
 
 const resume = (await getSetting("resume", "1")) === "1";

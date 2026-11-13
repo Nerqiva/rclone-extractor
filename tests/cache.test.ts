@@ -63,14 +63,14 @@ exit 0
   await setSetting("max_archive_size", "0");
 
   // Cached results from a "previous completed scan of this root". The
-  // fingerprint covers scan_root, size limits, queue size, dry-run, trash and
-  // auto_skip_known — the same shape the engine computes.
+  // fingerprint covers scan_root, size limits, queue size, dry-run, trash,
+  // auto_skip_known and the rclonex flag — the same shape the engine computes.
   await db!.store.run(
     "INSERT INTO archives(path, size, status, created_at, updated_at) VALUES('cached.zip', 100000, 'queued', 't', 't')",
   );
   await setSetting(
     "scan_cache_key",
-    [scanRoot, "0", "0", "500", "0", "trash", "1"].join("|"),
+    [scanRoot, "0", "0", "500", "0", "trash", "1", "0"].join("|"),
   );
   await setSetting("scan_cache_state", "complete");
 

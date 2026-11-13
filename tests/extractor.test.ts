@@ -20,10 +20,16 @@ test("selectExtractor: rar/7z/iso use rclonex only when enabled", () => {
 });
 
 test("selectExtractor: multivolume archives use rclonex only when enabled", () => {
-  for (const name of ["a.part1.rar", "a.part01.rar", "a.7z.001", "a.r00"]) {
+  for (const name of ["a.part1.rar", "a.part01.rar", "a.7z.001"]) {
     expect(selectExtractor(name, false)).toBe("rclone");
     expect(selectExtractor(name, true)).toBe("rclonex");
   }
+});
+
+test("selectExtractor: non-first volumes stay on rclone (they are never queued)", () => {
+  expect(selectExtractor("a.part2.rar", true)).toBe("rclone");
+  expect(selectExtractor("a.7z.002", true)).toBe("rclone");
+  expect(selectExtractor("a.r00", true)).toBe("rclone");
 });
 
 test("selectExtractor: unsupported formats stay on rclone (and are filtered elsewhere)", () => {

@@ -12,8 +12,10 @@ interface Snapshot {
   running: boolean;
   runId: number;
   stage: string;
-  currentRel: string;
-  currentCommand: string;
+  /** Archive in flight (live) or the last one processed (not running). */
+  lastArchive: string;
+  /** Command in flight (live) or the last one dispatched (not running). */
+  lastCommand: string;
   total: number;
   done: number;
   failed: number;
@@ -28,7 +30,7 @@ interface Snapshot {
   interruptReason: string;
   /** '' while running/legacy, else finished|interrupted|killed|error. */
   outcome: string;
-  /** App-error code; set only when outcome === "error". */
+  /** App-error code; set for outcome === "error" and for interrupted/killed. */
   errorKind: string;
 }
 
@@ -109,8 +111,8 @@ async function snapshot(): Promise<Snapshot> {
       running: engineState.running,
       runId: engineState.runId,
       stage: engineState.stage,
-      currentRel: engineState.currentRel,
-      currentCommand: engineState.currentCommand,
+      lastArchive: engineState.currentRel,
+      lastCommand: engineState.currentCommand,
       total: engineState.total,
       done: engineState.done,
       failed: engineState.failed,
@@ -151,16 +153,18 @@ async function snapshot(): Promise<Snapshot> {
     interrupted_reason: string | null;
     outcome: string | null;
     error_kind: string | null;
+    last_archive: string | null;
+    last_command: string | null;
   }>(
-    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind FROM runs ORDER BY id DESC LIMIT 1",
+    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind, last_archive, last_command FROM runs ORDER BY id DESC LIMIT 1",
   );
   if (!row) {
     return {
       running: false,
       runId: 0,
       stage: "idle",
-      currentRel: "",
-      currentCommand: "",
+      lastArchive: "",
+      lastCommand: "",
       total: 0,
       done: 0,
       failed: 0,
@@ -200,8 +204,8 @@ async function snapshot(): Promise<Snapshot> {
             : row.finished_at
               ? "finished"
               : "idle",
-    currentRel: "",
-    currentCommand: "",
+    lastArchive: row.last_archive ?? "",
+    lastCommand: row.last_command ?? "",
     total: Number(row.total),
     done: Number(row.done),
     failed: Number(row.failed),
@@ -262,8 +266,12 @@ export async function progressPanel(): Promise<string> {
   // While a command is in flight the badge names the command, not the
   // coarse stage ("Extracting" / "Moving to trash" / ...).
   const label = s.activity || stageLabel(s.stage);
-  const current = s.currentRel || "—";
-  const command = s.currentCommand || "—";
+  const archive = s.lastArchive || "—";
+  const command = s.lastCommand || "—";
+  // While a run is live the slots track it; otherwise they show what the
+  // last (interrupted) run was doing when it stopped.
+  const archiveLabel = s.running ? "Current archive" : "Last archive";
+  const commandLabel = s.running ? "Active command" : "Last command";
   const mutedNote =
     s.total === 0 && s.stage === "finished"
       ? `<p class="muted">No matching archives were found in this run.</p>`
@@ -278,11 +286,14 @@ export async function progressPanel(): Promise<string> {
   const timeSuffix = s.finishedAt
     ? ` · ${esc(fmtDisplayTime(s.finishedAt, true))}`
     : "";
+  // A code that merely repeats the outcome ("killed (killed)") adds nothing;
+  // only interrupted/error codes carry extra meaning.
+  const code = s.errorKind && s.errorKind !== s.outcome ? ` (${esc(s.errorKind)})` : "";
   const outcomeNote =
     s.outcome === "interrupted"
-      ? `<p class="warn-line">Interrupted — ${esc(reason || "stopped by user")}${timeSuffix}.</p>`
+      ? `<p class="warn-line">Interrupted${code} — ${esc(reason || "stopped by user")}${timeSuffix}.</p>`
       : s.outcome === "killed"
-        ? `<p class="warn-line">Killed — ${esc(reason || "previous process exited mid-run")}${timeSuffix}. In-progress archives resume on the next start when resume is enabled.</p>`
+        ? `<p class="warn-line">Killed${code} — ${esc(reason || "previous process exited mid-run")}${timeSuffix}. In-progress archives resume on the next start when resume is enabled.</p>`
         : s.outcome === "error"
           ? `<p class="warn-line">Error — ${esc(s.errorKind || "engine_error")}${reason ? `: ${esc(reason)}` : ""}${timeSuffix}. See the Logs page (Errors tab) for details.</p>`
           : "";
@@ -363,11 +374,11 @@ export async function progressPanel(): Promise<string> {
         <dd>${esc(s.scanRoot || "—")}</dd>
       </div>
       <div>
-        <dt>Current archive</dt>
-        <dd title="${esc(current)}">${esc(current)}</dd>
+        <dt>${archiveLabel}</dt>
+        <dd title="${esc(archive)}">${esc(archive)}</dd>
       </div>
       <div>
-        <dt>Active command</dt>
+        <dt>${commandLabel}</dt>
         <dd class="cmd" title="${esc(command)}">${esc(command)}</dd>
       </div>
       <div>

@@ -8,6 +8,7 @@ beforeEach(() => {
   engineState.forceStop = false;
   engineState.stage = "idle";
   engineState.activity = "";
+  engineState.archiveInFlight = false;
 });
 
 test("idle shows the Start button", () => {
@@ -58,8 +59,20 @@ test("idle shows the reuse checkbox unchecked and a Start button", () => {
 test("listing stage shows Skip listing only", () => {
   engineState.running = true;
   engineState.stage = "listing";
+  engineState.activity = "Listing archives";
   const html = controlsFragment();
   expect(html).toContain("Skip listing");
+  expect(html).not.toContain("Skip archive");
+  expect(html).not.toContain("Skip inspection");
+});
+
+test("between archives shows no skip controls", () => {
+  engineState.running = true;
+  engineState.stage = "extracting";
+  engineState.activity = "";
+  engineState.archiveInFlight = false;
+  const html = controlsFragment();
+  expect(html).not.toContain("Skip listing");
   expect(html).not.toContain("Skip archive");
   expect(html).not.toContain("Skip inspection");
 });
@@ -77,6 +90,7 @@ test("inspecting an archive shows Skip inspection and Skip archive", () => {
   engineState.running = true;
   engineState.stage = "extracting";
   engineState.activity = "Inspecting archive";
+  engineState.archiveInFlight = true;
   const html = controlsFragment();
   expect(html).toContain("Skip inspection");
   expect(html).toContain("Skip archive");
@@ -87,6 +101,7 @@ test("extracting an archive shows only Skip archive", () => {
   engineState.running = true;
   engineState.stage = "extracting";
   engineState.activity = "Extracting";
+  engineState.archiveInFlight = true;
   const html = controlsFragment();
   expect(html).toContain("Skip archive");
   expect(html).not.toContain("Skip inspection");

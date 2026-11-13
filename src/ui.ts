@@ -67,10 +67,12 @@ export function fmtDisplayTime(iso: string, withDate = false): string {
  * Small superscript "(i)" indicator beside a control. Hover/focus shows the
  * tooltip on desktop; tapping toggles it on touch devices (and hides it via
  * the shared .open class). Rendered as a real button so it is keyboard
- * accessible; the full tip is the accessible name.
+ * accessible. Tips are deliberately short (a sentence, not a paragraph) —
+ * use the README for the long story. `label` names the thing the tip
+ * describes for screen readers.
  */
-export function info(tip: string): string {
-  return `<button type="button" class="info-i" data-tip="${esc(tip)}" aria-label="${esc(tip)}">i</button>`;
+export function info(tip: string, label: string): string {
+  return `<button type="button" class="info-i" data-tip="${esc(tip)}" aria-label="More info: ${esc(label)}">i</button>`;
 }
 
 // Shared toast + busy-state behaviour for every page. htmx buttons show a

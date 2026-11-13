@@ -317,6 +317,30 @@ function stripConfFlags(flags: string[]): string[] {
   return out;
 }
 
+/**
+ * rclonex-only flags never belong on the plain rclone binary: any
+ * `--archive-*` flag makes every rclone command fail with "unknown flag".
+ * Drop the flag (and its value when it is not the next flag) from
+ * remote_flags for the rclone runner; the rclonex runner keeps them.
+ */
+function stripRclonexFlags(flags: string[]): { flags: string[]; dropped: string[] } {
+  const out: string[] = [];
+  const dropped: string[] = [];
+  for (let i = 0; i < flags.length; i++) {
+    const f = flags[i];
+    if (/^--archive-/i.test(f)) {
+      dropped.push(f);
+      if (!f.includes("=") && i + 1 < flags.length && !flags[i + 1].startsWith("-")) {
+        dropped.push(flags[i + 1]); // drop the flag's value too
+        i++;
+      }
+      continue;
+    }
+    out.push(f);
+  }
+  return { flags: out, dropped };
+}
+
 // The --config path is chosen lazily: the primary working copy lives under
 // DATA_DIR (/app/data by default); when that path is not writable for any
 // reason (read-only mount, EACCES, EROFS, full disk, ...) the working copy
@@ -429,8 +453,19 @@ export class Rclone {
   ): Promise<Rclone> {
     const root = (await getSetting("scan_root", "")) ?? "";
     const flagsRaw = (await getSetting("remote_flags", "")) ?? "";
-    const flags = stripConfFlags(flagsRaw.split(/\s+/).filter((f) => f.length > 0));
+    const flagsRawList = stripConfFlags(
+      flagsRaw.split(/\s+/).filter((f) => f.length > 0),
+    );
     const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
+    const stripped = opts.rclonex
+      ? { flags: flagsRawList, dropped: [] as string[] }
+      : stripRclonexFlags(flagsRawList);
+    const flags = stripped.flags;
+    if (stripped.dropped.length) {
+      const warning = `remote_flags contained rclonex-only flags; ignored for rclone: ${stripped.dropped.join(" ")}`;
+      console.warn(warning);
+      runLog?.warn(warning);
+    }
 
     const storedConf = (await getSetting("rclone_conf", "")) ?? "";
     let conf = "";
@@ -889,5 +924,67 @@ export class Rclone {
       ref,
       onStats,
     );
+  }
+
+  /**
+   * True when `root/<rel>` exists and is non-empty. Used to refuse webapp
+   * moves (delete/restore) that would overwrite something already in place.
+   */
+  async existsPath(rel: string): Promise<boolean> {
+    assertSafeRel(rel);
+    const args = [...this.confArgs(), "lsl", `${this.root}/${rel}`, ...this.flags];
+    const proc = spawnBinary(this.bin, args, {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    return code === 0 && out.trim().length > 0;
+  }
+
+  /**
+   * Move `root/<srcRel>` to `root/<dstRel>` for webapp actions (delete to
+   * trash, restore from trash). Refuses to overwrite the destination
+   * (`--immutable`); the caller should also check `existsPath` for a clear
+   * error message. Logs raw binary output to the archive's log.
+   */
+  async moveToRel(srcRel: string, dstRel: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
+    assertSafeRel(srcRel);
+    assertSafeRel(dstRel);
+    return this.streamTransfer(
+      ["moveto", `${this.root}/${srcRel}`, `${this.root}/${dstRel}`, "--immutable"],
+      dry,
+      ref,
+    );
+  }
+
+  /**
+   * Stream a single remote file (`rclone cat`) without buffering it — the
+   * route pipes `stdout` straight into its own response. `exited` resolves
+   * after EOF; on a non-zero exit the caller should log `stderr`.
+   */
+  async openCat(
+    rel: string,
+  ): Promise<{
+    stdout: ReadableStream;
+    exited: Promise<number>;
+    stderr: Promise<string>;
+    command: string;
+  }> {
+    assertSafeRel(rel);
+    const args = [...this.confArgs(), "cat", `${this.root}/${rel}`, ...this.flags];
+    const command = this.announce(args);
+    const proc = spawnBinary(this.bin, args, {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      stdout: proc.stdout as unknown as ReadableStream,
+      exited: proc.exited,
+      stderr: new Response(proc.stderr).text(),
+      command,
+    };
   }
 }

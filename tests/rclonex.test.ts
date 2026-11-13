@@ -126,32 +126,47 @@ test("inspection is skipped for rclonex formats by default, kept for zip", async
   expect(rcLog).toContain("archive list");
 });
 
-test("inspection runs through rclonex when the skip is disabled", async () => {
+test("inspection runs through rclone (never rclonex) when the skip is disabled", async () => {
   resetLogs();
   await setSetting("rclonex_skip_inspection", "0");
   await runEngine();
   const rxLog = readLog(rclonexLog);
-  expect(rxLog).toContain("archive list");
-  expect(rxLog).toContain("big.rar");
+  // rclonex gets no `archive list` — upstream rclone lists RAR/7Z itself.
+  expect(rxLog).not.toContain("archive list");
+  const rcLog = readLog(rcloneLog);
+  expect(rcLog).toContain("archive list");
+  expect(rcLog).toContain("big.rar");
+  await setSetting("rclonex_skip_inspection", "1");
+});
+
+test("ISO archives skip inspection even when inspection is enabled", async () => {
+  resetLogs();
+  await setSetting("rclonex_skip_inspection", "0");
+  await runEngine();
+  const isoLists = readLog(rcloneLog)
+    .split("\n")
+    .filter((l) => l.includes("archive list") && /big\.iso/.test(l));
+  expect(isoLists).toEqual([]);
+  const rows = await db!.store.query<{ status: string }>(
+    "SELECT status FROM archives WHERE path = 'big.iso'",
+  );
+  // Not "skipped (unreadable)" — extraction proceeds normally.
+  expect(rows[0]?.status).toBe("done");
   await setSetting("rclonex_skip_inspection", "1");
 });
 
 test("rclonex flags land on the extraction command line", async () => {
   resetLogs();
-  await setSetting("rclonex_continue_on_error", "1");
   await setSetting("rclonex_window_size_enabled", "1");
   await setSetting("rclonex_window_size", "4194304");
   await setSetting("rclonex_archive_password_enabled", "1");
   await setSetting("rclonex_archive_password", "hunter2");
   await runEngine();
   const rxLog = readLog(rclonexLog);
-  expect(rxLog).toContain("--archive-continue-on-error");
   expect(rxLog).toContain("--archive-window-size 4194304");
   expect(rxLog).toContain("--archive-password hunter2");
   const rcLog = readLog(rcloneLog);
-  expect(rcLog).not.toContain("--archive-continue-on-error");
   expect(rcLog).not.toContain("--archive-password");
-  await setSetting("rclonex_continue_on_error", "0");
   await setSetting("rclonex_window_size_enabled", "0");
   await setSetting("rclonex_archive_password_enabled", "0");
 });

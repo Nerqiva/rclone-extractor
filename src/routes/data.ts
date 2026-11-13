@@ -86,6 +86,8 @@ interface ValidatedRun {
   interrupted_reason: string | null;
   outcome: string;
   error_kind: string | null;
+  last_archive: string | null;
+  last_command: string | null;
 }
 
 interface ValidatedLogLine {
@@ -154,7 +156,16 @@ function validateRuns(raw: unknown): ValidatedRun[] | string {
     if (error_kind === undefined) {
       return `runs[${i}].error_kind is not a string`;
     }
-    out.push({ id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome: outcomeValue, error_kind });
+    // Backups written before last_* existed import with null.
+    const last_archive = asOptStr(r.last_archive, 4096);
+    if (last_archive === undefined) {
+      return `runs[${i}].last_archive is not a string`;
+    }
+    const last_command = asOptStr(r.last_command, 8192);
+    if (last_command === undefined) {
+      return `runs[${i}].last_command is not a string`;
+    }
+    out.push({ id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome: outcomeValue, error_kind, last_archive, last_command });
   }
   return out;
 }
@@ -272,8 +283,8 @@ data.post("/import", async (c) => {
         await tx.run("DELETE FROM log_lines WHERE scope = 'run' AND ref_id = ?", [r.id]);
         await tx.run("DELETE FROM runs WHERE id = ?", [r.id]);
         await tx.run(
-          "INSERT INTO runs(id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped, r.interrupted, r.interrupted_reason, r.outcome, r.error_kind],
+          "INSERT INTO runs(id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind, last_archive, last_command) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped, r.interrupted, r.interrupted_reason, r.outcome, r.error_kind, r.last_archive, r.last_command],
         );
       }
       if (runs.length > 0) counts.push(`${runs.length} runs`);

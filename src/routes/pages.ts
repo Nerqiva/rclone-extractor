@@ -8,6 +8,7 @@ import { engineState } from "../engine";
 import { checkRclone, checkRclonex } from "../rclone";
 import { tailRendered, LOG_TAIL_LIMIT } from "../log";
 import { readErrorRows, renderErrorCards } from "../errorrows";
+import { readPasswordRows, renderPasswordList } from "../passwordrows";
 
 export const pages = new Hono();
 
@@ -232,16 +233,11 @@ pages.get("/logs", async (c) => {
     "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind FROM runs ORDER BY id DESC LIMIT 50",
   );
 
-  if (runs.length === 0) {
-    return c.html(
-      layout(
-        "Logs",
-        `<div class="card"><p class="muted">No runs yet. Start a task from the Progress page.</p></div>`,
-        "logs",
-        csrfFor(c),
-      ),
-    );
-  }
+  // Tab selection. The password tab is run-independent and stays reachable
+  // even when no run exists yet; `kind` stays supported for old bookmarks.
+  const tabParam = c.req.query("tab") ?? c.req.query("kind");
+  const tab = tabParam === "password" ? "password" : tabParam === "errors" ? "errors" : "main";
+  const kind = tab === "errors" ? "errors" : "main";
 
   const running = engineState.running && engineState.runId > 0;
   const asked = Number(c.req.query("run") ?? "");
@@ -254,7 +250,67 @@ pages.get("/logs", async (c) => {
     selectedId = Number(runs[0]?.id ?? 0);
   }
 
-  const kind = c.req.query("kind") === "errors" ? "errors" : "main";
+  const tabs = `<div class="log-tabs">
+    <a class="log-tab${tab === "main" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=main">Run log</a>
+    <a class="log-tab${tab === "errors" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=errors">Errors</a>
+    <a class="log-tab${tab === "password" ? " active" : ""}" href="/logs?tab=password">Password-protected</a>
+  </div>`;
+
+  if (tab === "password") {
+    const pwRows = await readPasswordRows();
+    const pwBody = `<div class="log-toolbar">
+      ${running ? `<div class="session-static"><span class="pill warn">live</span></div>` : `<div class="session-static"><span class="muted">All password-protected archives, across runs.</span></div>`}
+      ${tabs}
+    </div>
+    <p class="muted pw-intro">Password-protected archives are skipped during runs: a warning is logged and the run moves on to the next archive. <strong>Delete</strong> moves the file to the trash folder; <strong>Restore</strong> returns it to the queue.</p>
+    ${renderPasswordList(pwRows)}
+    <script>
+    (function () {
+      document.addEventListener("click", async function (event) {
+        var btn = event.target.closest ? event.target.closest("[data-pw-log]") : null;
+        if (!btn) return;
+        var id = btn.getAttribute("data-pw-log");
+        var box = document.getElementById("pw-log-" + id);
+        if (!box) return;
+        var collapsed = !box.hidden;
+        if (collapsed) {
+          box.hidden = true;
+          btn.textContent = "Log view";
+          btn.setAttribute("aria-expanded", "false");
+          return;
+        }
+        if (!box.dataset.loaded) {
+          box.innerHTML = '<p class="muted" style="padding:10px 14px">Loading…</p>';
+          try {
+            var res = await fetch("/logs/archive/" + id + "/fragment");
+            box.innerHTML = await res.text();
+            box.dataset.loaded = "1";
+          } catch (e) {
+            box.innerHTML = '<p class="muted" style="padding:10px 14px">Could not load the log.</p>';
+          }
+        }
+        box.hidden = false;
+        btn.textContent = "Hide log";
+        btn.setAttribute("aria-expanded", "true");
+      });
+    })();
+    </script>
+    <script src="/public/copy.js" defer></script>`;
+    return c.html(layout("Logs", pwBody, "logs", csrfFor(c)));
+  }
+
+  if (runs.length === 0) {
+    return c.html(
+      layout(
+        "Logs",
+        `<div class="log-toolbar">${tabs}</div>
+         <div class="card"><p class="muted">No runs yet. Start a task from the Progress page.</p></div>`,
+        "logs",
+        csrfFor(c),
+      ),
+    );
+  }
+
   const selected = runs.find((r) => Number(r.id) === selectedId) ?? runs[0];
   const isLive = running && Number(selected.id) === engineState.runId;
 
@@ -286,14 +342,9 @@ pages.get("/logs", async (c) => {
           <span>Session</span>
           <select name="run">${options}</select>
         </label>
-        <input type="hidden" name="kind" value="${kind}">
+        <input type="hidden" name="tab" value="${tab}">
         <button class="btn small" type="submit">View</button>
       </form>`;
-
-  const tabs = `<div class="log-tabs">
-    <a class="log-tab${kind === "main" ? " active" : ""}" href="/logs?run=${selectedId}&amp;kind=main">Run log</a>
-    <a class="log-tab${kind === "errors" ? " active" : ""}" href="/logs?run=${selectedId}&amp;kind=errors">Errors</a>
-  </div>`;
 
   // Prefer the stored outcome; fall back to the legacy interrupted flag for
   // rows written before it existed.
@@ -309,12 +360,13 @@ pages.get("/logs", async (c) => {
     : "";
   const badOutcome =
     outcome === "interrupted" || outcome === "killed" || outcome === "error";
+  const codeSuffix = selected.error_kind && selected.error_kind !== outcome
+    ? ` (${esc(selected.error_kind)})`
+    : "";
   const outcomeDetail = badOutcome
-    ? `${
-        outcome === "error" && selected.error_kind
-          ? `Error (${esc(selected.error_kind)})`
-          : outcome[0].toUpperCase() + outcome.slice(1)
-      }${reason ? ` — ${esc(reason)}` : ""}${outcomeTime}`
+    ? `${outcome[0].toUpperCase() + outcome.slice(1)}${codeSuffix}${
+        reason ? ` — ${esc(reason)}` : ""
+      }${outcomeTime}`
     : "";
   const statusPill = isLive
     ? `<span class="pill warn" id="livePill">Live</span>`

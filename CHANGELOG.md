@@ -12,6 +12,107 @@ to `main`.
 ## [Unreleased]
 
 ### Added
+- **Password-protected archives tab** on the Logs page (third tab, layout Next to Run log and Errors): lists every archive that was skipped as
+  `password` (a warning is logged and the run moves to the next archive).
+  Each row shows the name, path and size; an inline **Log view**; **Copy
+  log**; **Download** — streaming the archive itself from the remote through
+  the app (`rclone cat`, nothing buffered); and **Delete**, which moves the
+  file into the configured `trash_subdir` (with the usual confirmation — an
+  accidental click is not one target) and refuses to overwrite anything
+  already in the trash. A deleted archive stays on the tab with an **in
+  trash** pill and a **Restore** button that moves it back into the queue
+  and clears the error kind. Both moves block while a task is running and
+  honor `dry_run`. Password rows no longer appear on the Errors page.
+- **`runs.last_archive` / `runs.last_command`** — the archive and the rclone
+  command in flight when a run stops are persisted on the run (including
+  across crashes, via a write at archive start and on every command
+  dispatch). The Progress page shows them in the "Current archive" /
+  "Active command" slots, relabelled "Last archive" / "Last command" when
+  the run is not live; the Errors page and the banner show a specific
+  outcome code next to the reason.
+- **Interruption error codes** — user stops are now recorded as
+  `interrupted_soft` (soft stop), `interrupted_hard` (hard stop) or
+  `interrupted_cancel` (external cancel), written to both the run's main log
+  and its `errors` log, and stored on the run as `error_kind`. Crash/kill
+  recovery (`recoverStale`) writes the same `[killed] <cause>` line to both
+  logs and stamps `error_kind=killed`. Interruption no longer goes
+  undocumented anywhere.
+- **Skip guards**: a skip asked while nothing is in flight is refused with a
+  toast instead of being silently dropped; **Skip listing** now applies only
+  while the listing binary is actually running (never during the temp purge
+  or cached-scan reuse); **Skip archive** can no longer be applied across
+  the gap between archives.
+- **Boot-time RcloneX probe** — when RcloneX is enabled, `rclonex` is
+  probed at boot (like rclone) so a missing or wrong-arch binary is visible
+  in the deploy log instead of surfacing as per-archive spawn failures.
+
+### Changed
+- **Info tooltips are now brief one-line tips** (was: multi-sentence
+  paragraphs) with a short accessible name ("More info: <name>"). Tooltips
+  open downward (the first rows of the Configuration page are no longer
+  clipped at the top), long tokens wrap, and tooltips in the controls dock
+  align to the right edge so they stay inside the viewport. The info
+  buttons on the Configuration page no longer sit inside `<label>` elements.
+- **Skip controls redesigned**: a single right-aligned cluster in
+  fixed order (Skip listing → Skip inspection → Skip archive) sharing one
+  style, sized and wrapped consistently, separated from the status note;
+  the note ellipsis-truncates and the Stop button stays pinned to the right
+  edge; the whole row wraps on narrow screens. Both binaries' skip flows
+  share the same "nothing in flight" refusal.
+- **Interrupted run banner** on the Progress page now includes the
+  outcome code (e.g. `interrupted_hard (stopped by user (hard stop))`) —
+  "Killed" codes show likewise, and the logs page summary shows the code
+  for interrupted/killed runs too.
+- **Inspection for RcloneX-handled archives runs through rclone** (was:
+  through rclonex). Upstream's `archive list` reads RAR/7Z (full-stream
+  read; skip stays the default), and **ISO archives always skip inspection**
+  (not listable — previously they were marked `unreadable` and never
+  extracted).
+- **Password-detection narrowed** — only known phrases (`password required`,
+  `incorrect password`, `wrong password`, `archive is encrypted`) mark a
+  skip as `password`; an ISO flagging `--archive-password`, or an entry name
+  containing "password", no longer parks the archive as a skipped password
+  case.
+- **`remote_flags` with `--archive-*` flags** are stripped (with a warning)
+  for the rclone binary — they would make every rclone command fail — and
+  are kept for rclonex. RcloneX's window size is now validated at flag
+  build time: an invalid value logs a warning instead of silently dropping
+  the override.
+- **`scan_cache_key` fingerprint now includes `rclonex`** — toggling RcloneX
+  no longer silently reuses a cached listing that was built without it.
+- **Extractor selection consistent with queueing**: non-first multivolume
+  volumes resolve to rclone (they can never be queued anyway).
+- **Hard stop during inspection** re-queues the archive instead of parking
+  it as terminal `skipped (unreadable)`; a hard stop mid-transfer re-queues
+  the archive with a cleared `error_kind` (was: stale `extract` error rows
+  on the Errors page).
+
+### Removed
+- **`--archive-continue-on-error` (no such flag in rclonex)** — enabling
+  "Continue on entry errors" made every RAR/7Z/ISO extraction fail with
+  `unknown flag`. The checkbox, the `rclonex_continue_on_error` setting and
+  the flag are gone.
+
+### Fixed
+- **Skip during the cleanup before trash** could move the archive to trash
+  and then re-queue it (next run failed on the missing source) — a guard
+  now unwinds the archive before the trash move, for both skip and hard
+  stop. Skipping never trashes.
+- **Skip-archive landing while a password failure was committed** could
+  commit the archive as terminal `skipped (password)` instead of
+  re-queuing; the pending skip now wins.
+- **Crash/kill recovery wrote nothing to any log** — a killed run left a
+  pill but no entries; both the run log and the errors log now receive the
+  `[killed] <cause>` line, and the interrupted/finalized run always gets a
+  `[interrupted_*] <reason>` line there too.
+- **Hard-stop leaves bogus Errors entries** — archives re-queued after a
+  hard stop now clear `error_kind`, and the terminal commits that raced
+  with the stop are unreachable.
+- **Password-protected archives** skip to the next archive and leave a
+  synthetic diagnostic line in the archive log (parity with the inspection
+  path), so the Logs page's new tab can always show something.
+
+### Added
 - **RcloneX integration** (off by default): when **Enable RcloneX** is set on
   the Configuration page, archives whose formats upstream rclone cannot handle
   — RAR/RAR5, multivolume RAR (`x.partN.rar`/`x.rNN`), 7Z and split 7Z
@@ -24,13 +125,12 @@ to `main`.
   enabled. When disabled, these formats are not queued at all.
 - **RcloneX archive inspection** — skipped by default for RcloneX-handled
   formats (`rclonex_skip_inspection`; default on). When off, inspection runs
-  through rclonex and an inspection failure marks the archive `unreadable`.
-  Other formats always inspect as before.
+  through rclone (upstream `archive list` reads RAR/7Z fine); ISO archives
+  always skip inspection (not listable). ZIP/TAR always inspect as before.
 - **RcloneX flags** on the Configuration page (all unchecked by default):
-  `--archive-continue-on-error`, `--archive-password` (encrypted at rest;
-  write-only — blank field keeps the stored value, Clear removes it) and
-  `--archive-window-size` (`0` disables caching; default keeps rclonex's own
-  16 MiB).
+  `--archive-password` (encrypted at rest; write-only — blank field keeps
+  the stored value, Clear removes it) and `--archive-window-size` (`0`
+  disables caching; default keeps rclonex's own 16 MiB).
 - **Skip controls** on the Progress page: **Skip listing** (stop the scan and
   go straight to the queue), **Skip inspection** (treat the current archive's
   inspection as passed), and **Skip archive** (stop the current archive,

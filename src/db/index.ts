@@ -37,7 +37,6 @@ const defaults: Record<string, string> = {
   last_run_id: "0",
   rclonex: "0",
   rclonex_skip_inspection: "1",
-  rclonex_continue_on_error: "0",
   rclonex_archive_password_enabled: "0",
   rclonex_archive_password: "",
   rclonex_window_size_enabled: "0",
@@ -75,6 +74,7 @@ async function initDbOnce(): Promise<void> {
   await migrateRunsInterruptedReason();
   await migrateRunsOutcome();
   await migrateRunsErrorKind();
+  await migrateRunsLastState();
   await migrateBackfillRunOutcome();
   await migrateDropLogs();
   await migrateDropLogLinesSeq();
@@ -166,6 +166,25 @@ async function migrateRunsErrorKind(): Promise<void> {
     const msg = String(e).toLowerCase();
     if (!msg.includes("duplicate") && !msg.includes("already exists")) {
       throw e;
+    }
+  }
+}
+
+/**
+ * Add `runs.last_archive` / `runs.last_command`: the archive and the rclone
+ * command in flight when a run stopped, kept so the Progress page can show
+ * them after an interruption (and after a reload). Idempotent.
+ */
+async function migrateRunsLastState(): Promise<void> {
+  for (const column of ["last_archive", "last_command"]) {
+    try {
+      await store.run(`ALTER TABLE runs ADD COLUMN ${column} TEXT`);
+      console.log(`migrated: added runs.${column}`);
+    } catch (e) {
+      const msg = String(e).toLowerCase();
+      if (!msg.includes("duplicate") && !msg.includes("already exists")) {
+        throw e;
+      }
     }
   }
 }

@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
-import { tailRendered, readAll, LOG_TAIL_LIMIT } from "../log";
+import { tailRendered, readAll, insertLogLines, LOG_TAIL_LIMIT } from "../log";
 import { engineState } from "../engine";
 import { readErrorRows, renderErrorCards } from "../errorrows";
+import { Rclone } from "../rclone";
+import { isSafeRel, parseTrashSubdir, normalizeRel } from "../archive";
 
 export const logsapi = new Hono();
 
@@ -92,6 +94,22 @@ logsapi.get("/download/run/:id", async (c) => {
   });
 });
 
+const LOG_DOWNLOAD_LIMIT = 50000;
+
+logsapi.get("/logs/archive/:id/fragment", async (c) => {
+  noStore(c);
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const { entries } = await tailRendered(
+    { scope: "archive", refId: id, kind: "extract" },
+    LOG_DOWNLOAD_LIMIT,
+  );
+  if (entries.length === 0) {
+    return c.html(`<p class="muted">No log lines for this archive.</p>`);
+  }
+  return c.html(entries.map((e) => e.html).join(""));
+});
+
 logsapi.get("/download/archive/:id", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
@@ -104,4 +122,52 @@ logsapi.get("/download/archive/:id", async (c) => {
       "Content-Disposition": `attachment; filename="archive-${id}-${kind}.log"`,
     },
   });
+});
+
+/**
+ * Download the archive file itself (not its log). Streams `rclone cat`
+ * straight to the client — the archive can be huge, so nothing is buffered.
+ * Files already moved to trash (status='deleted') are served from there.
+ */
+logsapi.get("/download/archive-file/:id", async (c) => {
+  noStore(c);
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const row = await store.get1<{ path: string; status: string }>(
+    "SELECT path, status FROM archives WHERE id = ?",
+    [id],
+  );
+  if (!row) return c.text("not found", 404);
+  const rel = String(row.path);
+  if (!isSafeRel(rel)) return c.text("not found", 404);
+  let srcRel = rel;
+  if (row.status === "deleted") {
+    const trash = parseTrashSubdir((await getSetting("trash_subdir", "trash")) ?? "trash");
+    if (!trash) return c.text("trash_subdir is invalid", 500);
+    srcRel = normalizeRel(`${trash}/${rel}`);
+  }
+  const ref = { scope: "archive" as const, refId: id, kind: "extract" as const };
+  const rc = await Rclone.fromSettings();
+  try {
+    const { stdout, exited, stderr, command } = await rc.openCat(srcRel);
+    void exited.then(async (code) => {
+      if (code !== 0) {
+        const err = (await stderr.catch(() => "")).trim();
+        await insertLogLines(ref, [
+          ...(err ? err.split("\n") : []),
+          `archive download failed (exit ${code}) [$ ${command}]`,
+        ]).catch(() => {});
+      }
+    });
+    const base = srcRel.slice(srcRel.lastIndexOf("/") + 1);
+    const fallback = base.replace(/[^A-Za-z0-9._ -]/g, "_").replace(/"/g, "_") || "archive";
+    return new Response(stdout, {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(base)}`,
+      },
+    });
+  } catch (e) {
+    return c.text(`could not start download: ${String(e)}`, 502);
+  }
 });

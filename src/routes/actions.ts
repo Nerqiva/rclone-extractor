@@ -16,7 +16,8 @@ import { normalizeRcloneConf } from "../rcloneconf";
 import { Rclone, pendingRcloneConfNotice } from "../rclone";
 import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "../tmpdir";
 import { loadTmpDirSettings } from "../tmpsweep";
-import { parseTrashSubdir } from "../archive";
+import { parseTrashSubdir, isSafeRel, normalizeRel } from "../archive";
+import { readPasswordRows, renderPasswordList } from "../passwordrows";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
@@ -42,13 +43,15 @@ function toastHeaders(message: string, kind: "ok" | "err" = "ok"): HeadersInit {
 export const actions = new Hono();
 
 export function controlsFragment(): string {
+  // Idle state: Start form. Reuse-scan and Start are visually grouped.
   const running = engineState.running;
   if (!running) {
     return `<div id="controls" class="controls-idle">
     <form class="controls-start" hx-post="/run/start" hx-target="#controls" hx-swap="outerHTML">
-      <label class="check"><input type="checkbox" name="reuse_scan" value="1"> Reuse previous scan results${info(
-        "Reuse the cached archive list from the last completed scan of this scan_root instead of rescanning the remote. Falls back to a fresh scan when the cache is missing, stale, or for a different scan_root. This choice is not remembered for future runs.",
-      )}</label>
+      <div class="check"><label class="check-inline"><input type="checkbox" name="reuse_scan" value="1"> Reuse previous scan results</label>${info(
+        "Reuse the cached scan; fresh scan if stale. Not remembered.",
+        "reuse_scan",
+      )}</div>
       <div class="btn-row">
         <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Start</button>
       </div>
@@ -57,7 +60,7 @@ export function controlsFragment(): string {
   }
   if (engineState.forceStop) {
     return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
-    <span class="note warn-line stop-note">Stopping immediately — the current archive was aborted…</span>
+    <span class="controls-note warn-line stop-note">Stopping immediately — the current archive was aborted…</span>
     <button class="btn danger solid is-loading btn-stop" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
   </div>`;
   }
@@ -65,33 +68,39 @@ export function controlsFragment(): string {
   const stage = engineState.stage;
   const activity = engineState.activity;
   const skips: string[] = [];
-  if (stage === "listing") {
+  if (stage === "listing" && activity === "Listing archives") {
     skips.push(
       `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"listing"}' hx-target="#controls" hx-swap="outerHTML">Skip listing</button>${info(
-        "Stop the scan now and continue with the queue built from the archives already stored. Treated as completed, this run only.",
+        "Stop the scan; continue with the stored queue. This run only.",
+        "Skip listing",
       )}`,
     );
   }
-  if (activity === "Inspecting archive") {
+  if (activity === "Inspecting archive" && engineState.archiveInFlight) {
     skips.push(
       `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"inspection"}' hx-target="#controls" hx-swap="outerHTML">Skip inspection</button>${info(
-        "Treat the inspection as passed for the current archive only and extract it. Temporary, this archive only.",
+        "Treat inspection as passed for this archive. This run only.",
+        "Skip inspection",
       )}`,
     );
   }
-  if (stage === "extracting") {
+  if (stage === "extracting" && engineState.archiveInFlight) {
     skips.push(
       `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>${info(
-        "Stop the current archive and leave it queued — it is retried on the next run. Temporary, this run only.",
+        "Leave this archive queued; it retries next run. This run only.",
+        "Skip archive",
       )}`,
     );
   }
+  const skipCluster = skips.length
+    ? `<span class="skip-cluster" aria-label="Skip controls">\n    ${skips.join("\n    ")}\n    </span>`
+    : "";
   const note = engineState.stopRequested
-    ? `<span class="note warn-line stop-note">Stop requested — finishing the current archive…</span>`
-    : `<span class="muted">run in progress…</span>`;
+    ? `<span class="controls-note warn-line stop-note">Stop requested — finishing the current archive…</span>`
+    : `<span class="controls-note muted">run in progress…</span>`;
   return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
-    ${skips.join("\n    ")}
     ${note}
+    ${skipCluster}
     <button class="btn danger btn-stop" data-modal-open="stop-modal">Stop</button>
   </div>`;
 }
@@ -374,10 +383,6 @@ actions.post("/config", async (c) => {
     form.get("auto_skip_known") !== null ? "1" : "0",
   );
   await setSetting(
-    "rclonex_continue_on_error",
-    form.get("rclonex_continue_on_error") !== null ? "1" : "0",
-  );
-  await setSetting(
     "rclonex_archive_password_enabled",
     form.get("rclonex_archive_password_enabled") !== null ? "1" : "0",
   );
@@ -494,6 +499,119 @@ function tempPurgeNote(p: Awaited<ReturnType<typeof purgeAppTempDirs>>): string 
 
 const RUNNING_GUARD = `<p class="note err">Task is running — stop it first.</p>`;
 const RUNNING_GUARD_HEADERS = toastHeaders("Stop the task first.", "err");
+
+async function passwordListResponse(c: { html: (body: string, status?: number, headers?: HeadersInit) => Response }, toast: string, toastKind: "ok" | "err" = "ok"): Promise<Response> {
+  const rows = await readPasswordRows();
+  return c.html(renderPasswordList(rows), 200, toastHeaders(toast, toastKind));
+}
+
+// Password tab actions (Logs page). A password-protected archive is moved
+// into the trash subdir (never deleted outright), and can be restored
+// afterwards: back into the queue, error_kind cleared, so the next run
+// retries it. Both moves refuse to overwrite anything already in place.
+actions.post("/archives/:id/delete", async (c) => {
+  if (engineState.running) {
+    return passwordListResponse(c, "Stop the task first.", "err");
+  }
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return passwordListResponse(c, "Not found.", "err");
+  }
+  const row = await store.get1<{ path: string; status: string; error_kind: string | null }>(
+    "SELECT path, status, error_kind FROM archives WHERE id = ?",
+    [id],
+  );
+  if (!row || row.error_kind !== "password") {
+    return passwordListResponse(c, "Not a password-protected archive.", "err");
+  }
+  if (row.status === "deleted") {
+    return passwordListResponse(c, "Already in trash.");
+  }
+  const rel = String(row.path);
+  if (!isSafeRel(rel)) {
+    return passwordListResponse(c, "Stored path is unsafe; refusing to move it.", "err");
+  }
+  const trash = parseTrashSubdir((await getSetting("trash_subdir", "trash")) ?? "trash");
+  if (!trash) {
+    return passwordListResponse(c, "trash_subdir is invalid.", "err");
+  }
+  const dryRun = (await getSetting("dry_run", "0")) === "1";
+  const ref = { scope: "archive" as const, refId: id, kind: "extract" as const };
+  const rc = await Rclone.fromSettings();
+  const trashRel = normalizeRel(`${trash}/${rel}`);
+  if (await rc.existsPath(trashRel)) {
+    return passwordListResponse(
+      c,
+      `The trash already contains ${trashRel} — remove it before deleting.`,
+      "err",
+    );
+  }
+  const res = await rc.moveToRel(rel, trashRel, dryRun, ref);
+  if (res.code !== 0) {
+    const detail = (res.tail || []).slice(-1)[0] ?? res.stderr.trim().split("\n").pop() ?? "unknown error";
+    return passwordListResponse(c, `Move to trash failed (exit ${res.code}): ${detail}`, "err");
+  }
+  if (dryRun) {
+    return passwordListResponse(c, "Dry run — archive was not moved.");
+  }
+  await store.run("UPDATE archives SET status='deleted', updated_at=? WHERE id=?", [
+    new Date().toISOString(),
+    id,
+  ]);
+  return passwordListResponse(c, "Moved to trash.");
+});
+
+actions.post("/archives/:id/restore", async (c) => {
+  if (engineState.running) {
+    return passwordListResponse(c, "Stop the task first.", "err");
+  }
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return passwordListResponse(c, "Not found.", "err");
+  }
+  const row = await store.get1<{ path: string; status: string; error_kind: string | null }>(
+    "SELECT path, status, error_kind FROM archives WHERE id = ?",
+    [id],
+  );
+  if (!row || row.error_kind !== "password") {
+    return passwordListResponse(c, "Not a password-protected archive.", "err");
+  }
+  if (row.status !== "deleted") {
+    return passwordListResponse(c, "Archive is not in trash.", "err");
+  }
+  const rel = String(row.path);
+  if (!isSafeRel(rel)) {
+    return passwordListResponse(c, "Stored path is unsafe; refusing to restore it.", "err");
+  }
+  const trash = parseTrashSubdir((await getSetting("trash_subdir", "trash")) ?? "trash");
+  if (!trash) {
+    return passwordListResponse(c, "trash_subdir is invalid.", "err");
+  }
+  const dryRun = (await getSetting("dry_run", "0")) === "1";
+  const ref = { scope: "archive" as const, refId: id, kind: "extract" as const };
+  const rc = await Rclone.fromSettings();
+  if (await rc.existsPath(rel)) {
+    return passwordListResponse(
+      c,
+      `A file now exists at ${rel} — remove it before restoring.`,
+      "err",
+    );
+  }
+  const trashRel = normalizeRel(`${trash}/${rel}`);
+  const res = await rc.moveToRel(trashRel, rel, dryRun, ref);
+  if (res.code !== 0) {
+    const detail = (res.tail || []).slice(-1)[0] ?? res.stderr.trim().split("\n").pop() ?? "unknown error";
+    return passwordListResponse(c, `Restore failed (exit ${res.code}): ${detail}`, "err");
+  }
+  if (dryRun) {
+    return passwordListResponse(c, "Dry run — archive was not restored.");
+  }
+  await store.run(
+    "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=?",
+    [new Date().toISOString(), id],
+  );
+  return passwordListResponse(c, "Restored — queued for the next run.");
+});
 
 // Clear queues: allowed even while a task is running. Deletes queued
 // archives (and their log rows); a running engine skips rows that are no
@@ -619,7 +737,7 @@ function settingRow(
   return `<div class="setting">
     <div class="setting-head">
       <div class="setting-info">
-        <span class="setting-label">${esc(label)}${opts.info ? ` ${info(opts.info)}` : ""}</span>
+        <span class="setting-label">${esc(label)}${opts.info ? ` ${info(opts.info, label)}` : ""}</span>
         <span class="setting-value${opts.unset ? " unset" : ""}">${esc(value)}</span>
       </div>
       <button type="button" class="btn small" data-edit>Edit</button>
@@ -694,11 +812,11 @@ export async function configForm(note = ""): Promise<string> {
     `<label class="field"><input type="text" name="scan_root" value="${esc(s.scan_root ?? "")}" placeholder="remote:path or /local/path" aria-label="scan_root"></label>`,
     {
       unset: !s.scan_root,
-      info: "Remote or path to scan for archives, e.g. s3:bucket/archives or /data/in.",
+      info: "Remote or path to scan, e.g. s3:bucket/archives or /data/in.",
     },
   )}
-  <label class="field"><span>remote_flags ${info("Extra flags appended to every rclone command. --config is passed unconditionally; a --config here is ignored.")}</span>
-    <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list"></label>
+  <div class="field"><span>remote_flags ${info("Extra flags for every rclone command. --config is ignored.", "remote_flags")}</span>
+    <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list" aria-label="remote_flags"></div>
   ${settingRow(
     "rclone_conf",
     confLabel,
@@ -706,14 +824,14 @@ export async function configForm(note = ""): Promise<string> {
     <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored rclone.conf?|Clear"><span class="spinner" aria-hidden="true"></span>Clear stored config</button>`,
     {
       unset: !effectiveConf,
-      info: "rclone config, stored encrypted and written to /app/data/rclone.conf (or /tmp fallback) before rclone runs. Falls back to the RCLONE_CONF env var when empty.",
+      info: "Stored config, written before each run. Used when RCLONE_CONF is not set.",
     },
   )}
   ${settingRow(
     "queue_max",
     s.queue_max ?? "500",
     `<label class="field"><input type="number" name="queue_max" min="1" value="${esc(s.queue_max ?? "500")}" aria-label="queue_max"></label>`,
-    { info: "Maximum archives queued and processed per run." },
+    { info: "Maximum archives queued per run." },
   )}
   ${settingRow(
     "min_archive_size",
@@ -727,7 +845,7 @@ export async function configForm(note = ""): Promise<string> {
       </div></label>`,
     {
       unset: minSizeBytes <= 0,
-      info: "Ignore archives smaller than this — never queued, and skipped when previously queued. Entered in MB or GB (stored in bytes); 0 = no limit (default).",
+      info: "Ignore archives smaller than this. 0 = no limit.",
     },
   )}
   ${settingRow(
@@ -742,20 +860,20 @@ export async function configForm(note = ""): Promise<string> {
       </div></label>`,
     {
       unset: maxSizeBytes <= 0,
-      info: "Ignore archives larger than this — never queued, and skipped when previously queued; raising the limit takes effect on the next run. Entered in MB or GB (stored in bytes); 0 = no limit (default).",
+      info: "Ignore archives larger than this. 0 = no limit.",
     },
   )}
   ${settingRow(
     "trash_subdir",
     s.trash_subdir ?? "trash",
     `<label class="field"><input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? "trash")}" aria-label="trash_subdir"></label>`,
-    { info: "Folder processed archives are moved into." },
+    { info: "Folder processed archives are moved to." },
   )}
   ${settingRow(
     "tmp_dir",
     s.tmp_dir || TMP_DIR_DEFAULT,
     `<label class="field"><input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}" aria-label="tmp_dir"></label>`,
-    { info: "Where archives are extracted temporarily (default .rclone-extractor-tmp). A relative path resolves inside scan_root." },
+    { info: "Where archives are extracted. Relative paths resolve inside scan_root." },
   )}
   ${settingRow(
     "sort_by",
@@ -764,7 +882,7 @@ export async function configForm(note = ""): Promise<string> {
         <option value="path"${sel(s.sort_by ?? "path", "path")}>path</option>
         <option value="size"${sel(s.sort_by ?? "path", "size")}>size</option>
       </select></label>`,
-    { info: "Process archives by path or by size." },
+    { info: "Queue order: by path or by size." },
   )}
   ${settingRow(
     "sort_dir",
@@ -773,17 +891,16 @@ export async function configForm(note = ""): Promise<string> {
         <option value="asc"${sel(s.sort_dir ?? "asc", "asc")}>asc</option>
         <option value="desc"${sel(s.sort_dir ?? "asc", "desc")}>desc</option>
       </select></label>`,
-    { info: "Queue order direction (asc or desc)." },
+    { info: "Ascending or descending queue order." },
   )}
-  <label class="check"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run${info("Run all rclone commands with --dry-run — nothing is moved or deleted.")}</label>
-  <label class="check"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> resume${info("Re-queue archives interrupted mid-run on the next start; when off they are marked failed/interrupted.")}</label>
-  <label class="check"><input type="checkbox" name="auto_skip_known"${(s.auto_skip_known ?? "1") === "1" ? " checked" : ""}> auto_skip_known${info("Archives previously classified as a torrent or website dump that reappear are skipped automatically, without re-inspection. Uncheck to re-inspect them on later runs.")}</label>
+  <div class="check"><label class="check-inline"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run</label>${info("Runs everything with --dry-run; nothing moves or deletes.", "dry_run")}</div>
+  <div class="check"><label class="check-inline"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> resume</label>${info("Re-queue interrupted archives on the next start.", "resume")}</div>
+  <div class="check"><label class="check-inline"><input type="checkbox" name="auto_skip_known"${(s.auto_skip_known ?? "1") === "1" ? " checked" : ""}> auto_skip_known</label>${info("Auto-skip previously skipped torrent/website dumps.", "auto_skip_known")}</div>
   <h2 class="section-title" style="margin:4px 0 12px">RcloneX</h2>
-  <label class="check"><input type="checkbox" name="rclonex"${s.rclonex === "1" ? " checked" : ""}> Enable RcloneX${info("Extract RAR/RAR5, multivolume RAR (.partN.rar, .rNN), 7Z and split 7Z (.7z.NNN), and ISO via Nerqiva/rclonex. Everything else stays on rclone; when disabled those formats are not queued.")}</label>
-  <label class="check"><input type="checkbox" name="rclonex_skip_inspection"${(s.rclonex_skip_inspection ?? "1") === "1" ? " checked" : ""}> Skip inspection for RcloneX formats${info("Skips the archive content inspection for archives handled by RcloneX (default — rclonex does not list rar/7z/iso). Other formats are always inspected.")}</label>
-  <label class="check"><input type="checkbox" name="rclonex_continue_on_error"${s.rclonex_continue_on_error === "1" ? " checked" : ""}> Continue on entry errors${info("--archive-continue-on-error: keep extracting when an archive entry fails instead of aborting the whole archive.")}</label>
-  <div class="check"><input type="checkbox" name="rclonex_archive_password_enabled" id="rclonex-pw"${s.rclonex_archive_password_enabled === "1" ? " checked" : ""}> <label for="rclonex-pw">Archive password${info("--archive-password: password for encrypted RAR and 7Z archives (also multivolume sets). Blank keeps the stored password; Clear removes it. Stored encrypted at rest.")}</label><input class="check-input" type="password" name="rclonex_archive_password" placeholder="${s.rclonex_archive_password ? "leave blank to keep stored" : "not set"}" autocomplete="new-password" aria-label="rclonex archive password"><button type="button" class="btn small" hx-post="/config/rclonex-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored archive password?|Clear password"><span class="spinner" aria-hidden="true"></span>Clear</button></div>
-  <div class="check"><input type="checkbox" name="rclonex_window_size_enabled" id="rclonex-win"${s.rclonex_window_size_enabled === "1" ? " checked" : ""}> <label for="rclonex-win">Override window size${info("--archive-window-size: sliding-window cache in bytes for random-access formats read by rclonex (7Z, ISO). 0 disables caching. Unchecked keeps rclonex's 16 MiB default.")}</label><input class="check-input small-num" type="number" min="0" name="rclonex_window_size" value="${esc(s.rclonex_window_size ?? "16777216")}" aria-label="rclonex window size"></div>
+  <div class="check"><label class="check-inline"><input type="checkbox" name="rclonex"${s.rclonex === "1" ? " checked" : ""}> Enable RcloneX</label>${info("Extract RAR/7Z/ISO via rclonex; the rest stay on rclone.", "rclonex")}</div>
+  <div class="check"><label class="check-inline"><input type="checkbox" name="rclonex_skip_inspection"${(s.rclonex_skip_inspection ?? "1") === "1" ? " checked" : ""}> Skip inspection for RcloneX formats</label>${info("Skip content inspection for RcloneX formats.", "rclonex_skip_inspection")}</div>
+  <div class="check"><input type="checkbox" name="rclonex_archive_password_enabled" id="rclonex-pw"${s.rclonex_archive_password_enabled === "1" ? " checked" : ""}> <label for="rclonex-pw">Archive password</label>${info("Password for encrypted RAR/7Z archives. Blank keeps the stored one.", "rclonex_archive_password")}<input class="check-input" type="password" name="rclonex_archive_password" placeholder="${s.rclonex_archive_password ? "leave blank to keep stored" : "not set"}" autocomplete="new-password" aria-label="rclonex archive password"><button type="button" class="btn small" hx-post="/config/rclonex-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored archive password?|Clear password"><span class="spinner" aria-hidden="true"></span>Clear</button></div>
+  <div class="check"><input type="checkbox" name="rclonex_window_size_enabled" id="rclonex-win"${s.rclonex_window_size_enabled === "1" ? " checked" : ""}> <label for="rclonex-win">Override window size</label>${info("Sliding-window cache in bytes for rclonex reads. 0 disables.", "rclonex_window_size")}<input class="check-input small-num" type="number" min="0" name="rclonex_window_size" value="${esc(s.rclonex_window_size ?? "16777216")}" aria-label="rclonex window size"></div>
   <div class="btn-row">
     <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>
   </div>
