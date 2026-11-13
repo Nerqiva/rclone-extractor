@@ -15,6 +15,33 @@ scan  →  extract  →  promote  →  trash
 
 ---
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/progress.png" alt="Progress page showing a completed run: the progress bar at 100%, counters for done, failed and skipped archives, scan root and controls" width="100%"><br>
+      <sub><strong>Progress</strong> — live task tracking with counters and queue</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/configuration.png" alt="Configuration page with connection and selection sections, backend info and app password status" width="100%"><br>
+      <sub><strong>Configuration</strong> — connection, selection and security settings</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/logs.png" alt="Logs page with a session picker, a Finished pill and a colorized raw run log" width="100%"><br>
+      <sub><strong>Logs</strong> — colorized raw output with session picker</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/errors.png" alt="Errors page with failed archive cards on top and the password-protected section below, including a card in trash" width="100%"><br>
+      <sub><strong>Errors</strong> — failed archives and password-protected files</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Features
 
 - **Scan any rclone remote** (S3, SFTP, Google Drive, local path, …) for
@@ -624,7 +651,6 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   text file with the run log, the errors log and every per-archive log of
   the session, delimited by section headers.
 
-
 - Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
   and appended, and polling stops as soon as the run finishes — finished
   sessions render statically, so they don't poll at all.
@@ -721,14 +747,14 @@ GET  /dashboard/fragment   live progress panel  (auth)
 GET  /dashboard/controls   run controls         (auth)
 GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
+GET  /logs/archives-fragment                    (auth, per-run archive rows for the Archives tab)
+GET  /download/run/:id/all                       (auth, run log + errors + every archive log as one .txt)
 POST /run/start  /run/stop  /run/skip               (auth)
 POST /config  /config/rclone-clear  /config/rclonex-clear  (auth)
 POST /maintenance/queues  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)
 GET  /download/archive-file/:id                   (auth, streams the archive itself; Range-resumable)
 GET  /download/archive-file/active                (auth, {"active": n} in-flight archive downloads)
-GET  /logs/archives-fragment                    (auth, per-run archive rows for the Archives tab)
-GET  /download/run/:id/all                       (auth, run log + errors + every archive log as one .txt)
 GET  /logs/archive/:id/fragment                   (auth)
 POST /archives/:id/delete  /archives/:id/restore  (auth)
 POST /export  /import                          (auth)

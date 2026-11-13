@@ -34,6 +34,41 @@ to `main`.
   trash** pill and a **Restore** button that moves it back into the queue
   and clears the error kind. Both moves block while a task is running and
   honor `dry_run`. Password rows no longer appear on the Errors page.
+- **Archive downloads are resumable and one at a time** — the Errors page's
+  archive **Download** now answers HTTP `Range` requests (`206` with
+  `Content-Range`, byte window sliced out of the remote with
+  `rclone cat --offset/--count`; the size comes from one `lsjson` call so a
+  resume never trusts a stale scan-time size) and advertises
+  `Accept-Ranges` and `Last-Modified`. Archives up to 32 MB are buffered and
+  served with `Content-Length` (plain bodies keep it; pipe-backed streams
+  are reframed chunked by the runtime); larger ones stream chunked and
+  still carry `Content-Range`. `If-Range` mismatch restarts the download
+  instead of risking a corrupt resume. Concurrency is enforced
+  server-wide: while one archive-file download is in flight the other
+  **Download** buttons are greyed out and tapping one shows a toast, and
+  deleting/restoring that same file is refused. A client that disconnects
+  kills the child `rclone` process. New route: `GET
+  /download/archive-file/active` (`{"active": n}`).
+- **Logs page: Archives tab** — every archive a run processed (done, failed,
+  skipped, or still in progress) listed with its raw extraction log one tap
+  away (**Log view**, most recent 300 lines; **Copy log** and **Download**
+  per row). Processing is recorded in `archives.last_run_id` (idempotent
+  migration for existing installs). Live sessions refresh the tab every
+  2 s. **Download all** exports one `.txt` with the run log, the errors
+  log and every per-archive log of the session, delimited by section
+  headers. New routes: `GET /logs/archives-fragment`, `GET
+  /download/run/:id/all`. The Errors page password rows now load 300 lines
+  into the inline **Log view** (with a link to the full log) instead of
+  up to 50,000.
+- **Every action button shows a busy state on click** — htmx and plain
+  buttons alike (a spinner is injected automatically when one is missing),
+  with completion hooks from the htmx/fetch paths and a 60 s safety
+  timeout. Error toasts now stay for 8 s (ok toasts still 3.2 s), so a
+  failed action is no longer invisible.
+- **Screenshots in the README** — the four main pages (Progress,
+  Configuration, Logs, Errors) are now embedded, captured from a seeded
+  demo instance (finished run, realistic error and password-protected
+  rows; nothing from a real install).
 - **`runs.last_archive` / `runs.last_command`** — the archive and the rclone
   command in flight when a run stops are persisted on the run (including
   across crashes, via a write at archive start and on every command
@@ -177,6 +212,17 @@ to `main`.
   `s3.test.ts` renamed to `archive.test.ts` and `engine-flow.test.ts`.
 
 ### Fixed
+- **The Progress page rendered empty on every page load and refresh** — the
+  shell shipped two lazy `hx-get` placeholders and the controls popped in
+  before the (DB-backed) progress panel; both are now rendered inline by
+  the first paint, and polling (`every 1s`) swaps the panel in place. The
+  boot-time `rclone.conf` fallback warning is inlined as well, so it is
+  no longer missed on full page loads.
+- **Restore offered for archives whose trash copy was gone** — with the
+  file removed from the trash (by hand, say), **Restore** could only fail,
+  forever. Restore now detects the missing source, drops the stale entry
+  and its logs, and says so in the toast; `dry_run` leaves everything in
+  place.
 - **Skip during the cleanup before trash** could move the archive to trash
   and then re-queue it (next run failed on the missing source) — a guard
   now unwinds the archive before the trash move, for both skip and hard
