@@ -1,6 +1,6 @@
 {
   "name": "rclone-extractor",
-  "version": "2026.11.13.2-alpha",
+  "version": "2026.11.13.3-alpha",
   "type": "module",
   "description": "Self-hosted web app that scans an rclone remote for archives, extracts them in place, and moves finished archives to trash.",
   "license": "Apache-2.0",
