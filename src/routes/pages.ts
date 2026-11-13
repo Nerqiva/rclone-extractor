@@ -100,6 +100,7 @@ pages.get("/config", async (c) => {
       if (!btn) return;
       btn.disabled = loading;
       btn.classList.toggle("is-loading", loading);
+      if (!loading && window.appUnmark) window.appUnmark(btn);
       var label = btn.querySelector(".btn-label");
       if (!label) return;
       if (!btn.dataset.idleLabel) btn.dataset.idleLabel = label.textContent;

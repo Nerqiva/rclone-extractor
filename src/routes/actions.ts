@@ -17,6 +17,7 @@ import { loadTmpDirSettings } from "../tmpsweep";
 import { parseTrashSubdir, isSafeRel, normalizeRel, TRASH } from "../archive";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
 import { controlsFragment, configForm } from "../views";
+import { isArchiveDownloading } from "../downloads";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
@@ -462,6 +463,14 @@ async function movePasswordArchive(
   if (!isSafeRel(rel)) {
     return passwordListResponse(c, "Stored path is unsafe; refusing to move it.", "err");
   }
+  // Never move a file that is streaming to a browser right now.
+  if (isArchiveDownloading(id)) {
+    return passwordListResponse(
+      c,
+      "A download of this archive is in progress; wait for it to finish.",
+      "err",
+    );
+  }
   const trash = parseTrashSubdir((await getSetting("trash_subdir", TRASH)) ?? TRASH);
   if (!trash) {
     return passwordListResponse(c, "trash_subdir is invalid.", "err");
@@ -472,6 +481,23 @@ async function movePasswordArchive(
   const trashRel = normalizeRel(`${trash}/${rel}`);
   const srcRel = del ? rel : trashRel;
   const destRel = del ? trashRel : rel;
+  if (!del && !(await rc.existsPath(srcRel))) {
+    // The trash copy is gone (removed by hand or by something else), so
+    // this row can never be restored. Drop it (and its logs) instead of
+    // offering a Restore button that can only fail.
+    if (dryRun) {
+      return passwordListResponse(
+        c,
+        "Dry run: the trash copy is missing; nothing was changed.",
+      );
+    }
+    await store.run("DELETE FROM log_lines WHERE scope='archive' AND ref_id = ?", [id]);
+    await store.run("DELETE FROM archives WHERE id = ?", [id]);
+    return passwordListResponse(
+      c,
+      "The file is no longer in the trash; the entry was removed.",
+    );
+  }
   if (await rc.existsPath(destRel)) {
     return passwordListResponse(
       c,

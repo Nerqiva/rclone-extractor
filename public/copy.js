@@ -85,21 +85,24 @@
     } finally {
       button.disabled = false;
       button.removeAttribute("aria-busy");
+      if (window.appUnmark) window.appUnmark(button);
     }
   }
 
   async function handleCopyTable(button) {
     var selector = button.getAttribute("data-copy-table");
     var text = tableAsText(selector);
-    if (!text.trim()) {
-      toast("No rows to copy", "err");
-      return;
-    }
     try {
+      if (!text.trim()) {
+        toast("No rows to copy", "err");
+        return;
+      }
       await copyText(text);
       toast("Copied " + (text.split("\n").length - 1) + " error(s)");
     } catch (err) {
       toast("Copy failed", "err");
+    } finally {
+      if (window.appUnmark) window.appUnmark(button);
     }
   }
 

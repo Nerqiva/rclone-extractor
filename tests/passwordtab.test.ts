@@ -114,19 +114,37 @@ test("delete is refused while a task is running", async () => {
 });
 
 test("restore moves the archive back and re-queues it", async () => {
-  const id = await insertPasswordArchive("restore/protected.rar", "deleted");
+  // The trash copy (the restore source) must exist.
+  writeFileSync(join(mockMarkers, "trash_exists"), "");
+  try {
+    const id = await insertPasswordArchive("restore/protected.rar", "deleted");
+    const res = await actions.request(`/archives/${id}/restore`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const row = await store.get1<{ status: string; error_kind: string | null }>(
+      "SELECT status, error_kind FROM archives WHERE id = ?",
+      [id],
+    );
+    expect(row?.status).toBe("queued");
+    expect(row?.error_kind).toBeNull();
+  } finally {
+    const { rmSync } = await import("node:fs");
+    rmSync(join(mockMarkers, "trash_exists"), { force: true });
+  }
+});
+
+test("restore drops the entry when the trash copy is gone", async () => {
+  // No trash_exists marker: the file vanished from the trash (removed by
+  // hand, say). Restore must clean up the stale row, not fail forever.
+  const id = await insertPasswordArchive("gone/protected.rar", "deleted");
   const res = await actions.request(`/archives/${id}/restore`, { method: "POST" });
-  expect(res.status).toBe(200);
-  const row = await store.get1<{ status: string; error_kind: string | null }>(
-    "SELECT status, error_kind FROM archives WHERE id = ?",
-    [id],
-  );
-  expect(row?.status).toBe("queued");
-  expect(row?.error_kind).toBeNull();
+  expect(res.headers.get("HX-Trigger")).toContain("no longer in the trash");
+  const row = await store.get1<{ id: number }>("SELECT id FROM archives WHERE id = ?", [id]);
+  expect(row).toBeFalsy();
 });
 
 test("restore refuses when a file now exists at the original path", async () => {
   writeFileSync(join(mockMarkers, "root_exists"), "");
+  writeFileSync(join(mockMarkers, "trash_exists"), ""); // trash copy (source) exists
   try {
     const id = await insertPasswordArchive("back/protected.rar", "deleted");
     const res = await actions.request(`/archives/${id}/restore`, { method: "POST" });
@@ -136,6 +154,7 @@ test("restore refuses when a file now exists at the original path", async () => 
   } finally {
     const { rmSync } = await import("node:fs");
     rmSync(join(mockMarkers, "root_exists"), { force: true });
+    rmSync(join(mockMarkers, "trash_exists"), { force: true });
   }
 });
 

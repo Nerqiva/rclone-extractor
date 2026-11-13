@@ -1259,6 +1259,12 @@ textarea {
 .btn.is-loading .spinner {
   display: inline-block;
 }
+/* Greyed out while another archive-file download is streaming (see the
+   data-download-archive handler in the shared script). */
+.btn.is-download-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);

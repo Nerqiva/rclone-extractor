@@ -52,7 +52,7 @@ export function renderPasswordList(rows: PasswordRow[]): string {
           <span class="error-actions">
             <button class="btn small" type="button" data-pw-log="${idAttr}" aria-expanded="false" aria-controls="pw-log-${idAttr}">Log view</button>
             <button class="btn small" type="button" data-copy-url="/download/archive/${idAttr}?kind=extract" title="Copy the archive log" aria-label="Copy log for ${esc(name)}">Copy log</button>
-            <a class="btn small ghost" href="/download/archive-file/${idAttr}">Download</a>
+            <a class="btn small ghost" href="/download/archive-file/${idAttr}" data-download-archive data-archive-id="${idAttr}">Download</a>
             ${action}
           </span>
         </div>

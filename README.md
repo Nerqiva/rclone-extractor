@@ -636,12 +636,22 @@ page, plus tabs for the run log and the errors log.
   to the next archive; they are never extracted without one). Each row shows
   the file name and path and its size, a **Log view** for the per-archive
   log, **Copy log**, a **Download** button that streams the archive itself
-  through the app (`rclone cat`), and **Delete** — which moves the file to
-  the configured trash folder after a confirmation (never outright deletion,
-  and never over anything already in the trash). A deleted archive shows up
-  on the same tab with an **in trash** pill and a **Restore** button that
-  moves it back into the queue (clearing the error kind). Deleting/restoring
-  is blocked while a task is running.
+  through the app (`rclone cat`; it answers HTTP `Range` requests, and
+  archives up to 32 MB are served with `Content-Length` so an interrupted
+  download resumes in the browser's download manager / `wget -c` /
+  `aria2c -c` — larger ones stream chunked with `Content-Range`), and
+  **Delete** —
+  which moves the file to the configured trash folder after a confirmation
+  (never outright deletion, and never over anything already in the trash).
+  One archive-file download can stream at a time — app-wide; while one is
+  in flight the other **Download** buttons are greyed out and tapping one
+  shows a toast. The same file can't be deleted (or restored) while it is
+  streaming. A deleted archive shows up on the same tab with an **in trash**
+  pill and a **Restore** button that moves it back into the queue (clearing
+  the error kind). Restore assumes the file is still in the trash; if it
+  was removed from there (by hand, say), the stale entry is dropped instead
+  of failing forever. Deleting/restoring is blocked while a task is running.
+  Moving an archive, or clearing it, honors `dry_run`.
 
 ### Backend adapter
 
@@ -702,7 +712,8 @@ POST /run/start  /run/stop  /run/skip               (auth)
 POST /config  /config/rclone-clear  /config/rclonex-clear  (auth)
 POST /maintenance/queues  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)
-GET  /download/archive-file/:id                   (auth)
+GET  /download/archive-file/:id                   (auth, streams the archive itself; Range-resumable)
+GET  /download/archive-file/active                (auth, {"active": n} in-flight archive downloads)
 GET  /logs/archive/:id/fragment                   (auth)
 POST /archives/:id/delete  /archives/:id/restore  (auth)
 POST /export  /import                          (auth)

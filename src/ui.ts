@@ -93,9 +93,10 @@ const GLOBAL_SCRIPT = `<script>
     el.className = "toast " + (kind || "ok");
     el.textContent = message;
     region.appendChild(el);
+    var lifetime = kind === "err" ? 8000 : 3200;
     requestAnimationFrame(function () { el.classList.add("show"); });
-    window.setTimeout(function () { el.classList.remove("show"); }, 3200);
-    window.setTimeout(function () { el.remove(); }, 3600);
+    window.setTimeout(function () { el.classList.remove("show"); }, lifetime);
+    window.setTimeout(function () { el.remove(); }, lifetime + 400);
   }
   window.appToast = toast;
 
@@ -109,10 +110,42 @@ const GLOBAL_SCRIPT = `<script>
     return Array.prototype.slice.call(elt.querySelectorAll("button.btn"));
   }
 
+  // Busy state for every action button, not just the ones that opted in
+  // with a hand-placed .spinner: inject one when missing. htmx buttons are
+  // marked from before/afterRequest; everything else from the global click
+  // handler below, and completion paths call appUnmark. A 60s safety
+  // timeout unmarks anything whose completion we missed.
+  var BUSY_SAFETY_MS = 60000;
+
   function mark(button, busy) {
-    button.disabled = busy;
-    button.classList.toggle("is-loading", busy);
+    if (!button) return;
+    var isAnchor = button.tagName === "A";
+    if (busy) {
+      if (!isAnchor) button.disabled = true;
+      button.classList.add("is-loading");
+      if (!button.querySelector(".spinner")) {
+        var sp = document.createElement("span");
+        sp.className = "spinner";
+        sp.setAttribute("aria-hidden", "true");
+        sp.setAttribute("data-injected", "1");
+        button.insertBefore(sp, button.firstChild);
+      }
+      if (button.dataset.busySafety) window.clearTimeout(Number(button.dataset.busySafety));
+      button.dataset.busySafety = String(
+        window.setTimeout(function () { mark(button, false); }, BUSY_SAFETY_MS),
+      );
+      return;
+    }
+    if (button.dataset.busySafety) {
+      window.clearTimeout(Number(button.dataset.busySafety));
+      delete button.dataset.busySafety;
+    }
+    if (!isAnchor) button.disabled = false;
+    button.classList.remove("is-loading");
+    var injected = button.querySelectorAll('.spinner[data-injected="1"]');
+    for (var i = 0; i < injected.length; i++) injected[i].remove();
   }
+  window.appUnmark = function (button) { mark(button, false); };
 
   document.body.addEventListener("htmx:configRequest", function (event) {
     var meta = document.querySelector('meta[name="csrf-token"]');
@@ -126,6 +159,71 @@ const GLOBAL_SCRIPT = `<script>
   document.body.addEventListener("htmx:afterRequest", function (event) {
     actionButtons(event.detail && event.detail.elt).forEach(function (b) { mark(b, false); });
   });
+
+  // Every action button shows a busy state on click, not only the ones the
+  // caller remembers to mark. Polling controls, disabled buttons, the
+  // confirm-modal opener click and the modal's own Confirm button are
+  // exempt (the gated button shows the state once confirmed). Plain submit
+  // buttons are marked on the form's submit event instead — disabling one
+  // mid-click would cancel the submission.
+  document.body.addEventListener("click", function (event) {
+    var btn = event.target.closest ? event.target.closest(".btn") : null;
+    if (!btn) return;
+    if (btn.getAttribute("type") === "submit") return;
+    var cfm = btn.closest("[data-confirm]");
+    if (cfm && !cfm.hasAttribute("data-confirmed")) return;
+    if (btn.id === "confirm-ok" || btn.disabled) return;
+    if (btn.getAttribute("aria-disabled") === "true") return;
+    var trg = btn.getAttribute("hx-trigger");
+    if (trg && trg.indexOf("every") !== -1) return;
+    mark(btn, true);
+  }, true);
+
+  // Plain form submits (login, logout, export/import): busy the submitting
+  // button once the submit is dispatched — never before.
+  document.body.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (!form || !form.querySelector) return;
+    var btn = form.querySelector('button[type="submit"]');
+    if (btn) mark(btn, true);
+  }, true);
+
+  // Archive-file downloads: one at a time, app-wide. The server keeps a
+  // registry of in-flight streams; while it reports activity every Download
+  // button greys out and says so on click instead of queueing a second
+  // stream of the same remote. The clicked one unmarks when it drains.
+  function greyDownloads(active) {
+    var els = document.querySelectorAll("[data-download-archive]");
+    for (var i = 0; i < els.length; i++) {
+      els[i].classList.toggle("is-download-disabled", active);
+      els[i].setAttribute("aria-disabled", active ? "true" : "false");
+      if (!active) mark(els[i], false);
+    }
+  }
+  function pollDownloads() {
+    if (document.hidden) return;
+    fetch("/download/archive-file/active", { credentials: "same-origin", cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && typeof j.active === "number") greyDownloads(j.active > 0); })
+      .catch(function () { /* transient; next tick retries */ });
+  }
+  document.body.addEventListener("click", function (event) {
+    var el = event.target.closest ? event.target.closest("[data-download-archive]") : null;
+    if (!el) return;
+    if (el.classList.contains("is-download-disabled")) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      toast("A download is already in progress; wait for it to finish.", "err");
+      return;
+    }
+    mark(el, true);
+    window.setTimeout(pollDownloads, 200);
+    window.setTimeout(pollDownloads, 1500);
+  }, true);
+  if (document.querySelector("[data-download-archive]")) {
+    pollDownloads();
+    window.setInterval(pollDownloads, 1500);
+  }
 
   document.body.addEventListener("appToast", function (event) {
     var detail = event.detail || {};

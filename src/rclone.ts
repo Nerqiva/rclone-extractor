@@ -991,18 +991,26 @@ export class Rclone {
   /**
    * Stream a single remote file (`rclone cat`) without buffering it — the
    * route pipes `stdout` straight into its own response. `exited` resolves
-   * after EOF; on a non-zero exit the caller should log `stderr`.
+   * after EOF; on a non-zero exit the caller should log `stderr`. `range`
+   * streams only that byte window (used to answer HTTP Range resumes);
+   * `kill()` terminates the child (client disconnected mid-download).
    */
   async openCat(
     rel: string,
+    range?: { offset: number; count: number },
   ): Promise<{
     stdout: ReadableStream;
     exited: Promise<number>;
     stderr: Promise<string>;
     command: string;
+    kill: () => void;
   }> {
     assertSafeRel(rel);
-    const args = [...this.confArgs(), "cat", `${this.root}/${rel}`, ...this.flags];
+    const args = [...this.confArgs(), "cat", `${this.root}/${rel}`];
+    if (range) {
+      args.push("--offset", String(range.offset), "--count", String(range.count));
+    }
+    args.push(...this.flags);
     const command = this.announce(args);
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
@@ -1013,6 +1021,52 @@ export class Rclone {
       exited: proc.exited,
       stderr: new Response(proc.stderr).text(),
       command,
+      kill: () => {
+        try {
+          proc.kill();
+        } catch {
+          /* already exited */
+        }
+      },
     };
+  }
+
+  /**
+   * One cheap metadata call (size + remote mtime) — the size needed to
+   * answer Range requests honestly. Null when the remote cannot tell us
+   * (callers fall back to the stored size, then to a plain 200).
+   */
+  async statFile(
+    rel: string,
+  ): Promise<{ size: number; modTime?: string } | null> {
+    assertSafeRel(rel);
+    const args = [...this.confArgs(), "lsjson", `${this.root}/${rel}`, ...this.flags];
+    const proc = spawnBinary(this.bin, args, {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    if (code !== 0) return null;
+    try {
+      const entries = JSON.parse(out) as Array<{
+        Size?: number;
+        ModTime?: string;
+        IsDir?: boolean;
+      }>;
+      const file = Array.isArray(entries)
+        ? entries.find((e) => e && e.IsDir !== true)
+        : undefined;
+      const size = Number(file?.Size);
+      if (!file || !Number.isFinite(size) || size < 0) return null;
+      return {
+        size,
+        modTime: typeof file.ModTime === "string" ? file.ModTime : undefined,
+      };
+    } catch {
+      return null;
+    }
   }
 }
