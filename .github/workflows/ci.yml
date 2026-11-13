@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
 
 jobs:
   test-and-build:
@@ -29,8 +31,10 @@ jobs:
             echo "No test files present; skipping."
           fi
 
+      # Test-only on PRs: the image is built+pushed on main/tags only.
       - name: Compute CalVer alpha version
         id: calver
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           DATE="$(date -u +%Y.%m.%d)"
@@ -39,12 +43,15 @@ jobs:
           echo "version=${DATE}.${NEXT}-alpha" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
+        if: github.event_name != 'pull_request'
         uses: docker/setup-qemu-action@v4
 
       - name: Set up Buildx
+        if: github.event_name != 'pull_request'
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -52,6 +59,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
+        if: github.event_name != 'pull_request'
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -61,6 +69,7 @@ jobs:
             type=raw,value=${{ steps.calver.outputs.version }}
 
       - name: Build and push
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7
         with:
           context: .
