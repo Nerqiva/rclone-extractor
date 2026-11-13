@@ -397,9 +397,6 @@ all are disabled while a task is running except **Clear queues**):
 - **Clear queues** deletes queued archives (and their archive log rows) —
   even while a task is running; the running engine skips the deleted rows.
   Run count, history and the archive cache are kept.
-- **Clear History** wipes the queue, run count and the archive cache along
-  with run/archive logs, and resets the ids — the next run starts from #1
-  (dry-run aware temp purge kept).
 - **Clear logs** wipes logs and errors only — log lines and the `/errors`
   failure index (`error_kind`). Runs and archives are kept.
 - **Clear tmp directory** purges stale app-owned numeric run dirs (honors
@@ -472,9 +469,9 @@ these holds:
 
 If the failure output mentions a password, the skip reason is `password`
 (same as a password failure during extraction). Skipped password archives are
-never re-queued on later runs; they are listed on the Logs page's
-**Password-protected** tab, where they can be downloaded, moved to trash, or
-restored to the queue. Archives previously skipped as a
+never re-queued on later runs; they are listed on the Errors page's
+**Password-protected** section, where they can be downloaded, moved to trash,
+or restored to the queue. Archives previously skipped as a
 torrent or website dump that reappear in a later listing are auto-skipped by
 default (see `auto_skip_known`).
 
@@ -610,8 +607,7 @@ button is not possible.
 The **Logs** page opens on the current (latest) session. While a task is
 running, only that live session is shown. When the app is idle, the same log
 window has a session picker so older runs can be viewed without leaving the
-page, plus tabs for the run log, the errors log and the password-protected
-archives.
+page, plus tabs for the run log and the errors log.
 
 - Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
   and appended, and polling stops as soon as the run finishes — finished
@@ -628,8 +624,8 @@ archives.
   tab-separated summary. Each row's **Copy** / **Download** button fetches
   that archive's log, which stores the raw rclone output of the failing
   command — nothing written by the app is added to it.
-- The **Password-protected** tab on the Logs page lists every archive that
-  reached a run but needs a password (a warning is logged and the run moves
+- The **Password-protected** section on the Errors page lists every archive
+  that reached a run but needs a password (a warning is logged and the run moves
   to the next archive; they are never extracted without one). Each row shows
   the file name and path and its size, a **Log view** for the per-archive
   log, **Copy log**, a **Download** button that streams the archive itself
@@ -666,6 +662,9 @@ src/
   archive.ts       name/path helpers, archive content filters, isSupported
   engine.ts        the extract loop, run state, resume
   ui.ts            HTML layout + escaping
+  views.ts         UI fragment builders (run controls, Configuration form)
+  format.ts        shared byte/duration formatters
+  runs.ts          run-outcome resolution (legacy interrupted-flag fallback)
   routes/
     pages.ts       GET /  /config  /logs  /errors
     auth.ts        login/logout, DB sessions, CSRF middleware
@@ -694,7 +693,7 @@ GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
 POST /run/start  /run/stop  /run/skip               (auth)
 POST /config  /config/rclone-clear  /config/rclonex-clear  (auth)
-POST /maintenance/queues  /maintenance/runs  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
+POST /maintenance/queues  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)
 GET  /download/archive-file/:id                   (auth)
 GET  /logs/archive/:id/fragment                   (auth)
@@ -731,8 +730,14 @@ Postgres.
 ```bash
 bun install          # install Hono + Bun types
 bun run src/server.ts
-bun test
+bun test --isolate
 ```
+
+To run the app end-to-end locally with a throwaway rclone remote, seeded
+archives and a SQLite scratch database, follow
+[docs/testing.md](docs/testing.md).
+
+Type checking (`bunx tsc --noEmit`) runs in CI alongside the tests.
 
 The test suite includes a **documentation drift guard** (`tests/readme.test.ts`):
 it fails if any registered route, environment variable, or user-facing setting

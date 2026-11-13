@@ -57,6 +57,24 @@ to `main`.
   probed at boot (like rclone) so a missing or wrong-arch binary is visible
   in the deploy log instead of surfacing as per-archive spawn failures.
 
+- **Type checking in CI** — new `tsconfig.json` (strict, noEmit) and a
+  `bunx tsc --noEmit` step in the test job. CI runs are also
+  cancellation-gated per ref, and the Docker build job alone carries
+  `packages: write`.
+- New shared modules: `src/views.ts` (run-control and Configuration-form
+  HTML builders, extracted from the route modules so routes no longer
+  import each other for markup), `src/format.ts` (one byte format and one
+  duration format — replaces three byte formatters and two duration
+  formatters), `src/runs.ts` (`resolveOutcome`, shared by the Logs and
+  Progress pages).
+- `docs/testing.md` — local end-to-end testing with a throwaway rclone
+  local remote and seeded archives.
+- Tests: `tests/format.test.ts`, `tests/runs.test.ts`,
+  `tests/pages.test.ts` (smoke tests for all four pages).
+- Project hygiene files: Apache-2.0 LICENSE, issue and PR templates,
+  SECURITY.md, Dependabot (bun, GitHub Actions, Docker), and package.json
+  `description`/`license`/`repository`/`homepage`/`bugs` metadata.
+
 ### Changed
 - **Info tooltips are now brief one-line tips** (was: multi-sentence
   paragraphs) with a short accessible name ("More info: <name>"). Tooltips
@@ -98,11 +116,36 @@ to `main`.
   the archive with a cleared `error_kind` (was: stale `extract` error rows
   on the Errors page).
 
+- **Configuration page is now plain English** — every setting has a
+  human label and one short description line; the stored key is shown next
+  to it in muted code (keys unchanged, no migration). Settings are grouped
+  into Connection / Selection / Extract / Behaviour / RcloneX / Advanced
+  sections, and the checkboxes look like every other setting.
+- **Password-protected archives moved to the Errors page** as their own
+  section below the failure cards (was: a tab on the Logs page). Logs keeps
+  the Run log and Errors tabs; `?tab=password` is gone.
+- **Every page has a one-line subtitle**, and page titles match the nav
+  ("Progress", was "Task progress"). The `?kind=` legacy alias on `/logs` is
+  gone.
+- **The "Clear History" maintenance button is gone** — it ran the same
+  wipe as "Clear everything" (same code path, different wording). Use
+  **Clear everything**.
+
 ### Removed
 - **`--archive-continue-on-error` (no such flag in rclonex)** — enabling
   "Continue on entry errors" made every RAR/7Z/ISO extraction fail with
   `unknown flag`. The checkbox, the `rclonex_continue_on_error` setting and
   the flag are gone.
+
+- **Maintenance route `/maintenance/runs`** removed — its wipe was
+  identical to `/maintenance/all` (`wipeEverything`), just with different
+  toast wording.
+- Dead `cancelled` run-state handling (the engine never set it) and its
+  CSS; `appendRawLines` (an alias of `insertLogLines`) merged into the main
+  function; password-tab delete/restore merged into one shared code path;
+  temp-sweep `dry_run` is read once instead of twice; `stopEngine` and
+  `forceStopEngine` share one cancel-persist block; tests `s2.test.ts` and
+  `s3.test.ts` renamed to `archive.test.ts` and `engine-flow.test.ts`.
 
 ### Fixed
 - **Skip during the cleanup before trash** could move the archive to trash
@@ -122,6 +165,12 @@ to `main`.
 - **Password-protected archives** skip to the next archive and leave a
   synthetic diagnostic line in the archive log (parity with the inspection
   path), so the Logs page's new tab can always show something.
+
+- **Fresh runs logged a bogus `[killed] previous process exited
+  mid-run (crash or kill)` line** in both the run log and the errors log.
+  `recoverStale` closed every run with `finished_at IS NULL`, including the
+  row the new run had just created; it now excludes the caller's own row.
+  Boot and shutdown recovery are unchanged.
 
 ### Added
 - **RcloneX integration** (off by default): when **Enable RcloneX** is set on
