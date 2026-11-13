@@ -79,9 +79,8 @@ inside `$SCRATCH`. Nothing else on the machine is touched.
   (rclonex/7z absent); covered by `tests/passwordtab.test.ts` instead.
 - **RAR/7Z/ISO extraction** — requires rclonex on the machine; covered by
   the stub-binary integration tests (`tests/rclonex.test.ts`).
-- **Real pixel screenshots** — the lightpanda browser renders pages as
-  text layouts, not pixels (no CSS), so screenshots cannot be captured in
-  this environment. Take them with a real browser if needed.
+- **Real pixel screenshots** — Playwright with Chromium can capture them,
+  but they are not wired into the test suite here.
 
 ## Automated tests
 
