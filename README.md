@@ -35,6 +35,11 @@ scan  →  extract  →  promote  →  trash
   unreadable archives are skipped, never extracted. Archives in `trash_subdir`
   are not queued. Archives classified as website dumps (two or more distinct
   web-development extensions anywhere in the archive) are skipped entirely.
+  For RcloneX-handled formats (RAR/7Z/ISO/multivolume) — where inspection
+  streams the whole archive — inspection additionally runs **after
+  extraction** on the extracted tree: website dumps and torrent collections
+  are skipped then (the extracted data is deleted, the archive is kept in
+  place). Everything else continues as a normal extraction.
 - **Live progress page** — KPI cards, a segmented progress bar, stage text,
   per-run rate/ETA, the active rclone command, done/failed/skipped counters,
   and a slim live bar that follows the in-flight rclone command: real progress
@@ -243,11 +248,11 @@ database. They can also be seeded from environment variables.
 | `rclonex_skip_inspection` | Skip the archive content inspection for archives handled by RcloneX (default on — slow full-stream reads). ISO archives are always skipped (not listable). When off, RAR/7Z inspection runs through rclone (`archive list` reads them fine); an inspection failure marks the archive `unreadable` and it is never extracted. ZIP/TAR family is always inspected. |
 | `auto_skip_known` | Keep reappearing archives classified as a torrent or website dump skipped automatically (default on — they are never re-queued/re-inspected). Uncheck to re-inspect such reappearing archives on later runs. |
 | `rclonex_archive_password_enabled` + `rclonex_archive_password` | RcloneX flag `--archive-password` (default off): password for encrypted RAR/7Z archives (multivolume sets included). The password is stored encrypted at rest; leaving the field blank on save keeps the stored value, and the **Clear** button removes it (disables the flag). |
-| `rclonex_window_size_enabled` + `rclonex_window_size` | RcloneX flag `--archive-window-size` (default off, rclonex keeps its own 16 MiB): sliding-window cache size in bytes for random-access formats read by rclonex (7Z, ISO). `0` disables caching. |
+| `rclonex_archive_buffer_size` | RcloneX flag `--archive-window-size` (how much of the archive is buffered in memory while rclonex reads random-access formats such as 7Z/ISO). Bytes; `0` keeps rclonex's own default. The Configuration page asks for MB/GB. |
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
 | `dry_run` | When on, rclone runs with `--dry-run`; nothing is moved or deleted. |
-| `trash_subdir` | Folder the processed archive is moved into (default `trash`). |
-| `tmp_dir` | Where rclone extracts archives temporarily (default `.rclone-extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
+| `trash_subdir` | Folder the processed archive is moved into (default `.Trash`). |
+| `tmp_dir` | Where rclone extracts archives temporarily (default `.Rclone-Extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`killed`. |
 | `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. When set, it is written to `/app/data/rclone.conf` before rclone runs — if that path is not writable for any reason, it is written to `/tmp/app/data/rclone.conf` instead (warning in the server log and a toast). Otherwise the file at `/app/data/rclone.conf` (e.g. a mounted rclone.conf) is used as-is. |
 
@@ -341,18 +346,21 @@ For each archive at `<ROOT>/<REL>`:
 ```
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";"
 inspect: rclone archive list <ROOT>/<REL> --files-only (skipped for RcloneX formats by default, always for ISO)
-extract: rclone archive extract <ROOT>/<REL> <TMPDIR>/<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
+extract: rclone archive extract <ROOT>/<REL> <TMPDIR>/run_<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
          (or `rclonex archive extract` for RcloneX-handled formats, with the configured --archive-* flags)
-promote: rclone move <TMPDIR>/<runid>/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
-cleanup: rclone purge <TMPDIR>/<runid>/<archiveid>/<stem>
-rmdir:   rclone rmdir <TMPDIR>/<runid>/<archiveid> (then <runid>/ and the tmp root; falls back to purge when not empty)
+promote: rclone move <TMPDIR>/run_<runid>/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
+cleanup: rclone purge <TMPDIR>/run_<runid>/<archiveid>/<stem>
+purge:   rclone purge <TMPDIR>/run_<runid>/<archiveid> (and the run dir; `rmdir` only removes dirs that are already empty)
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
 
-`<TMPDIR>` is the configured `tmp_dir` (default `.rclone-extractor-tmp`):
+`<TMPDIR>` is the configured `tmp_dir` (default `.Rclone-Extractor-tmp`):
 a relative path is resolved under `<ROOT>`, while `remote:path/to/dir` or
-`/abs/local/path` are used as-is. `<TMPDIR>/<runid>/<archiveid>/<stem>` so two
-archives with the same filename cannot collide.
+`/abs/local/path` are used as-is. `<TMPDIR>/run_<runid>/<archiveid>/<stem>` so
+two archives with the same filename cannot collide and the sweeper can tell
+the app's directories apart from anything else. The maintenance/boot sweep
+removes stale `run_<digits>` directories inside `<TMPDIR>` — anything else is
+left alone.
 
 `remote_flags` is appended to
 every command; `--dry-run` is added when `dry_run` is on (`archive list` is
@@ -383,13 +391,12 @@ filters them out of the archive log (they carry no error signal); everything
 else rclone writes is logged. Commands without byte progress (lsf, archive
 list, purge, rmdir) show an indeterminate bar instead.
 
-Directories matching the app's run layout (`<runid>/` with numeric names, as
-created under `tmp_dir`) are purged automatically at boot, at the start of
-every run, and at the end of a run; the last cleanup of a non-empty directory
-falls back from `rclone rmdir` to `rclone purge`. Non-app entries inside
-`tmp_dir` are never deleted — they are left alone and only logged. The
-Configuration page also has a **Clear tmp directory** maintenance action.
-`dry_run` disables destructive cleanup entirely.
+Directories matching the app's run layout (`run_<digits>/`, as created
+under `tmp_dir`) are purged automatically at boot, at the start of every run,
+and at the end of a run; non-empty directories are removed with `rclone
+purge`. Anything else inside `tmp_dir` is never deleted — it is left alone
+and only logged. The Configuration page also has a **Clear tmp directory**
+maintenance action. `dry_run` disables destructive cleanup entirely.
 
 The Configuration page's maintenance actions (each asks for confirmation;
 all are disabled while a task is running except **Clear queues**):
@@ -399,7 +406,7 @@ all are disabled while a task is running except **Clear queues**):
   Run count, history and the archive cache are kept.
 - **Clear logs** wipes logs and errors only — log lines and the `/errors`
   failure index (`error_kind`). Runs and archives are kept.
-- **Clear tmp directory** purges stale app-owned numeric run dirs (honors
+- **Clear tmp directory** purges stale app-owned `run_<digits>` dirs (honors
   `dry_run`).
 - **Clear everything** wipes queue, history, logs, errors and the tmp
   directory; next run starts from #1.

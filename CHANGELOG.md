@@ -75,6 +75,15 @@ to `main`.
   SECURITY.md, Dependabot (bun, GitHub Actions, Docker), and package.json
   `description`/`license`/`repository`/`homepage`/`bugs` metadata.
 
+- **Post-extraction inspection for RcloneX-handled archives** — after a
+  successful extraction of RAR/7Z/ISO/multivolume archives, the rclone
+  binary lists the extracted tree (`lsf --recursive --files-only`);
+  website dumps and torrent collections are skipped right there: the
+  extracted data is removed and the archive stays in place (no promote,
+  no trash). Anything else continues as a normal extraction.
+- `tests/postexinspect.test.ts` — covers the post-extraction website/torrent
+  skip path (including "archive kept in place") and dry-run behavior.
+
 ### Changed
 - **Info tooltips are now brief one-line tips** (was: multi-sentence
   paragraphs) with a short accessible name ("More info: <name>"). Tooltips
@@ -104,9 +113,9 @@ to `main`.
   case.
 - **`remote_flags` with `--archive-*` flags** are stripped (with a warning)
   for the rclone binary — they would make every rclone command fail — and
-  are kept for rclonex. RcloneX's window size is now validated at flag
-  build time: an invalid value logs a warning instead of silently dropping
-  the override.
+  are kept for rclonex. The archive buffer setting (`rclonex_archive_buffer_size`)
+  is validated at flag build time: an invalid value logs a warning instead
+  of silently dropping the override.
 - **`scan_cache_key` fingerprint now includes `rclonex`** — toggling RcloneX
   no longer silently reuses a cached listing that was built without it.
 - **Extractor selection consistent with queueing**: non-first multivolume
@@ -130,6 +139,26 @@ to `main`.
 - **The "Clear History" maintenance button is gone** — it ran the same
   wipe as "Clear everything" (same code path, different wording). Use
   **Clear everything**.
+
+- **Temp directories now live at `{tmp_dir}/run_<runId>/<archiveId>/`**
+  (was `{tmp_dir}/<runId>/<archiveId>/`); the layout is built only through
+  `tmpdir.ts` (`TMP_RUN_PREFIX`/`TMP_RUN_DIR_RE`) — no hardcoded layout
+  strings elsewhere — and the boot/run sweep purges only `run_<digits>`
+  directories, leaving anything else in `tmp_dir` untouched. `tmp_dir`
+  default is `.Rclone-Extractor-tmp` (was `.rclone-extractor-tmp`).
+- **`trash_subdir` default is `.Trash`** (was `trash`).
+- **The RcloneX sliding-window setting was renamed to
+  `rclonex_archive_buffer_size`** (was `rclonex_window_size` +
+  `rclonex_window_size_enabled`) and is now asked in MB/GB like the
+  smallest/largest archive limits. `0` keeps rclonex's own default;
+  existing installs are migrated automatically (a previously enabled byte
+  value is kept, otherwise the override is off). The override checkbox is
+  gone.
+- **Every option/action description is now an info tooltip** (hover,
+  keyboard focus, or tap) instead of permanently visible text. Tooltips are
+  production-ready: real `role="tooltip"` spans with `aria-describedby`
+  and `aria-expanded`, they flip above the control when there is no room
+  below, and they close on Escape, tap-outside and scroll.
 
 ### Removed
 - **`--archive-continue-on-error` (no such flag in rclonex)** — enabling
@@ -172,6 +201,11 @@ to `main`.
   row the new run had just created; it now excludes the caller's own row.
   Boot and shutdown recovery are unchanged.
 
+- **`rmdir` is not used for non-empty app temp dirs anymore.** The
+  per-archive and run-level temp cleanup now removes non-empty directories
+  with `rclone purge` (the directories are app-owned scratch space; the
+  shared temp root is still removed only when empty).
+
 ### Added
 - **RcloneX integration** (off by default): when **Enable RcloneX** is set on
   the Configuration page, archives whose formats upstream rclone cannot handle
@@ -189,8 +223,9 @@ to `main`.
   always skip inspection (not listable). ZIP/TAR always inspect as before.
 - **RcloneX flags** on the Configuration page (all unchecked by default):
   `--archive-password` (encrypted at rest; write-only — blank field keeps
-  the stored value, Clear removes it) and `--archive-window-size` (`0`
-  disables caching; default keeps rclonex's own 16 MiB).
+  the stored value, Clear removes it) and `--archive-window-size` (via the
+  **Archive buffer** setting, `rclonex_archive_buffer_size`; `0` keeps rclonex's
+  own default).
 - **Skip controls** on the Progress page: **Skip listing** (stop the scan and
   go straight to the queue), **Skip inspection** (treat the current archive's
   inspection as passed), and **Skip archive** (stop the current archive,
