@@ -205,6 +205,12 @@ to `main`.
   per-archive and run-level temp cleanup now removes non-empty directories
   with `rclone purge` (the directories are app-owned scratch space; the
   shared temp root is still removed only when empty).
+- **`Skip listing` is now honored when requested during the listing stage's
+  start-up** (temp purge, cached-scan reuse), not only while the listing
+  binary is in flight — the engine already short-circuited the listing
+  entirely in that window, but the request was refused. The UI only showed
+  the button mid-binary, so this is an API-guard fix (and fixes a flaky
+  `skipflow` failure on slow CI runners).
 
 ### Added
 - **RcloneX integration** (off by default): when **Enable RcloneX** is set on

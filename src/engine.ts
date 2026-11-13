@@ -100,13 +100,12 @@ export function forceStopEngine(): void {
  * silently dropping the click.
  */
 export function requestSkipListing(): boolean {
-  // Only while the listing binary is actually in flight — never during the
-  // temp purge or a cached-scan reuse, which have nothing to skip.
-  if (
-    !engineState.running ||
-    engineState.stage !== "listing" ||
-    engineState.activity !== "Listing archives"
-  ) {
+  // Allowed for the whole listing stage. If the request lands before the
+  // listing binary starts (e.g. during the temp purge), the listing never
+  // runs and the engine proceeds straight to the stored queue. The button
+  // on the Progress page only appears while the binary is in flight, so
+  // this relaxes the API guard — the UI behavior is unchanged.
+  if (!engineState.running || engineState.stage !== "listing") {
     return false;
   }
   engineState.skipListing = true;
