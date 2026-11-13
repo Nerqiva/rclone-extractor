@@ -2,9 +2,11 @@ import { Hono } from "hono";
 import { engineState } from "../engine";
 import { store, getSetting } from "../db";
 import { esc, toastTriggerHeaders, fmtDisplayTime } from "../ui";
+import { formatBytes, formatRate, formatDuration } from "../format";
+import { resolveOutcome } from "../runs";
 import type { ExtractStats } from "../rclone";
 import { pendingRcloneConfNotice } from "../rclone";
-import { controlsFragment } from "./actions";
+import { controlsFragment } from "../views";
 
 export const dashboard = new Hono();
 
@@ -42,7 +44,6 @@ const STAGE_LABEL: Record<string, string> = {
   finished: "Completed",
   interrupted: "Interrupted",
   killed: "Killed",
-  cancelled: "Cancelled",
   error: "Error",
 };
 
@@ -53,40 +54,10 @@ function stageLabel(stage: string): string {
 function stateClass(stage: string, running: boolean): string {
   if (stage === "error") return "is-error";
   if (stage === "killed") return "is-killed";
-  if (stage === "cancelled") return "is-cancelled";
   if (stage === "interrupted") return "is-interrupted";
   if (running) return "is-running";
   if (stage === "finished") return "is-done";
   return "is-idle";
-}
-
-function duration(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return "—";
-  const total = Math.floor(ms / 1000);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (h > 0) {
-    return `${h}h ${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`;
-  }
-  return `${m}m ${String(s).padStart(2, "0")}s`;
-}
-
-function fmtBytes(n: number): string {
-  if (!Number.isFinite(n) || n < 0) return "—";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${i === 0 ? Math.round(v) : v.toFixed(v >= 10 ? 1 : 2)} ${units[i]}`;
-}
-
-function fmtRate(bytesPerSec: number | null): string {
-  if (bytesPerSec == null || !Number.isFinite(bytesPerSec)) return "—";
-  return `${fmtBytes(bytesPerSec)}/s`;
 }
 
 function rateLabel(processed: number, elapsedMs: number): string {
@@ -99,7 +70,7 @@ function etaLabel(processed: number, total: number, elapsedMs: number): string {
   if (remaining === 0) return "—";
   if (processed <= 0 || elapsedMs <= 0) return "—";
   const perItem = elapsedMs / processed;
-  return duration(perItem * remaining);
+  return formatDuration(perItem * remaining);
 }
 
 async function snapshot(): Promise<Snapshot> {
@@ -124,20 +95,20 @@ async function snapshot(): Promise<Snapshot> {
       commandStats: engineState.commandStats,
       activity: engineState.activity,
       interruptReason:
-        engineState.stage === "interrupted" || engineState.stage === "cancelled"
-          ? engineState.stopReason
+        engineState.stage === "interrupted"
+          ? engineState.interruptReason
           : engineState.lastError
             ? String(engineState.lastError)
             : "",
       outcome:
-        engineState.stage === "interrupted" || engineState.stage === "cancelled"
+        engineState.stage === "interrupted"
           ? "interrupted"
           : engineState.stage === "error"
             ? "error"
             : engineState.stage === "finished"
               ? "finished"
               : "",
-      errorKind: engineState.errorCode || "",
+      errorKind: engineState.errorKind || "",
     };
   }
 
@@ -181,16 +152,7 @@ async function snapshot(): Promise<Snapshot> {
     };
   }
 
-  // Prefer the stored outcome; fall back to the legacy interrupted flag for
-  // rows written before it existed.
-  const outcome =
-    row.outcome && row.outcome !== ""
-      ? row.outcome
-      : Number(row.interrupted ?? 0) === 1
-        ? "killed"
-        : row.finished_at
-          ? "finished"
-          : "";
+  const outcome = resolveOutcome(row);
   return {
     running: false,
     runId: Number(row.id),
@@ -261,7 +223,7 @@ export async function progressPanel(): Promise<string> {
   const end = s.finishedAt ? Date.parse(s.finishedAt) : Date.now();
   const elapsedMs =
     Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : 0;
-  const elapsed = duration(elapsedMs);
+  const elapsed = formatDuration(elapsedMs);
   const cls = stateClass(s.stage, s.running);
   // While a command is in flight the badge names the command, not the
   // coarse stage ("Extracting" / "Moving to trash" / ...).
@@ -311,7 +273,7 @@ export async function progressPanel(): Promise<string> {
     <div class="extract-mini">
       <div class="extract-mini-head">
         <span class="extract-mini-label">${esc(s.activity)}</span>
-        <span class="extract-mini-value">${esc(fmtBytes(st.bytesDone))} / ${esc(fmtBytes(st.bytesTotal))} · ${esc(pctText)} · ${esc(fmtRate(st.speedBytesPerSec))} · ETA ${esc(eta)}</span>
+        <span class="extract-mini-value">${esc(formatBytes(st.bytesDone))} / ${esc(formatBytes(st.bytesTotal))} · ${esc(pctText)} · ${esc(formatRate(st.speedBytesPerSec))} · ETA ${esc(eta)}</span>
       </div>
       <div class="minibar" aria-hidden="true"><span style="width:${width.toFixed(1)}%"></span></div>
     </div>`;

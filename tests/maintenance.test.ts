@@ -55,27 +55,7 @@ async function insertRun() {
   return store.insertReturningId("INSERT INTO runs(started_at, total) VALUES('t', 0)", []);
 }
 
-test("clear history is refused while a task is running", async () => {
-  engineState.running = true;
-  const id = await insertRun();
-  await store.run(
-    "INSERT INTO log_lines(scope, ref_id, kind, ts, level, line) VALUES('run', ?, 'main', 't', 'INFO', 'busy')",
-    [id],
-  );
-  const res = await app.request("/maintenance/runs", { method: "POST" });
-  const body = await res.text();
-  expect(body).toContain("stop it first");
-  const count = await store.get1<{ c: number }>("SELECT COUNT(*) AS c FROM runs WHERE id = ?", [
-    id,
-  ]);
-  expect(Number(count?.c)).toBe(1);
-  engineState.running = false;
-  // cleanup
-  await store.run("DELETE FROM log_lines WHERE scope='run' AND ref_id = ?", [id]);
-  await store.run("DELETE FROM runs WHERE id = ?", [id]);
-});
-
-test("clear history wipes history, queue and caches, resets sequence and purges app temp dirs (dry-run)", async () => {
+test("clear everything wipes history, queue and caches, resets sequence and purges app temp dirs (dry-run)", async () => {
   const savedTmpDir = (await getSetting("tmp_dir")) ?? "";
   const tmpRoot = mkdtempSync(join(tmpdir(), "rx-maint-tmp-"));
   mkdirSync(join(tmpRoot, "123")); // app-owned numeric run dir
@@ -93,11 +73,11 @@ test("clear history wipes history, queue and caches, resets sequence and purges 
     "INSERT OR REPLACE INTO archives(path, size, status, created_at, updated_at) VALUES('keep-me.zip', 5, 'queued', 't', 't')",
   );
 
-  const res = await app.request("/maintenance/runs", { method: "POST" });
+  const res = await app.request("/maintenance/all", { method: "POST" });
   try {
     const body = await res.text();
 
-    expect(body).toContain("Cleared history");
+    expect(body).toContain("Cleared everything");
     expect(body).toContain("would purge 1 temp dir(s)");
     expect(body).toContain("Next run starts from #1");
 

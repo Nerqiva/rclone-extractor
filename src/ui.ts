@@ -17,7 +17,7 @@ function sanitizeToast(message: string): string {
 export function toastTriggerHeaders(
   message: string,
   kind: "ok" | "err" = "ok",
-): HeadersInit {
+): Record<string, string> {
   return {
     "HX-Trigger": JSON.stringify({ appToast: { message: sanitizeToast(message), kind } }),
   };
@@ -302,6 +302,7 @@ export function layout(
   body: string,
   active = "",
   csrf: string | null = null,
+  subtitle = "",
 ): string {
   const railHtml = active !== "" ? `<button class="rail-toggle" id="rail-toggle" aria-label="Toggle navigation" aria-controls="rail" aria-expanded="false"><span></span><span></span><span></span></button>${rail(active, csrf)}<div class="rail-overlay" id="rail-overlay"></div>` : "";
   const script = active !== "" ? `<script>
@@ -341,6 +342,7 @@ ${csrf ? `<meta name="csrf-token" content="${esc(csrf)}">` : ""}
 ${railHtml}
 <main class="content">
 <h1 class="page-title">${esc(title)}</h1>
+${subtitle ? `<p class="page-subtitle">${esc(subtitle)}</p>` : ""}
 ${body}
 </main>
 <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>

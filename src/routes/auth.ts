@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { APP_PASSWORD, COOKIE_SECURE, TRUST_PROXY } from "../config";
 import { store } from "../db";
@@ -94,11 +94,11 @@ export async function revokeSession(value: string | undefined): Promise<void> {
 // that is enough to blunt online password guessing without new deps.
 const failedAttempts = new Map<string, { count: number; windowStart: number }>();
 
-function clientIp(c: {
-  req: { header: (name: string) => string | undefined };
-  env?: { ip?: string };
-}): string {
-  if (!TRUST_PROXY) return c.env?.ip || "unknown";
+function clientIp(c: Context): string {
+  if (!TRUST_PROXY) {
+    const env = c.env as { ip?: string } | undefined;
+    return env?.ip || "unknown";
+  }
   const fwd = c.req.header("x-forwarded-for");
   if (fwd) return fwd.split(",")[0].trim();
   return c.req.header("x-real-ip") ?? "unknown";

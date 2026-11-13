@@ -1,4 +1,4 @@
-import { Logger, appendRawLines } from "./log";
+import { Logger, insertLogLines } from "./log";
 import { store, getSetting, setSetting } from "./db";
 import { Rclone, killActiveProcs, type ExtractStats } from "./rclone";
 import {
@@ -47,11 +47,11 @@ export const engineState = {
   activity: "",
   // Short app-error code for outcome='error' (no_scan_root, listing_failed,
   // ...). Shown on the progress panel after an app-caused failure.
-  errorCode: "",
+  errorKind: "",
   // Why the user stopped the run ("stopped by user (soft|hard stop)").
   // Persisted at finalization and kept in memory so the panel can show the
   // exact reason until the page reloads (the DB has it permanently).
-  stopReason: "",
+  interruptReason: "",
   // UI state for the stop button: stopRequested = soft stop asked (current
   // archive finishes first), forceStop = hard stop asked (rclone killed
   // immediately). Set/reset by stopEngine/forceStopEngine and runEngine.
@@ -69,23 +69,24 @@ export const engineState = {
   archiveInFlight: false,
 };
 
-// Soft stop: finish the current archive, then stop.
-export function stopEngine(): void {
-  if (!engineState.running) return;
+function requestCancel(): void {
   engineState.stopRequested = true;
   void setSetting("cancel", "1").catch((e) =>
     console.warn("could not persist cancel flag:", String(e)),
   );
 }
 
+// Soft stop: finish the current archive, then stop.
+export function stopEngine(): void {
+  if (!engineState.running) return;
+  requestCancel();
+}
+
 /** Hard stop: kill the in-flight rclone process immediately. */
 export function forceStopEngine(): void {
   if (!engineState.running) return;
-  engineState.stopRequested = true;
+  requestCancel();
   engineState.forceStop = true;
-  void setSetting("cancel", "1").catch((e) =>
-    console.warn("could not persist cancel flag:", String(e)),
-  );
   killActiveProcs();
 }
 
@@ -223,6 +224,7 @@ async function cancelRequestedCached(): Promise<boolean> {
 export async function recoverStale(
   recoverArchives = true,
   reason = "previous process exited mid-run (crash or kill)",
+  excludeRunId = -1,
 ): Promise<number> {
   const before = await store.query<{ c: number }>(
     "SELECT COUNT(*) AS c FROM archives WHERE status='extracting'",
@@ -245,7 +247,7 @@ export async function recoverStale(
         [now()],
       );
       for (const row of rows) {
-        await appendRawLines(
+        await insertLogLines(
           { scope: "archive", refId: Number(row.id), kind: "extract" },
           ["killed: app stopped before extraction finished"],
         ).catch(() => {});
@@ -256,20 +258,22 @@ export async function recoverStale(
   // the logs page and progress panel do not show it as indefinitely running,
   // and leave a log line behind so the interruption and its cause are visible
   // in both the main and the errors log (nothing else survives a crash).
+  // excludeRunId keeps the caller's own freshly created row out of this.
   const stale = await store.query<{ id: number | string }>(
-    "SELECT id FROM runs WHERE finished_at IS NULL",
+    "SELECT id FROM runs WHERE finished_at IS NULL AND id != ?",
+    [excludeRunId],
   );
   await store.run(
-    "UPDATE runs SET finished_at=?, outcome='killed', interrupted=1, interrupted_reason=?, error_kind='killed' WHERE finished_at IS NULL",
-    [now(), reason],
+    "UPDATE runs SET finished_at=?, outcome='killed', interrupted=1, interrupted_reason=?, error_kind='killed' WHERE finished_at IS NULL AND id != ?",
+    [now(), reason, excludeRunId],
   );
   for (const row of stale) {
     const refId = Number(row.id);
-    await appendRawLines(
+    await insertLogLines(
       { scope: "run", refId, kind: "main" },
       [`[killed] ${reason}`],
     ).catch(() => {});
-    await appendRawLines(
+    await insertLogLines(
       { scope: "run", refId, kind: "errors" },
       [`[killed] ${reason}`],
     ).catch(() => {});
@@ -296,8 +300,8 @@ export async function runEngine(
   engineState.activity = "";
   engineState.stopRequested = false;
   engineState.forceStop = false;
-  engineState.errorCode = "";
-  engineState.stopReason = "";
+  engineState.errorKind = "";
+  engineState.interruptReason = "";
   engineState.skipListing = false;
   engineState.skipInspection = false;
   engineState.skipArchive = false;
@@ -316,7 +320,7 @@ export async function runEngine(
   let runRowId = 0;
   let logger: Logger | null = null;
   let errorLog: Logger | null = null;
-  let errorCode = "engine_error";
+  let errorKind = "engine_error";
 
   const fail = (msg: string, detail?: string) => {
     logger?.error(msg, detail);
@@ -331,8 +335,8 @@ export async function runEngine(
   // outcome='error' and a short error code, and leave log lines behind, so
   // they never masquerade as a finish or a host kill.
   const abortWithError = async (code: string, msg: string) => {
-    errorCode = code;
-    engineState.errorCode = code;
+    errorKind = code;
+    engineState.errorKind = code;
     engineState.stage = "error";
     engineState.lastError = msg;
     engineState.finishedAt = now();
@@ -399,7 +403,7 @@ export async function runEngine(
 
   try {
     const resumeEnabled = (await getSetting("resume", "1")) === "1";
-    const recovered = await recoverStale(resumeEnabled);
+    const recovered = await recoverStale(resumeEnabled, undefined, runRowId);
     if (recovered > 0) {
       console.log(
         resumeEnabled
@@ -426,7 +430,8 @@ export async function runEngine(
     // Absolute when tmp_dir is a remote/local path; inside root otherwise.
     const tmpRoot = tmpRootPath(scanRoot, tmpSpec);
     const tmpTop = tmpTopSegment(tmpSpec);
-    const dryRunNow = (await getSetting("dry_run", "0")) === "1";
+    // tmpSettings is non-null here: an invalid tmp_dir already aborted above.
+    const dryRunNow = tmpSettings?.dryRun ?? false;
     setActivity("Purging stale temp");
     try {
       const res = await rc.purgeStaleTemp(tmpRoot, dryRunNow);
@@ -631,7 +636,7 @@ export async function runEngine(
         // A force-stopped listing is an intentional stop, not a failure.
         if (!cancelRequested) {
           const msg = "listing stream failed";
-          errorCode = "listing_failed";
+          errorKind = "listing_failed";
           fail(
             msg,
             `$ ${listed.command}\n${listed.streamError}\n${listed.stderr}`.trim(),
@@ -652,7 +657,7 @@ export async function runEngine(
           logger.info("listing stopped by user");
         } else {
           const msg = `listing failed (exit ${listed.code})`;
-          errorCode = "listing_failed";
+          errorKind = "listing_failed";
           fail(msg, `$ ${listed.command}\n${listed.stderr}`.trim());
           throw new Error(msg);
         }
@@ -744,7 +749,7 @@ export async function runEngine(
         );
         // No binary output exists; store the webapp diagnostic so the
         // error row's Copy/Download shows something instead of a 404.
-        await appendRawLines(
+        await insertLogLines(
           { scope: "archive", refId: row.id, kind: "extract" },
           [`unsafe archive path rejected by app: ${JSON.stringify(rel)}`],
         ).catch(() => {});
@@ -845,7 +850,7 @@ export async function runEngine(
           // Webapp-made diagnosis (no binary output is produced for skip
           // classifications); store it so Copy/Download on the error row is
           // not an empty 404.
-          await appendRawLines(ref, [`skipped (${skipReason}): ${detail}`]).catch(
+          await insertLogLines(ref, [`skipped (${skipReason}): ${detail}`]).catch(
             () => {},
           );
           warn(`skipped (${skipReason}): ${rel} [${detail}]`);
@@ -873,7 +878,7 @@ export async function runEngine(
               "UPDATE archives SET status='skipped', error_kind='password', updated_at=? WHERE id=?",
               [now(), row.id],
             );
-            await appendRawLines(ref, [
+            await insertLogLines(ref, [
               `skipped (password): extraction failed (exit ${ex.code})`,
             ]).catch(() => {});
             warn(`skipped (password): ${rel} [$ ${ex.command}]`);
@@ -976,7 +981,7 @@ export async function runEngine(
         // No binary output exists when the webapp itself throws (spawn
         // failure, DB error, ...); store the diagnostic so the error row's
         // Copy/Download is not empty.
-        await appendRawLines(ref, [`archive error: ${String(e)}`]).catch(() => {});
+        await insertLogLines(ref, [`archive error: ${String(e)}`]).catch(() => {});
         fail(`archive error: ${rel}`, String(e));
         }
       } finally {
@@ -1077,20 +1082,20 @@ export async function runEngine(
           ? "interrupted_soft"
           : "interrupted_cancel"
       : null;
-    engineState.stopReason = stopped
+    engineState.interruptReason = stopped
       ? engineState.forceStop
         ? "stopped by user (hard stop)"
         : engineState.stopRequested
           ? "stopped by user (soft stop)"
           : "cancel requested via settings"
       : "";
-    engineState.errorCode = stopCode ?? "";
+    engineState.errorKind = stopCode ?? "";
     if (stopCode) {
-      const line = `[${stopCode}] ${engineState.stopReason}`;
-      await appendRawLines({ scope: "run", refId: runRowId, kind: "main" }, [
+      const line = `[${stopCode}] ${engineState.interruptReason}`;
+      await insertLogLines({ scope: "run", refId: runRowId, kind: "main" }, [
         line,
       ]).catch(() => {});
-      await appendRawLines({ scope: "run", refId: runRowId, kind: "errors" }, [
+      await insertLogLines({ scope: "run", refId: runRowId, kind: "errors" }, [
         line,
       ]).catch(() => {});
     }
@@ -1100,7 +1105,7 @@ export async function runEngine(
         engineState.finishedAt,
         stopped ? "interrupted" : "finished",
         stopped ? 1 : 0,
-        stopped ? engineState.stopReason : null,
+        stopped ? engineState.interruptReason : null,
         stopCode,
         runRowId,
       ],
@@ -1109,7 +1114,7 @@ export async function runEngine(
       `run ${runRowId} ${engineState.stage}: done=${engineState.done} failed=${engineState.failed} skipped=${engineState.skipped}`,
     );
   } catch (e) {
-    await abortWithError(errorCode, String(e));
+    await abortWithError(errorKind, String(e));
   } finally {
     // Let queued log writes land before the run state resets and (on
     // shutdown) the database closes.

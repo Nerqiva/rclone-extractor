@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { controlsFragment } from "../src/routes/actions";
+import { controlsFragment } from "../src/views";
 import { engineState } from "../src/engine";
 
 beforeEach(() => {

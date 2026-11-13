@@ -245,7 +245,7 @@ body.rail-open .rail-toggle span:nth-child(3) {
 .content {
   flex: 1;
   width: 100%;
-  max-width: 1400px;
+  max-width: 980px;
   padding: clamp(16px, 3vw, 32px);
   min-width: 0;
 }
@@ -254,6 +254,11 @@ body.rail-open .rail-toggle span:nth-child(3) {
   font-size: 22px;
   font-weight: 600;
   margin: 0 0 20px;
+}
+
+.page-subtitle {
+  color: var(--muted);
+  margin: -14px 0 18px;
 }
 
 .section-title {
@@ -474,9 +479,6 @@ textarea {
 .progress-panel.is-error {
   border-color: rgba(248, 113, 113, 0.45);
 }
-.progress-panel.is-cancelled {
-  border-color: rgba(250, 204, 21, 0.4);
-}
 .progress-panel.is-interrupted {
   border-color: rgba(250, 204, 21, 0.4);
 }
@@ -529,12 +531,6 @@ textarea {
 }
 .status-badge.is-error .dot {
   background: var(--err);
-}
-.status-badge.is-cancelled {
-  color: var(--warn);
-}
-.status-badge.is-cancelled .dot {
-  background: var(--warn);
 }
 .status-badge.is-interrupted {
   color: var(--warn);
@@ -1086,6 +1082,53 @@ textarea {
 .setting.editing .setting-head [data-edit] {
   display: none;
 }
+.setting-desc {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.setting-key {
+  color: var(--muted);
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.setting-toggle {
+  display: block;
+  cursor: pointer;
+  border-top: 1px solid var(--border);
+  padding: 10px 0;
+}
+.setting-toggle:first-of-type {
+  border-top: 0;
+}
+.setting-toggle input[type="checkbox"] {
+  margin-right: 8px;
+}
+.setting-toggle .setting-desc {
+  display: block;
+  margin: 4px 0 0 22px;
+}
+.setting-compound .setting-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.setting-compound .setting-desc {
+  display: block;
+  margin: 4px 0 8px 22px;
+}
+.setting-compound .field-inline {
+  margin-left: 22px;
+}
+.config-section {
+  margin-bottom: 16px;
+}
+.config-section:last-of-type {
+  margin-bottom: 0;
+}
 
 .field-inline {
   display: flex;
@@ -1464,7 +1507,7 @@ button[disabled] {
   font-size: 13px;
 }
 
-/* ---- password-protected archives tab (logs) ---- */
+/* ---- password-protected archives (errors page) ---- */
 .pw-intro {
   margin: 0 0 14px;
 }

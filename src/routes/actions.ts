@@ -1,5 +1,5 @@
-import { Hono } from "hono";
-import { store, setSetting, allSettings, getSetting } from "../db";
+import { Hono, type Context } from "hono";
+import { store, setSetting, getSetting } from "../db";
 import {
   engineState,
   runEngine,
@@ -9,15 +9,14 @@ import {
   requestSkipInspection,
   requestSkipArchive,
 } from "../engine";
-import { esc, toastTriggerHeaders, info } from "../ui";
-import { encryptionEnabled } from "../crypto";
-import { APP_PASSWORD, RCLONE_CONF } from "../config";
+import { esc, toastTriggerHeaders } from "../ui";
 import { normalizeRcloneConf } from "../rcloneconf";
 import { Rclone, pendingRcloneConfNotice } from "../rclone";
 import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "../tmpdir";
 import { loadTmpDirSettings } from "../tmpsweep";
 import { parseTrashSubdir, isSafeRel, normalizeRel } from "../archive";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
+import { controlsFragment, configForm } from "../views";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
@@ -35,75 +34,7 @@ function parseSizeInput(raw: string, unit: string): number | null {
   return bytes;
 }
 
-/** HX-Trigger response header: ask the client to show a toast. */
-function toastHeaders(message: string, kind: "ok" | "err" = "ok"): HeadersInit {
-  return toastTriggerHeaders(message, kind);
-}
-
 export const actions = new Hono();
-
-export function controlsFragment(): string {
-  // Idle state: Start form. Reuse-scan and Start are visually grouped.
-  const running = engineState.running;
-  if (!running) {
-    return `<div id="controls" class="controls-idle">
-    <form class="controls-start" hx-post="/run/start" hx-target="#controls" hx-swap="outerHTML">
-      <div class="check"><label class="check-inline"><input type="checkbox" name="reuse_scan" value="1"> Reuse previous scan results</label>${info(
-        "Reuse the cached scan; fresh scan if stale. Not remembered.",
-        "reuse_scan",
-      )}</div>
-      <div class="btn-row">
-        <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Start</button>
-      </div>
-    </form>
-  </div>`;
-  }
-  if (engineState.forceStop) {
-    return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
-    <span class="controls-note warn-line stop-note">Stopping immediately — the current archive was aborted…</span>
-    <button class="btn danger solid is-loading btn-stop" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
-  </div>`;
-  }
-  // The Stop button opens the shared stop modal (Soft stop / Hard stop).
-  const stage = engineState.stage;
-  const activity = engineState.activity;
-  const skips: string[] = [];
-  if (stage === "listing" && activity === "Listing archives") {
-    skips.push(
-      `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"listing"}' hx-target="#controls" hx-swap="outerHTML">Skip listing</button>${info(
-        "Stop the scan; continue with the stored queue. This run only.",
-        "Skip listing",
-      )}`,
-    );
-  }
-  if (activity === "Inspecting archive" && engineState.archiveInFlight) {
-    skips.push(
-      `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"inspection"}' hx-target="#controls" hx-swap="outerHTML">Skip inspection</button>${info(
-        "Treat inspection as passed for this archive. This run only.",
-        "Skip inspection",
-      )}`,
-    );
-  }
-  if (stage === "extracting" && engineState.archiveInFlight) {
-    skips.push(
-      `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>${info(
-        "Leave this archive queued; it retries next run. This run only.",
-        "Skip archive",
-      )}`,
-    );
-  }
-  const skipCluster = skips.length
-    ? `<span class="skip-cluster" aria-label="Skip controls">\n    ${skips.join("\n    ")}\n    </span>`
-    : "";
-  const note = engineState.stopRequested
-    ? `<span class="controls-note warn-line stop-note">Stop requested — finishing the current archive…</span>`
-    : `<span class="controls-note muted">run in progress…</span>`;
-  return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
-    ${note}
-    ${skipCluster}
-    <button class="btn danger btn-stop" data-modal-open="stop-modal">Stop</button>
-  </div>`;
-}
 
 actions.post("/run/start", async (c) => {
   if (!engineState.running) {
@@ -124,10 +55,10 @@ actions.post("/run/start", async (c) => {
     const confNotice = pendingRcloneConfNotice();
     // runEngine never rejects (it handles errors internally); log defensively.
     void runEngine({ reuseScan }).catch((e) => console.error("engine crashed:", String(e)));
-    if (confNotice) return c.html(controlsFragment(), 200, toastHeaders(confNotice, "err"));
-    return c.html(controlsFragment(), 200, toastHeaders("Task started."));
+    if (confNotice) return c.html(controlsFragment(), 200, toastTriggerHeaders(confNotice, "err"));
+    return c.html(controlsFragment(), 200, toastTriggerHeaders("Task started."));
   }
-  return c.html(controlsFragment(), 200, toastHeaders("A task is already running.", "err"));
+  return c.html(controlsFragment(), 200, toastTriggerHeaders("A task is already running.", "err"));
 });
 
 actions.post("/run/stop", async (c) => {
@@ -141,14 +72,14 @@ actions.post("/run/stop", async (c) => {
     return c.html(
       controlsFragment(),
       200,
-      toastHeaders("Stopping immediately — current archive aborted."),
+      toastTriggerHeaders("Stopping immediately — current archive aborted."),
     );
   }
   stopEngine();
   return c.html(
     controlsFragment(),
     200,
-    toastHeaders("Stop requested — the current archive will finish first."),
+    toastTriggerHeaders("Stop requested — the current archive will finish first."),
   );
 });
 
@@ -163,7 +94,7 @@ actions.post("/run/skip", async (c) => {
     return c.html(
       controlsFragment(),
       200,
-      toastHeaders("Nothing to skip right now.", "err"),
+      toastTriggerHeaders("Nothing to skip right now.", "err"),
     );
   }
   const msg =
@@ -172,7 +103,7 @@ actions.post("/run/skip", async (c) => {
       : target === "inspection"
         ? "Inspection skipped — extracting this archive."
         : "Archive skipped — it stays queued for the next run.";
-  return c.html(controlsFragment(), 200, toastHeaders(msg));
+  return c.html(controlsFragment(), 200, toastTriggerHeaders(msg));
 });
 
 const SETTING_KEYS = [
@@ -204,7 +135,7 @@ actions.post("/config", async (c) => {
     return c.html(
       await configForm(`<p class="note err">rclone.conf is too large</p>`),
       200,
-      toastHeaders("rclone.conf is too large", "err"),
+      toastTriggerHeaders("rclone.conf is too large", "err"),
     );
   }
   const source =
@@ -228,7 +159,7 @@ actions.post("/config", async (c) => {
           `<p class="note err">trash_subdir is not a usable relative path (no absolute paths, &quot;..&quot; or empty/special segments).</p>`,
         ),
         200,
-        toastHeaders("trash_subdir is not usable", "err"),
+        toastTriggerHeaders("trash_subdir is not usable", "err"),
       );
     }
     trashStored = parsedTrash;
@@ -246,7 +177,7 @@ actions.post("/config", async (c) => {
           `<p class="note err">tmp_dir is not a usable location (check for &quot;..&quot;, empty segments, or that it does not overlap the trash dir).</p>`,
         ),
         200,
-        toastHeaders("tmp_dir is not usable", "err"),
+        toastTriggerHeaders("tmp_dir is not usable", "err"),
       );
     }
     storedTmpDir = spec.value;
@@ -270,7 +201,7 @@ actions.post("/config", async (c) => {
             `<p class="note err">min_archive_size must be a non-negative number (0 disables the limit).</p>`,
           ),
           200,
-          toastHeaders("min_archive_size is invalid", "err"),
+          toastTriggerHeaders("min_archive_size is invalid", "err"),
         );
       }
       minArchiveSizeStored = String(minBytes);
@@ -295,7 +226,7 @@ actions.post("/config", async (c) => {
             `<p class="note err">max_archive_size must be a non-negative number (0 disables the limit).</p>`,
           ),
           200,
-          toastHeaders("max_archive_size is invalid", "err"),
+          toastTriggerHeaders("max_archive_size is invalid", "err"),
         );
       }
       maxArchiveSizeStored = String(maxBytes);
@@ -313,7 +244,7 @@ actions.post("/config", async (c) => {
           `<p class="note err">rclonex_archive_password is too long (max 4096 characters).</p>`,
         ),
         200,
-        toastHeaders("rclonex_archive_password is invalid", "err"),
+        toastTriggerHeaders("rclonex_archive_password is invalid", "err"),
       );
     }
     if (pw !== "") rclonexPasswordStored = pw; // blank: keep the stored one
@@ -331,7 +262,7 @@ actions.post("/config", async (c) => {
             `<p class="note err">rclonex_window_size must be a non-negative integer number of bytes (0 disables caching).</p>`,
           ),
           200,
-          toastHeaders("rclonex_window_size is invalid", "err"),
+          toastTriggerHeaders("rclonex_window_size is invalid", "err"),
         );
       }
       rclonexWindowStored = String(n);
@@ -341,7 +272,7 @@ actions.post("/config", async (c) => {
           `<p class="note err">Enter a window size in bytes (0 disables caching), or uncheck the override.</p>`,
         ),
         200,
-        toastHeaders("rclonex_window_size is invalid", "err"),
+        toastTriggerHeaders("rclonex_window_size is invalid", "err"),
       );
     }
   }
@@ -351,7 +282,7 @@ actions.post("/config", async (c) => {
       return c.html(
         await configForm(`<p class="note err">rclone_conf: ${esc(parsed.error)}</p>`),
         200,
-        toastHeaders(`rclone_conf: ${parsed.error}`, "err"),
+        toastTriggerHeaders(`rclone_conf: ${parsed.error}`, "err"),
       );
     }
     normalizedConf = parsed.base64;
@@ -413,13 +344,13 @@ actions.post("/config", async (c) => {
     return c.html(
       await configForm(`<p class="note warn-line">${esc(confNotice)}</p>`),
       200,
-      toastHeaders(confNotice, "err"),
+      toastTriggerHeaders(confNotice, "err"),
     );
   }
   return c.html(
     await configForm(`<p class="note">Saved.</p>`),
     200,
-    toastHeaders("Settings saved."),
+    toastTriggerHeaders("Settings saved."),
   );
 });
 
@@ -438,7 +369,7 @@ actions.post("/config/rclone-clear", async (c) => {
   return c.html(
     await configForm(`<p class="note">rclone.conf cleared.</p>`),
     200,
-    toastHeaders("Stored rclone.conf cleared."),
+    toastTriggerHeaders("Stored rclone.conf cleared."),
   );
 });
 
@@ -455,7 +386,7 @@ actions.post("/config/rclonex-clear", async (c) => {
   return c.html(
     await configForm(`<p class="note">Archive password cleared.</p>`),
     200,
-    toastHeaders("Archive password cleared."),
+    toastTriggerHeaders("Archive password cleared."),
   );
 });
 
@@ -498,18 +429,22 @@ function tempPurgeNote(p: Awaited<ReturnType<typeof purgeAppTempDirs>>): string 
 }
 
 const RUNNING_GUARD = `<p class="note err">Task is running — stop it first.</p>`;
-const RUNNING_GUARD_HEADERS = toastHeaders("Stop the task first.", "err");
+const RUNNING_GUARD_HEADERS = toastTriggerHeaders("Stop the task first.", "err");
 
-async function passwordListResponse(c: { html: (body: string, status?: number, headers?: HeadersInit) => Response }, toast: string, toastKind: "ok" | "err" = "ok"): Promise<Response> {
+async function passwordListResponse(c: Context, toast: string, toastKind: "ok" | "err" = "ok"): Promise<Response> {
   const rows = await readPasswordRows();
-  return c.html(renderPasswordList(rows), 200, toastHeaders(toast, toastKind));
+  return c.html(renderPasswordList(rows), 200, toastTriggerHeaders(toast, toastKind));
 }
 
-// Password tab actions (Logs page). A password-protected archive is moved
-// into the trash subdir (never deleted outright), and can be restored
+// Password-section actions (Errors page). A password-protected archive is
+// moved into the trash subdir (never deleted outright), and can be restored
 // afterwards: back into the queue, error_kind cleared, so the next run
 // retries it. Both moves refuse to overwrite anything already in place.
-actions.post("/archives/:id/delete", async (c) => {
+async function movePasswordArchive(
+  c: Context,
+  direction: "delete" | "restore",
+): Promise<Response> {
+  const del = direction === "delete";
   if (engineState.running) {
     return passwordListResponse(c, "Stop the task first.", "err");
   }
@@ -524,8 +459,8 @@ actions.post("/archives/:id/delete", async (c) => {
   if (!row || row.error_kind !== "password") {
     return passwordListResponse(c, "Not a password-protected archive.", "err");
   }
-  if (row.status === "deleted") {
-    return passwordListResponse(c, "Already in trash.");
+  if (del ? row.status === "deleted" : row.status !== "deleted") {
+    return passwordListResponse(c, del ? "Already in trash." : "Archive is not in trash.");
   }
   const rel = String(row.path);
   if (!isSafeRel(rel)) {
@@ -539,79 +474,48 @@ actions.post("/archives/:id/delete", async (c) => {
   const ref = { scope: "archive" as const, refId: id, kind: "extract" as const };
   const rc = await Rclone.fromSettings();
   const trashRel = normalizeRel(`${trash}/${rel}`);
-  if (await rc.existsPath(trashRel)) {
+  const srcRel = del ? rel : trashRel;
+  const destRel = del ? trashRel : rel;
+  if (await rc.existsPath(destRel)) {
     return passwordListResponse(
       c,
-      `The trash already contains ${trashRel} — remove it before deleting.`,
+      del
+        ? `The trash already contains ${destRel} — remove it before deleting.`
+        : `A file now exists at ${destRel} — remove it before restoring.`,
       "err",
     );
   }
-  const res = await rc.moveToRel(rel, trashRel, dryRun, ref);
+  const res = await rc.moveToRel(srcRel, destRel, dryRun, ref);
   if (res.code !== 0) {
     const detail = (res.tail || []).slice(-1)[0] ?? res.stderr.trim().split("\n").pop() ?? "unknown error";
-    return passwordListResponse(c, `Move to trash failed (exit ${res.code}): ${detail}`, "err");
-  }
-  if (dryRun) {
-    return passwordListResponse(c, "Dry run — archive was not moved.");
-  }
-  await store.run("UPDATE archives SET status='deleted', updated_at=? WHERE id=?", [
-    new Date().toISOString(),
-    id,
-  ]);
-  return passwordListResponse(c, "Moved to trash.");
-});
-
-actions.post("/archives/:id/restore", async (c) => {
-  if (engineState.running) {
-    return passwordListResponse(c, "Stop the task first.", "err");
-  }
-  const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id) || id <= 0) {
-    return passwordListResponse(c, "Not found.", "err");
-  }
-  const row = await store.get1<{ path: string; status: string; error_kind: string | null }>(
-    "SELECT path, status, error_kind FROM archives WHERE id = ?",
-    [id],
-  );
-  if (!row || row.error_kind !== "password") {
-    return passwordListResponse(c, "Not a password-protected archive.", "err");
-  }
-  if (row.status !== "deleted") {
-    return passwordListResponse(c, "Archive is not in trash.", "err");
-  }
-  const rel = String(row.path);
-  if (!isSafeRel(rel)) {
-    return passwordListResponse(c, "Stored path is unsafe; refusing to restore it.", "err");
-  }
-  const trash = parseTrashSubdir((await getSetting("trash_subdir", "trash")) ?? "trash");
-  if (!trash) {
-    return passwordListResponse(c, "trash_subdir is invalid.", "err");
-  }
-  const dryRun = (await getSetting("dry_run", "0")) === "1";
-  const ref = { scope: "archive" as const, refId: id, kind: "extract" as const };
-  const rc = await Rclone.fromSettings();
-  if (await rc.existsPath(rel)) {
     return passwordListResponse(
       c,
-      `A file now exists at ${rel} — remove it before restoring.`,
+      `${del ? "Move to trash" : "Restore"} failed (exit ${res.code}): ${detail}`,
       "err",
     );
   }
-  const trashRel = normalizeRel(`${trash}/${rel}`);
-  const res = await rc.moveToRel(trashRel, rel, dryRun, ref);
-  if (res.code !== 0) {
-    const detail = (res.tail || []).slice(-1)[0] ?? res.stderr.trim().split("\n").pop() ?? "unknown error";
-    return passwordListResponse(c, `Restore failed (exit ${res.code}): ${detail}`, "err");
-  }
   if (dryRun) {
-    return passwordListResponse(c, "Dry run — archive was not restored.");
+    return passwordListResponse(
+      c,
+      del ? "Dry run — archive was not moved." : "Dry run — archive was not restored.",
+    );
+  }
+  if (del) {
+    await store.run("UPDATE archives SET status='deleted', updated_at=? WHERE id=?", [
+      new Date().toISOString(),
+      id,
+    ]);
+    return passwordListResponse(c, "Moved to trash.");
   }
   await store.run(
     "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=?",
     [new Date().toISOString(), id],
   );
   return passwordListResponse(c, "Restored — queued for the next run.");
-});
+}
+
+actions.post("/archives/:id/delete", (c) => movePasswordArchive(c, "delete"));
+actions.post("/archives/:id/restore", (c) => movePasswordArchive(c, "restore"));
 
 // Clear queues: allowed even while a task is running. Deletes queued
 // archives (and their log rows); a running engine skips rows that are no
@@ -629,12 +533,12 @@ actions.post("/maintenance/queues", async (c) => {
     await store.run("DELETE FROM archives WHERE status='queued'");
   }
   const msg = ids.length > 0 ? `Cleared queue (${ids.length} archive(s)).` : "Queue is already empty.";
-  return c.html(`<p class="note">${esc(msg)}</p>`, 200, toastHeaders(msg));
+  return c.html(`<p class="note">${esc(msg)}</p>`, 200, toastTriggerHeaders(msg));
 });
 
-// Shared wipe behind /maintenance/runs and /maintenance/all: clears the
-// queue, run count and the archive cache, along with run/archive logs and
-// the run counter (dry-run aware temp purge kept). Returns the purge note.
+// Shared wipe behind "Clear everything": deletes logs, runs and archives,
+// resets the sequences, and purges stale temp dirs (dry-run aware).
+// Returns the purge note.
 async function wipeEverything(): Promise<string> {
   await store.run("DELETE FROM log_lines");
   await store.run("DELETE FROM runs");
@@ -649,21 +553,6 @@ async function wipeEverything(): Promise<string> {
   }
 }
 
-// Clear History: wipes the queue, run count and the archive cache, along
-// with run/archive logs and the run counter (dry-run aware temp purge
-// kept). Blocked while a task is running.
-actions.post("/maintenance/runs", async (c) => {
-  if (engineState.running) {
-    return c.html(RUNNING_GUARD, 200, RUNNING_GUARD_HEADERS);
-  }
-  const purgeNote = await wipeEverything();
-  return c.html(
-    `<p class="note">Cleared history, queue and caches.${esc(purgeNote)} Next run starts from #1.</p>`,
-    200,
-    toastHeaders("Cleared history; next run starts from #1."),
-  );
-});
-
 // Clear logs: wipes logs and errors only. Runs and archives are kept.
 actions.post("/maintenance/logs", async (c) => {
   if (engineState.running) {
@@ -674,7 +563,7 @@ actions.post("/maintenance/logs", async (c) => {
   return c.html(
     `<p class="note">Cleared logs and errors.</p>`,
     200,
-    toastHeaders("Cleared logs and errors."),
+    toastTriggerHeaders("Cleared logs and errors."),
   );
 });
 
@@ -690,7 +579,7 @@ actions.post("/maintenance/tmp-purge", async (c) => {
       return c.html(
         `<p class="note err">tmp_dir is invalid; nothing purged.</p>`,
         200,
-        toastHeaders(confNotice ?? "tmp_dir is invalid", "err"),
+        toastTriggerHeaders(confNotice ?? "tmp_dir is invalid", "err"),
       );
     }
     const none = p.purged === 0 && p.failed === 0;
@@ -705,13 +594,13 @@ actions.post("/maintenance/tmp-purge", async (c) => {
     return c.html(
       `<p class="note${p.failed ? " err" : ""}">${esc(msg)}.${esc(detail)}${confNotice ? ` ${esc(confNotice)}` : ""}</p>`,
       200,
-      toastHeaders(confNotice ?? msg + detail, confNotice || p.failed ? "err" : "ok"),
+      toastTriggerHeaders(confNotice ?? msg + detail, confNotice || p.failed ? "err" : "ok"),
     );
   } catch (e) {
     return c.html(
       `<p class="note err">Purge failed: ${esc(String(e))}</p>`,
       200,
-      toastHeaders("Purge failed", "err"),
+      toastTriggerHeaders("Purge failed", "err"),
     );
   }
 });
@@ -724,186 +613,6 @@ actions.post("/maintenance/all", async (c) => {
   return c.html(
     `<p class="note">Cleared everything — queue, history, logs, errors and temp dir.${esc(purgeNote)} Next run starts from #1.</p>`,
     200,
-    toastHeaders("Cleared everything."),
+    toastTriggerHeaders("Cleared everything."),
   );
 });
-
-function settingRow(
-  label: string,
-  value: string,
-  editor: string,
-  opts: { unset?: boolean; info?: string } = {},
-): string {
-  return `<div class="setting">
-    <div class="setting-head">
-      <div class="setting-info">
-        <span class="setting-label">${esc(label)}${opts.info ? ` ${info(opts.info, label)}` : ""}</span>
-        <span class="setting-value${opts.unset ? " unset" : ""}">${esc(value)}</span>
-      </div>
-      <button type="button" class="btn small" data-edit>Edit</button>
-    </div>
-    <div class="setting-editor">
-      ${editor}
-      <div class="btn-row">
-        <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>
-        <button class="btn" type="button" data-cancel>Cancel</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-/** Format a stored size limit in bytes for the collapsed row label. */
-function formatSizeLimit(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "no limit";
-  const gb = bytes / 1024 ** 3;
-  if (Number.isInteger(gb)) return `${gb} GB`;
-  return `${Number((bytes / 1024 ** 2).toFixed(2))} MB`;
-}
-
-/** Split a stored size limit (bytes) into an editable value + unit. */
-function splitSizeLimit(bytes: number): { value: string; unit: "MB" | "GB" } {
-  if (bytes >= 1024 ** 3 && bytes % 1024 ** 3 === 0) {
-    return { value: String(bytes / 1024 ** 3), unit: "GB" };
-  }
-  return { value: String(Number((bytes / 1024 ** 2).toFixed(2))), unit: "MB" };
-}
-
-export async function configForm(note = ""): Promise<string> {
-  const s = await allSettings();
-  const sel = (v: string, o: string) => (v === o ? " selected" : "");
-  const backend = store.backend();
-  const enc = encryptionEnabled();
-  const pwWorks = APP_PASSWORD ? "set" : "not set";
-
-  const storedConf = s.rclone_conf ?? "";
-  const effectiveConf = storedConf || RCLONE_CONF;
-  const confLabel = !effectiveConf
-    ? "not set"
-    : storedConf
-      ? "set"
-      : "from RCLONE_CONF env";
-  const maxSizeRaw = Number(s.max_archive_size ?? "0");
-  const maxSizeBytes =
-    Number.isFinite(maxSizeRaw) && maxSizeRaw > 0 ? Math.floor(maxSizeRaw) : 0;
-  const maxSizeSplit = splitSizeLimit(maxSizeBytes);
-  const minSizeRaw = Number(s.min_archive_size ?? "0");
-  const minSizeBytes =
-    Number.isFinite(minSizeRaw) && minSizeRaw > 0 ? Math.floor(minSizeRaw) : 0;
-  const minSizeSplit = splitSizeLimit(minSizeBytes);
-  const maxSizeTooHigh = maxSizeBytes > 0 && minSizeBytes > 0 && maxSizeBytes < minSizeBytes;
-  // While a task is running every setting on this page is out of reach;
-  // Clear queues (Maintenance) stays usable. The fieldset disables all
-  // nested controls; server-side guards remain as the real enforcement.
-  const running = engineState.running;
-  const dis = running ? " disabled" : "";
-  return `<form class="card${running ? " is-disabled" : ""}" hx-post="/config" hx-encoding="multipart/form-data" hx-target="#config-form" hx-swap="outerHTML" id="config-form">
-  ${note}
-  ${running ? `<p class="muted">Task running — options are disabled.</p>` : ""}
-  <p class="muted">
-    Backend: <strong>${esc(backend)}</strong>
-    &middot; Encryption: <strong>${enc ? "on" : "off"}</strong>
-    <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">APP_PASSWORD ${esc(pwWorks)}</span>
-  </p>
-  <fieldset class="bare-fieldset"${dis}>
-  ${maxSizeTooHigh ? `<p class="note warn-line">max_archive_size is below min_archive_size — every archive is excluded.</p>` : ""}
-  ${settingRow(
-    "scan_root",
-    s.scan_root || "not set",
-    `<label class="field"><input type="text" name="scan_root" value="${esc(s.scan_root ?? "")}" placeholder="remote:path or /local/path" aria-label="scan_root"></label>`,
-    {
-      unset: !s.scan_root,
-      info: "Remote or path to scan, e.g. s3:bucket/archives or /data/in.",
-    },
-  )}
-  <div class="field"><span>remote_flags ${info("Extra flags for every rclone command. --config is ignored.", "remote_flags")}</span>
-    <input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list" aria-label="remote_flags"></div>
-  ${settingRow(
-    "rclone_conf",
-    confLabel,
-    `<label class="field"><input type="file" name="rclone_conf_file" accept=".conf,text/plain" aria-label="rclone.conf"></label>
-    <button type="button" class="btn small" hx-post="/config/rclone-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored rclone.conf?|Clear"><span class="spinner" aria-hidden="true"></span>Clear stored config</button>`,
-    {
-      unset: !effectiveConf,
-      info: "Stored config, written before each run. Used when RCLONE_CONF is not set.",
-    },
-  )}
-  ${settingRow(
-    "queue_max",
-    s.queue_max ?? "500",
-    `<label class="field"><input type="number" name="queue_max" min="1" value="${esc(s.queue_max ?? "500")}" aria-label="queue_max"></label>`,
-    { info: "Maximum archives queued per run." },
-  )}
-  ${settingRow(
-    "min_archive_size",
-    formatSizeLimit(minSizeBytes),
-    `<label class="field"><div class="field-inline">
-        <input type="number" name="min_archive_size" min="0" step="any" value="${esc(minSizeSplit.value)}" placeholder="0" aria-label="min_archive_size">
-        <select name="min_archive_size_unit" aria-label="min_archive_size unit">
-          <option value="MB"${minSizeSplit.unit === "MB" ? " selected" : ""}>MB</option>
-          <option value="GB"${minSizeSplit.unit === "GB" ? " selected" : ""}>GB</option>
-        </select>
-      </div></label>`,
-    {
-      unset: minSizeBytes <= 0,
-      info: "Ignore archives smaller than this. 0 = no limit.",
-    },
-  )}
-  ${settingRow(
-    "max_archive_size",
-    formatSizeLimit(maxSizeBytes),
-    `<label class="field"><div class="field-inline">
-        <input type="number" name="max_archive_size" min="0" step="any" value="${esc(maxSizeSplit.value)}" placeholder="0" aria-label="max_archive_size">
-        <select name="max_archive_size_unit" aria-label="max_archive_size unit">
-          <option value="MB"${maxSizeSplit.unit === "MB" ? " selected" : ""}>MB</option>
-          <option value="GB"${maxSizeSplit.unit === "GB" ? " selected" : ""}>GB</option>
-        </select>
-      </div></label>`,
-    {
-      unset: maxSizeBytes <= 0,
-      info: "Ignore archives larger than this. 0 = no limit.",
-    },
-  )}
-  ${settingRow(
-    "trash_subdir",
-    s.trash_subdir ?? "trash",
-    `<label class="field"><input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? "trash")}" aria-label="trash_subdir"></label>`,
-    { info: "Folder processed archives are moved to." },
-  )}
-  ${settingRow(
-    "tmp_dir",
-    s.tmp_dir || TMP_DIR_DEFAULT,
-    `<label class="field"><input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}" aria-label="tmp_dir"></label>`,
-    { info: "Where archives are extracted. Relative paths resolve inside scan_root." },
-  )}
-  ${settingRow(
-    "sort_by",
-    s.sort_by ?? "path",
-    `<label class="field"><select name="sort_by" aria-label="sort_by">
-        <option value="path"${sel(s.sort_by ?? "path", "path")}>path</option>
-        <option value="size"${sel(s.sort_by ?? "path", "size")}>size</option>
-      </select></label>`,
-    { info: "Queue order: by path or by size." },
-  )}
-  ${settingRow(
-    "sort_dir",
-    s.sort_dir ?? "asc",
-    `<label class="field"><select name="sort_dir" aria-label="sort_dir">
-        <option value="asc"${sel(s.sort_dir ?? "asc", "asc")}>asc</option>
-        <option value="desc"${sel(s.sort_dir ?? "asc", "desc")}>desc</option>
-      </select></label>`,
-    { info: "Ascending or descending queue order." },
-  )}
-  <div class="check"><label class="check-inline"><input type="checkbox" name="dry_run"${s.dry_run === "1" ? " checked" : ""}> dry_run</label>${info("Runs everything with --dry-run; nothing moves or deletes.", "dry_run")}</div>
-  <div class="check"><label class="check-inline"><input type="checkbox" name="resume"${s.resume === "1" ? " checked" : ""}> resume</label>${info("Re-queue interrupted archives on the next start.", "resume")}</div>
-  <div class="check"><label class="check-inline"><input type="checkbox" name="auto_skip_known"${(s.auto_skip_known ?? "1") === "1" ? " checked" : ""}> auto_skip_known</label>${info("Auto-skip previously skipped torrent/website dumps.", "auto_skip_known")}</div>
-  <h2 class="section-title" style="margin:4px 0 12px">RcloneX</h2>
-  <div class="check"><label class="check-inline"><input type="checkbox" name="rclonex"${s.rclonex === "1" ? " checked" : ""}> Enable RcloneX</label>${info("Extract RAR/7Z/ISO via rclonex; the rest stay on rclone.", "rclonex")}</div>
-  <div class="check"><label class="check-inline"><input type="checkbox" name="rclonex_skip_inspection"${(s.rclonex_skip_inspection ?? "1") === "1" ? " checked" : ""}> Skip inspection for RcloneX formats</label>${info("Skip content inspection for RcloneX formats.", "rclonex_skip_inspection")}</div>
-  <div class="check"><input type="checkbox" name="rclonex_archive_password_enabled" id="rclonex-pw"${s.rclonex_archive_password_enabled === "1" ? " checked" : ""}> <label for="rclonex-pw">Archive password</label>${info("Password for encrypted RAR/7Z archives. Blank keeps the stored one.", "rclonex_archive_password")}<input class="check-input" type="password" name="rclonex_archive_password" placeholder="${s.rclonex_archive_password ? "leave blank to keep stored" : "not set"}" autocomplete="new-password" aria-label="rclonex archive password"><button type="button" class="btn small" hx-post="/config/rclonex-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored archive password?|Clear password"><span class="spinner" aria-hidden="true"></span>Clear</button></div>
-  <div class="check"><input type="checkbox" name="rclonex_window_size_enabled" id="rclonex-win"${s.rclonex_window_size_enabled === "1" ? " checked" : ""}> <label for="rclonex-win">Override window size</label>${info("Sliding-window cache in bytes for rclonex reads. 0 disables.", "rclonex_window_size")}<input class="check-input small-num" type="number" min="0" name="rclonex_window_size" value="${esc(s.rclonex_window_size ?? "16777216")}" aria-label="rclonex window size"></div>
-  <div class="btn-row">
-    <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>
-  </div>
-  </fieldset>
-</form>`;
-}

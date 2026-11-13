@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { store, getSetting } from "../db";
 import { layout, esc, fmtDisplayTime } from "../ui";
 import { csrfFor } from "./auth";
-import { configForm } from "./actions";
+import { configForm } from "../views";
+import { resolveOutcome } from "../runs";
 import { encryptionEnabled } from "../crypto";
 import { engineState } from "../engine";
 import { checkRclone, checkRclonex } from "../rclone";
@@ -15,7 +16,7 @@ export const pages = new Hono();
 pages.get("/", (c) =>
   c.html(
     layout(
-      "Task progress",
+      "Progress",
       `<div hx-get="/dashboard/fragment" hx-trigger="load, every 1s" hx-swap="innerHTML">
         <p class="muted">Loading…</p>
       </div>
@@ -24,6 +25,7 @@ pages.get("/", (c) =>
       </div>`,
       "dashboard",
       csrfFor(c),
+      "Start, stop and watch the current task.",
     ),
   ),
 );
@@ -83,7 +85,6 @@ pages.get("/config", async (c) => {
     ${running ? `<p class="muted">Task running — options are disabled.</p>` : ""}
     <div class="btn-row">
       <button class="btn" hx-post="/maintenance/queues" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear the queue?|Clear queues"><span class="spinner" aria-hidden="true"></span>Clear queues</button>
-      <button class="btn" hx-post="/maintenance/runs" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear history (queue, run count and caches)?|Clear History"${dis}><span class="spinner" aria-hidden="true"></span>Clear History</button>
       <button class="btn" hx-post="/maintenance/logs" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear logs and errors?|Clear logs"${dis}><span class="spinner" aria-hidden="true"></span>Clear logs</button>
       <button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" data-confirm="Clear the tmp directory?|Clear tmp directory"${dis}><span class="spinner" aria-hidden="true"></span>Clear tmp directory</button>
       <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear everything (queue, history, logs, errors, tmp directory)?|Clear everything"${dis}><span class="spinner" aria-hidden="true"></span>Clear everything</button>
@@ -213,7 +214,7 @@ pages.get("/config", async (c) => {
     }
   })();
   </script>`;
-  return c.html(layout("Configuration", (await configForm()) + extra, "config", csrf));
+  return c.html(layout("Configuration", (await configForm()) + extra, "config", csrf, "Settings, secrets, backup and maintenance."));
 });
 
 pages.get("/logs", async (c) => {
@@ -233,10 +234,9 @@ pages.get("/logs", async (c) => {
     "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind FROM runs ORDER BY id DESC LIMIT 50",
   );
 
-  // Tab selection. The password tab is run-independent and stays reachable
-  // even when no run exists yet; `kind` stays supported for old bookmarks.
-  const tabParam = c.req.query("tab") ?? c.req.query("kind");
-  const tab = tabParam === "password" ? "password" : tabParam === "errors" ? "errors" : "main";
+  // Tab selection.
+  const tabParam = c.req.query("tab");
+  const tab = tabParam === "errors" ? "errors" : "main";
   const kind = tab === "errors" ? "errors" : "main";
 
   const running = engineState.running && engineState.runId > 0;
@@ -253,51 +253,7 @@ pages.get("/logs", async (c) => {
   const tabs = `<div class="log-tabs">
     <a class="log-tab${tab === "main" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=main">Run log</a>
     <a class="log-tab${tab === "errors" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=errors">Errors</a>
-    <a class="log-tab${tab === "password" ? " active" : ""}" href="/logs?tab=password">Password-protected</a>
   </div>`;
-
-  if (tab === "password") {
-    const pwRows = await readPasswordRows();
-    const pwBody = `<div class="log-toolbar">
-      ${running ? `<div class="session-static"><span class="pill warn">live</span></div>` : `<div class="session-static"><span class="muted">All password-protected archives, across runs.</span></div>`}
-      ${tabs}
-    </div>
-    <p class="muted pw-intro">Password-protected archives are skipped during runs: a warning is logged and the run moves on to the next archive. <strong>Delete</strong> moves the file to the trash folder; <strong>Restore</strong> returns it to the queue.</p>
-    ${renderPasswordList(pwRows)}
-    <script>
-    (function () {
-      document.addEventListener("click", async function (event) {
-        var btn = event.target.closest ? event.target.closest("[data-pw-log]") : null;
-        if (!btn) return;
-        var id = btn.getAttribute("data-pw-log");
-        var box = document.getElementById("pw-log-" + id);
-        if (!box) return;
-        var collapsed = !box.hidden;
-        if (collapsed) {
-          box.hidden = true;
-          btn.textContent = "Log view";
-          btn.setAttribute("aria-expanded", "false");
-          return;
-        }
-        if (!box.dataset.loaded) {
-          box.innerHTML = '<p class="muted" style="padding:10px 14px">Loading…</p>';
-          try {
-            var res = await fetch("/logs/archive/" + id + "/fragment");
-            box.innerHTML = await res.text();
-            box.dataset.loaded = "1";
-          } catch (e) {
-            box.innerHTML = '<p class="muted" style="padding:10px 14px">Could not load the log.</p>';
-          }
-        }
-        box.hidden = false;
-        btn.textContent = "Hide log";
-        btn.setAttribute("aria-expanded", "true");
-      });
-    })();
-    </script>
-    <script src="/public/copy.js" defer></script>`;
-    return c.html(layout("Logs", pwBody, "logs", csrfFor(c)));
-  }
 
   if (runs.length === 0) {
     return c.html(
@@ -307,6 +263,7 @@ pages.get("/logs", async (c) => {
          <div class="card"><p class="muted">No runs yet. Start a task from the Progress page.</p></div>`,
         "logs",
         csrfFor(c),
+        "Raw output of each run.",
       ),
     );
   }
@@ -348,12 +305,7 @@ pages.get("/logs", async (c) => {
 
   // Prefer the stored outcome; fall back to the legacy interrupted flag for
   // rows written before it existed.
-  const outcome =
-    selected.outcome && selected.outcome !== ""
-      ? selected.outcome
-      : Number(selected.interrupted ?? 0) === 1
-        ? "killed"
-        : "";
+  const outcome = resolveOutcome(selected);
   const reason = selected.interrupted_reason ?? "";
   const outcomeTime = selected.finished_at
     ? ` · ${fmtDisplayTime(String(selected.finished_at), true)}`
@@ -419,17 +371,52 @@ pages.get("/logs", async (c) => {
     ${showLog ? copyToolbar : ""}
     ${logBlock}
     <script src="/public/copy.js" defer></script>`;
-  return c.html(layout("Logs", body, "logs", csrfFor(c)));
+  return c.html(layout("Logs", body, "logs", csrfFor(c), "Raw output of each run."));
 });
+
+const PW_TOGGLE_SCRIPT = `<script>
+document.addEventListener("click", async function (event) {
+  var btn = event.target.closest ? event.target.closest("[data-pw-log]") : null;
+  if (!btn) return;
+  var id = btn.getAttribute("data-pw-log");
+  var box = document.getElementById("pw-log-" + id);
+  if (!box) return;
+  var collapsed = !box.hidden;
+  if (collapsed) {
+    box.hidden = true;
+    btn.textContent = "Log view";
+    btn.setAttribute("aria-expanded", "false");
+    return;
+  }
+  if (!box.dataset.loaded) {
+    box.innerHTML = '<p class="muted" style="padding:10px 14px">Loading…</p>';
+    try {
+      var res = await fetch("/logs/archive/" + id + "/fragment");
+      box.innerHTML = await res.text();
+      box.dataset.loaded = "1";
+    } catch (e) {
+      box.innerHTML = '<p class="muted" style="padding:10px 14px">Could not load the log.</p>';
+    }
+  }
+  box.hidden = false;
+  btn.textContent = "Hide log";
+  btn.setAttribute("aria-expanded", "true");
+});
+</script>`;
 
 pages.get("/errors", async (c) => {
   const running = engineState.running && engineState.runId > 0;
-  const rows = await readErrorRows(store);
-  const body = `<div class="log-actions" role="toolbar" aria-label="Error actions">
+  const [rows, pwRows] = await Promise.all([readErrorRows(store), readPasswordRows()]);
+  const body = `<h2 class="section-title" style="margin-top:0">Failed archives</h2>
+    <div class="log-actions" role="toolbar" aria-label="Error actions">
       ${running ? `<span class="pill warn" id="livePill">live</span>` : ""}
       <button class="btn small" type="button" data-copy-table="#errorCards">Copy all errors</button>
     </div>
     <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
+    <h2 class="section-title">Password-protected</h2>
+    <p class="muted pw-intro">Password-protected archives are skipped during runs: a warning is logged and the run moves on to the next archive. <strong>Delete</strong> moves the file to the trash folder; <strong>Restore</strong> returns it to the queue.</p>
+    ${renderPasswordList(pwRows)}
+    ${PW_TOGGLE_SCRIPT}
     <script src="/public/copy.js" defer></script>`;
-  return c.html(layout("Errors", body, "errors", csrfFor(c)));
+  return c.html(layout("Errors", body, "errors", csrfFor(c), "Archives that need attention: failures and password-protected files."));
 });

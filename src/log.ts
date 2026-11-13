@@ -10,6 +10,9 @@ export type LogKind = "main" | "errors" | "extract";
 /** Maximum lines rendered in the log views; both initial paint and polling. */
 export const LOG_TAIL_LIMIT = 300;
 
+/** Maximum lines read for exports and archive-log downloads (50k lines). */
+export const LOG_EXPORT_LIMIT = 50_000;
+
 export interface LogRef {
   scope: LogScope;
   refId: number;
@@ -45,7 +48,7 @@ let detailIdSeq = 0;
  * Render raw DB rows into structured HTML log entries.
  * Groups 72-dash blocks into collapsible <details>.
  */
-export function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
+function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
   const entries: RenderedEntry[] = [];
   let inDetail = false;
   let detailLines: string[] = [];
@@ -188,12 +191,7 @@ export async function tailRendered(
   return { entries: renderLogEntries(rows), lastId };
 }
 
-/** Insert raw lines. Used for diagnostics with no app wording. */
-export async function appendRawLines(ref: LogRef, lines: string[]): Promise<void> {
-  await insertLogLines(ref, lines);
-}
-
-/** Insert log lines in one transaction. */
+/** Insert log lines in one transaction. Raw output only: no app wording. */
 export async function insertLogLines(
   ref: LogRef,
   lines: string[],

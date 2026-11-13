@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
-import { tailRendered, readAll, insertLogLines, LOG_TAIL_LIMIT } from "../log";
+import { tailRendered, readAll, insertLogLines, LOG_TAIL_LIMIT, LOG_EXPORT_LIMIT } from "../log";
 import { engineState } from "../engine";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 import { Rclone } from "../rclone";
@@ -94,15 +94,13 @@ logsapi.get("/download/run/:id", async (c) => {
   });
 });
 
-const LOG_DOWNLOAD_LIMIT = 50000;
-
 logsapi.get("/logs/archive/:id/fragment", async (c) => {
   noStore(c);
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
   const { entries } = await tailRendered(
     { scope: "archive", refId: id, kind: "extract" },
-    LOG_DOWNLOAD_LIMIT,
+    LOG_EXPORT_LIMIT,
   );
   if (entries.length === 0) {
     return c.html(`<p class="muted">No log lines for this archive.</p>`);
