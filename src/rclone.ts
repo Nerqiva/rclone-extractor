@@ -2,7 +2,7 @@ import { writeFileSync, renameSync, chmodSync, mkdirSync, unlinkSync } from "nod
 import { dirname } from "node:path";
 import { getSetting } from "./db";
 import { isSupported, isSafeRel, parseTrashSubdir } from "./archive";
-import { isAbsoluteTmpPath, type SweepResult } from "./tmpdir";
+import { isAbsoluteTmpPath, type SweepResult, TMP_RUN_DIR_RE } from "./tmpdir";
 import {
   RCLONE_CONF,
   RCLONE_CONF_PATH,
@@ -217,9 +217,8 @@ function assertSafeRel(rel: string): void {
   if (!isSafeRel(rel)) throw new Error(`unsafe archive path refused: ${JSON.stringify(rel)}`);
 }
 
-function parseListLine(
+function parseListLineRaw(
   line: string,
-  rclonex = false,
 ): { rel: string; size: number } | null {
   const idx = line.lastIndexOf(";");
   if (idx === -1) return null;
@@ -227,9 +226,19 @@ function parseListLine(
   const size = Number(line.slice(idx + 1));
   if (rel.startsWith("./")) rel = rel.slice(2);
   if (!rel) return null;
-  const name = rel.slice(rel.lastIndexOf("/") + 1);
-  if (!isSupported(name, rclonex)) return null;
   return { rel, size: Number.isFinite(size) ? size : 0 };
+}
+
+/** Scan listing: same as raw, but drops anything that is not a supported archive. */
+function parseScanListLine(
+  line: string,
+  rclonex = false,
+): { rel: string; size: number } | null {
+  const parsed = parseListLineRaw(line);
+  if (!parsed) return null;
+  const name = parsed.rel.slice(parsed.rel.lastIndexOf("/") + 1);
+  if (!isSupported(name, rclonex)) return null;
+  return parsed;
 }
 
 /**
@@ -516,10 +525,26 @@ export class Rclone {
       size: number,
     ) => boolean | void | Promise<boolean | void>,
   ): Promise<ListOutcome> {
+    return this.listPath(this.root, onFile, true);
+  }
+
+  /**
+   * List the files under `path` (absolute, or relative to the scan root)
+   * with `lsf --files-only`. Used for both the scan listing (archive-name
+   * filter) and post-extraction inspection of a temp tree (no filter).
+   */
+  async listPath(
+    path: string,
+    onFile: (
+      rel: string,
+      size: number,
+    ) => boolean | void | Promise<boolean | void>,
+    filterArchives = false,
+  ): Promise<ListOutcome> {
     const args = [
       ...this.confArgs(),
       "lsf",
-      this.root,
+      this.fullPath(path),
       "--recursive",
       "--files-only",
       "--format",
@@ -541,7 +566,9 @@ export class Rclone {
     let streamError: string | undefined;
 
     const consume = async (line: string): Promise<boolean> => {
-      const parsed = parseListLine(line.replace(/\r$/, ""), this.rclonexEnabled);
+      const parsed = filterArchives
+        ? parseScanListLine(line.replace(/\r$/, ""), this.rclonexEnabled)
+        : parseListLineRaw(line.replace(/\r$/, ""));
       if (!parsed) return true;
       const more = await onFile(parsed.rel, parsed.size);
       return more !== false;
@@ -848,8 +875,8 @@ export class Rclone {
   }
 
   /** Recursively delete a tree. */
-  async purge(path: string, dry: boolean): Promise<Outcome> {
-    return this.run(["purge", this.fullPath(path)], dry);
+  async purge(path: string, dry: boolean, ref?: RcloneRef): Promise<Outcome> {
+    return this.run(["purge", this.fullPath(path)], dry, ref);
   }
 
   /** Top-level directory names of a remote path (no trailing slashes). Missing dir yields []. */
@@ -880,14 +907,15 @@ export class Rclone {
   }
 
   /**
-   * Delete stale app-owned entries (`<digits>` run dirs) inside the temp
-   * root. Anything else is left untouched. Returns what was purged.
+   * Delete stale app-owned entries (`run_<digits>` run dirs) inside the
+   * temp root. Anything else (other runs' dirs, user data) is left
+   * untouched. Returns what was purged.
    */
   async purgeStaleTemp(tmpRoot: string, dry: boolean): Promise<SweepResult> {
     const tops = await this.listTopDirs(tmpRoot);
     const result: SweepResult = { purged: [], skipped: [], failed: [] };
     for (const name of tops) {
-      if (!/^\d+$/.test(name)) {
+      if (!TMP_RUN_DIR_RE.test(name)) {
         result.skipped.push(name);
         continue;
       }

@@ -19,7 +19,7 @@ if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
   case "$2" in
     *${tmpAbs}*)
-      printf '123/\\nkeep-me/\\n456/\\n'
+      printf 'run_123/\\nkeep-me/\\nrun_456/\\n'
       exit 0
       ;;
   esac
@@ -54,11 +54,11 @@ console.log("PROBE " + JSON.stringify({ res, purged }));
   const line = result.stdout.split("\n").find((l) => l.startsWith("PROBE "));
   expect(line).toBeTruthy();
   const out = JSON.parse(line!.slice("PROBE ".length));
-  expect(out.res.purged.sort()).toEqual(["123", "456"]);
+  expect(out.res.purged.sort()).toEqual(["run_123", "run_456"]);
   expect(out.res.skipped).toEqual(["keep-me"]);
   expect(out.res.failed).toEqual([]);
-  expect(out.purged).toContain("/123\n");
-  expect(out.purged).toContain("/456\n");
+  expect(out.purged).toContain("/run_123\n");
+  expect(out.purged).toContain("/run_456\n");
   expect(out.purged).not.toContain("keep-me");
 }, 40_000);
 
@@ -74,7 +74,7 @@ test("purgeStaleTemp in dry-run reports without deleting", () => {
 # strip leading hard-coded --config <path> pair
 if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
-  printf '123/\\n'
+  printf 'run_123/\\n'
   exit 0
 fi
 if [ "$1" = "purge" ]; then
@@ -105,7 +105,7 @@ console.log("PROBE " + JSON.stringify({ res }));
   const line = result.stdout.split("\n").find((l) => l.startsWith("PROBE "));
   expect(line).toBeTruthy();
   const out = JSON.parse(line!.slice("PROBE ".length));
-  expect(out.res.purged).toEqual(["123"]);
+  expect(out.res.purged).toEqual(["run_123"]);
   // dry-run: the mock only sees a purge invocation with --dry-run
   const markerContent = readFileSync(marker, "utf8");
   expect(markerContent).toContain("--dry-run");

@@ -4,7 +4,7 @@ import { tailRendered, readAll, insertLogLines, LOG_TAIL_LIMIT, LOG_EXPORT_LIMIT
 import { engineState } from "../engine";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 import { Rclone } from "../rclone";
-import { isSafeRel, parseTrashSubdir, normalizeRel } from "../archive";
+import { isSafeRel, parseTrashSubdir, normalizeRel, TRASH } from "../archive";
 
 export const logsapi = new Hono();
 
@@ -140,7 +140,7 @@ logsapi.get("/download/archive-file/:id", async (c) => {
   if (!isSafeRel(rel)) return c.text("not found", 404);
   let srcRel = rel;
   if (row.status === "deleted") {
-    const trash = parseTrashSubdir((await getSetting("trash_subdir", "trash")) ?? "trash");
+    const trash = parseTrashSubdir((await getSetting("trash_subdir", TRASH)) ?? TRASH);
     if (!trash) return c.text("trash_subdir is invalid", 500);
     srcRel = normalizeRel(`${trash}/${rel}`);
   }

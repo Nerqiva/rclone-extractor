@@ -1,9 +1,10 @@
 import { getSetting } from "./db";
 import {
   parseTmpDir,
-  TMP_DIR_DEFAULT,
+  TMP_DIR,
   type TmpDirSpec,
 } from "./tmpdir";
+import { TRASH } from "./archive";
 
 export type TmpDirSettings = {
   /** Effective dry_run flag. */
@@ -28,11 +29,11 @@ export async function loadTmpDirSettings(
   const dryRun = (await getSetting("dry_run", "0")) === "1";
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
   const trash =
-    trashSubdir ?? ((await getSetting("trash_subdir", "trash")) ?? "trash");
+    trashSubdir ?? ((await getSetting("trash_subdir", TRASH)) ?? TRASH);
   const raw =
-    ((await getSetting("tmp_dir", TMP_DIR_DEFAULT)) ?? TMP_DIR_DEFAULT).trim();
+    ((await getSetting("tmp_dir", TMP_DIR)) ?? TMP_DIR).trim();
   const spec = raw
     ? parseTmpDir(raw, scanRoot, trash)
-    : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
+    : { kind: "relative" as const, value: TMP_DIR };
   return { dryRun, scanRoot, spec, raw };
 }

@@ -54,6 +54,7 @@ beforeAll(async () => {
   setSetting = db.setSetting;
   await db.initDb();
   engineState = (await import("../src/engine")).engineState;
+  await setSetting("trash_subdir", "trash"); // pin it; mock markers key off "trash"
   actions = (await import("../src/routes/actions")).actions;
   const app = new Hono();
   app.route("/", actions);

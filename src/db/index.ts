@@ -1,5 +1,6 @@
 import { DATABASE_URL } from "../config";
 import { encrypt, decrypt, isEncrypted, encryptionEnabled } from "../crypto";
+import { TRASH } from "../archive";
 import { SqliteStore } from "./sqlite";
 import { PostgresStore } from "./postgres";
 
@@ -29,7 +30,7 @@ const defaults: Record<string, string> = {
   sort_by: "path",
   sort_dir: "asc",
   dry_run: "0",
-  trash_subdir: "trash",
+  trash_subdir: TRASH,
   cancel: "0",
   resume: "1",
   database_url: DATABASE_URL,
@@ -39,8 +40,7 @@ const defaults: Record<string, string> = {
   rclonex_skip_inspection: "1",
   rclonex_archive_password_enabled: "0",
   rclonex_archive_password: "",
-  rclonex_window_size_enabled: "0",
-  rclonex_window_size: "16777216",
+  rclonex_archive_buffer_size: "16777216",
   auto_skip_known: "1",
   scan_cache_key: "",
   scan_cache_state: "incomplete",
@@ -79,6 +79,7 @@ async function initDbOnce(): Promise<void> {
   await migrateDropLogs();
   await migrateDropLogLinesSeq();
   await migrateDropSessionsCreatedAt();
+  await migrateRclonexArchiveBufferSize();
 
   const seen = new Set<string>();
   const existing = await store.query<{ key: string; value: string }>(
@@ -254,6 +255,38 @@ async function removeLegacyPassword(): Promise<void> {
   console.warn(
     "removed legacy settings.password; login now uses the APP_PASSWORD environment variable only",
   );
+}
+
+/**
+ * Rename the RcloneX sliding-window setting to rclonex_archive_buffer_size
+ * (bytes; 0 = disabled). Idempotent: writes the new key only when missing,
+ * then drops the legacy keys. Runs before the defaults are inserted so a
+ * legacy value is upgraded instead of silently replaced by the default.
+ */
+async function migrateRclonexArchiveBufferSize(): Promise<void> {
+  const rows = await store.query<{ key: string; value: string }>(
+    "SELECT key, value FROM settings WHERE key IN ('rclonex_window_size_enabled', 'rclonex_window_size', 'rclonex_archive_buffer_size')",
+  );
+  const map = new Map(rows.map((r) => [r.key, r.value]));
+  const hasLegacy = map.has("rclonex_window_size_enabled") || map.has("rclonex_window_size");
+  if (!map.has("rclonex_archive_buffer_size") && hasLegacy) {
+    const enabled = map.get("rclonex_window_size_enabled") === "1";
+    const bytes = Number(map.get("rclonex_window_size") ?? "0");
+    const storeVal =
+      enabled && Number.isFinite(bytes) && bytes > 0 ? String(Math.floor(bytes)) : "0";
+    await store.run(
+      "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+      ["rclonex_archive_buffer_size", storeVal],
+    );
+    console.log(
+      `migrated: rclonex_archive_buffer_size=${storeVal} (from rclonex_window_size)`,
+    );
+  }
+  if (hasLegacy) {
+    await store.run(
+      "DELETE FROM settings WHERE key IN ('rclonex_window_size_enabled', 'rclonex_window_size')",
+    );
+  }
 }
 
 async function migratePlaintextSecrets(): Promise<void> {

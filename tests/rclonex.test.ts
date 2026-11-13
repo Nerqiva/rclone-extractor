@@ -157,8 +157,7 @@ test("ISO archives skip inspection even when inspection is enabled", async () =>
 
 test("rclonex flags land on the extraction command line", async () => {
   resetLogs();
-  await setSetting("rclonex_window_size_enabled", "1");
-  await setSetting("rclonex_window_size", "4194304");
+  await setSetting("rclonex_archive_buffer_size", "4194304");
   await setSetting("rclonex_archive_password_enabled", "1");
   await setSetting("rclonex_archive_password", "hunter2");
   await runEngine();
@@ -167,7 +166,7 @@ test("rclonex flags land on the extraction command line", async () => {
   expect(rxLog).toContain("--archive-password hunter2");
   const rcLog = readLog(rcloneLog);
   expect(rcLog).not.toContain("--archive-password");
-  await setSetting("rclonex_window_size_enabled", "0");
+  await setSetting("rclonex_archive_buffer_size", "0");
   await setSetting("rclonex_archive_password_enabled", "0");
 });
 

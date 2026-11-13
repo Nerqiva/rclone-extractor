@@ -1,4 +1,9 @@
-export const TMP_DIR_DEFAULT = ".rclone-extractor-tmp";
+export const TMP_DIR = ".Rclone-Extractor-tmp";
+
+/** Prefix for app-owned run directories directly inside TMP_DIR. */
+export const TMP_RUN_PREFIX = "run_";
+/** Matches app-owned run directories inside TMP_DIR; everything else is left alone. */
+export const TMP_RUN_DIR_RE = /^run_\d+$/;
 
 export type TmpDirSpec =
   | { kind: "relative"; value: string } // resolved against the scan root
@@ -86,11 +91,12 @@ export function tmpTopSegment(spec: TmpDirSpec): string | null {
   return idx === -1 ? spec.value : spec.value.slice(0, idx);
 }
 
+/** Directory holding all in-flight extraction data for one run. */
 export function tmpRunDir(tmpRoot: string, runId: number): string {
-  return `${tmpRoot}/${runId}`;
+  return `${tmpRoot}/${TMP_RUN_PREFIX}${runId}`;
 }
 export function tmpArchiveDir(tmpRoot: string, runId: number, archiveId: number): string {
-  return `${tmpRoot}/${runId}/${archiveId}`;
+  return `${tmpRunDir(tmpRoot, runId)}/${archiveId}`;
 }
 export function tmpStemDir(
   tmpRoot: string,
@@ -98,7 +104,7 @@ export function tmpStemDir(
   archiveId: number,
   stem: string,
 ): string {
-  return `${tmpRoot}/${runId}/${archiveId}/${stem}`;
+  return `${tmpArchiveDir(tmpRoot, runId, archiveId)}/${stem}`;
 }
 
 export type SweepResult = {

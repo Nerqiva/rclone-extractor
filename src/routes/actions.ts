@@ -12,9 +12,9 @@ import {
 import { esc, toastTriggerHeaders } from "../ui";
 import { normalizeRcloneConf } from "../rcloneconf";
 import { Rclone, pendingRcloneConfNotice } from "../rclone";
-import { parseTmpDir, tmpRootPath, TMP_DIR_DEFAULT } from "../tmpdir";
+import { parseTmpDir, tmpRootPath, TMP_DIR } from "../tmpdir";
 import { loadTmpDirSettings } from "../tmpsweep";
-import { parseTrashSubdir, isSafeRel, normalizeRel } from "../archive";
+import { parseTrashSubdir, isSafeRel, normalizeRel, TRASH } from "../archive";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
 import { controlsFragment, configForm } from "../views";
 
@@ -149,7 +149,7 @@ actions.post("/config", async (c) => {
     : ((await getSetting("scan_root", "")) ?? "");
   const trashRawValue = form.get("trash_subdir") !== null
     ? String(form.get("trash_subdir"))
-    : ((await getSetting("trash_subdir", "trash")) ?? "trash");
+    : ((await getSetting("trash_subdir", TRASH)) ?? TRASH);
   let trashStored: string | undefined;
   if (form.get("trash_subdir") !== null) {
     const parsedTrash = parseTrashSubdir(trashRawValue);
@@ -170,7 +170,7 @@ actions.post("/config", async (c) => {
   if (tmpRaw !== undefined) {
     const spec = tmpRaw
       ? parseTmpDir(tmpRaw, scanRootNew, trashNew)
-      : { kind: "relative" as const, value: TMP_DIR_DEFAULT };
+      : { kind: "relative" as const, value: TMP_DIR };
     if (!spec) {
       return c.html(
         await configForm(
@@ -249,31 +249,31 @@ actions.post("/config", async (c) => {
     }
     if (pw !== "") rclonexPasswordStored = pw; // blank: keep the stored one
   }
-  const windowRaw = form.get("rclonex_window_size");
-  const windowEnabled = form.get("rclonex_window_size_enabled") !== null;
-  let rclonexWindowStored: string | undefined;
-  if (windowRaw !== null) {
-    const t = String(windowRaw).trim();
-    if (t !== "") {
-      const n = Number(t);
-      if (!Number.isSafeInteger(n) || n < 0) {
+  // RcloneX archive buffer (sliding window, bytes; 0 = keep rclonex's
+  // own default).
+  const bufferSizeRaw =
+    form.get("rclonex_archive_buffer_size") === null
+      ? undefined
+      : String(form.get("rclonex_archive_buffer_size") ?? "").trim();
+  let rclonexBufferSizeStored: string | undefined;
+  if (bufferSizeRaw !== undefined) {
+    if (bufferSizeRaw === "") {
+      rclonexBufferSizeStored = "0";
+    } else {
+      const bytes = parseSizeInput(
+        bufferSizeRaw,
+        String(form.get("rclonex_archive_buffer_size_unit") ?? "MB"),
+      );
+      if (bytes === null) {
         return c.html(
           await configForm(
-            `<p class="note err">rclonex_window_size must be a non-negative integer number of bytes (0 disables caching).</p>`,
+            `<p class="note err">rclonex_archive_buffer_size must be a non-negative number (0 keeps rclonex's default).</p>`,
           ),
           200,
-          toastTriggerHeaders("rclonex_window_size is invalid", "err"),
+          toastTriggerHeaders("rclonex_archive_buffer_size is invalid", "err"),
         );
       }
-      rclonexWindowStored = String(n);
-    } else if (windowEnabled) {
-      return c.html(
-        await configForm(
-          `<p class="note err">Enter a window size in bytes (0 disables caching), or uncheck the override.</p>`,
-        ),
-        200,
-        toastTriggerHeaders("rclonex_window_size is invalid", "err"),
-      );
+      rclonexBufferSizeStored = String(bytes);
     }
   }
   if (source.trim()) {
@@ -317,15 +317,11 @@ actions.post("/config", async (c) => {
     "rclonex_archive_password_enabled",
     form.get("rclonex_archive_password_enabled") !== null ? "1" : "0",
   );
-  await setSetting(
-    "rclonex_window_size_enabled",
-    form.get("rclonex_window_size_enabled") !== null ? "1" : "0",
-  );
   if (rclonexPasswordStored !== undefined) {
     await setSetting("rclonex_archive_password", rclonexPasswordStored);
   }
-  if (rclonexWindowStored !== undefined) {
-    await setSetting("rclonex_window_size", rclonexWindowStored);
+  if (rclonexBufferSizeStored !== undefined) {
+    await setSetting("rclonex_archive_buffer_size", rclonexBufferSizeStored);
   }
   if (normalizedConf !== null) {
     await setSetting("rclone_conf", normalizedConf);
@@ -466,7 +462,7 @@ async function movePasswordArchive(
   if (!isSafeRel(rel)) {
     return passwordListResponse(c, "Stored path is unsafe; refusing to move it.", "err");
   }
-  const trash = parseTrashSubdir((await getSetting("trash_subdir", "trash")) ?? "trash");
+  const trash = parseTrashSubdir((await getSetting("trash_subdir", TRASH)) ?? TRASH);
   if (!trash) {
     return passwordListResponse(c, "trash_subdir is invalid.", "err");
   }

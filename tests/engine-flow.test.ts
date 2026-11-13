@@ -12,6 +12,9 @@ let getSetting: typeof import("../src/db").getSetting;
 let setSetting: typeof import("../src/db").setSetting;
 let readAll: typeof import("../src/log").readAll;
 
+// This suite asserts trash-exclusion behavior, so pin the trash subdir.
+const TRASH = "trash";
+
 beforeAll(async () => {
   const base = mkdtempSync(join(tmpdir(), "rx-s3-"));
   process.env.DATA_DIR = base;
@@ -72,6 +75,7 @@ exit 0
   setSetting = db.setSetting;
   await setSetting("scan_root", scanRoot);
   await setSetting("remote_flags", "");
+  await setSetting("trash_subdir", TRASH);
 
   const eng = await import("../src/engine");
   runEngine = eng.runEngine;
@@ -174,7 +178,7 @@ test("promote command excludes the tmp workspace from the destination", async ()
         line.includes("$ rclone") &&
         line.includes("move") &&
         line.includes("--exclude") &&
-        line.includes("/.rclone-extractor-tmp/**"),
+        line.includes("/.Rclone-Extractor-tmp/**"),
     ),
   ).toBe(true);
 });
@@ -203,7 +207,7 @@ test("temp parents are removed (rmdir) after processing", async () => {
       (line) =>
         line.includes("$ rclone") &&
         line.includes("rmdir") &&
-        line.includes(".rclone-extractor-tmp"),
+        line.includes(".Rclone-Extractor-tmp"),
     ),
   ).toBe(true);
 });

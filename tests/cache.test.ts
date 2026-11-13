@@ -70,7 +70,7 @@ exit 0
   );
   await setSetting(
     "scan_cache_key",
-    [scanRoot, "0", "0", "500", "0", "trash", "1", "0"].join("|"),
+    [scanRoot, "0", "0", "500", "0", ".Trash", "1", "0"].join("|"),
   );
   await setSetting("scan_cache_state", "complete");
 

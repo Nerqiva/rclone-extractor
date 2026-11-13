@@ -21,6 +21,7 @@ import {
   isSafeRel,
   parseTrashSubdir,
   selectExtractor,
+  TRASH,
   type SkipReason,
 } from "./archive";
 
@@ -310,7 +311,7 @@ export async function runEngine(
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
   // Validate tmp_dir up front so misconfiguration fails fast instead of
   // producing a half-extracted archive outside the expected tree.
-  const trashRaw = (await getSetting("trash_subdir", "trash")) ?? "trash";
+  const trashRaw = (await getSetting("trash_subdir", TRASH)) ?? TRASH;
   const trashSubdirValidated = parseTrashSubdir(trashRaw);
   const tmpSettings = trashSubdirValidated
     ? await loadTmpDirSettings(trashSubdirValidated)
@@ -469,24 +470,25 @@ export async function runEngine(
       (await getSetting("rclonex_archive_password_enabled", "0")) === "1";
     const rclonexPassword =
       (await getSetting("rclonex_archive_password", "")) ?? "";
-    const rclonexWindowEnabled =
-      (await getSetting("rclonex_window_size_enabled", "0")) === "1";
-    const rclonexWindowSize = Number(
-      await getSetting("rclonex_window_size", "16777216"),
+    // Sliding-window buffer for random-access formats read by rclonex
+    // (7Z, ISO) — stored as bytes; 0 disables the override (rclonex keeps
+    // its own default).
+    const rclonexBufferSize = Number(
+      await getSetting("rclonex_archive_buffer_size", "16777216"),
     );
     const rclonexFlags: string[] = [];
     if (rclonexPasswordEnabled && rclonexPassword) {
       rclonexFlags.push("--archive-password", rclonexPassword);
     }
-    if (rclonexWindowEnabled) {
-      if (Number.isFinite(rclonexWindowSize) && rclonexWindowSize >= 0) {
+    if (rclonexBufferSize > 0) {
+      if (Number.isFinite(rclonexBufferSize)) {
         rclonexFlags.push(
           "--archive-window-size",
-          String(Math.floor(rclonexWindowSize)),
+          String(Math.floor(rclonexBufferSize)),
         );
       } else {
         logger.warn(
-          `rclonex_window_size is invalid (${await getSetting("rclonex_window_size", "")}); the override is ignored`,
+          `rclonex_archive_buffer_size is invalid (${await getSetting("rclonex_archive_buffer_size", "")}); the buffer override is ignored`,
         );
       }
     }
@@ -898,6 +900,51 @@ export async function runEngine(
             );
           }
         } else {
+          // Post-extraction inspection for rclonex-handled formats: the
+          // archive itself cannot be cheaply listed, but the extracted
+          // tree can. Website dumps and torrent collections are skipped
+          // after extraction — the extracted data is removed and the
+          // archive stays in place (never promoted, never trashed).
+          // Anything else continues as a normal extraction.
+          let postSkip: "website" | "torrent" | null = null;
+          const exStats = createArchiveStats();
+          if (useRclonex && !dryRun) {
+            setActivity("Inspecting extracted files");
+            const listOut = await rc.listPath(tmp, (p, size) =>
+              addArchiveEntry(exStats, p, size),
+            );
+            setActivity("");
+            throwIfSkipArchive();
+            if (listOut.code !== 0 && exStats.total === 0) {
+              warn(
+                `post-extraction listing failed for ${rel} [$ ${listOut.command}]; continuing`,
+              );
+            } else if (exStats.total > 0) {
+              const reason = classifyArchive(exStats);
+              if (reason === "website" || reason === "torrent") {
+                postSkip = reason;
+              }
+            }
+          }
+          if (postSkip) {
+            setActivity("Cleaning up");
+            const purged = await rc.purge(archiveTmpDir, dryRun, ref);
+            setActivity("");
+            if (purged.code !== 0) {
+              warn(
+                `temp purge failed: ${archiveTmpDir} [$ ${purged.command}] ${purged.stderr.trim() || "unknown error"}`,
+              );
+            }
+            await store.run(
+              "UPDATE archives SET status='skipped', error_kind=?, updated_at=? WHERE id=?",
+              [postSkip, now(), row.id],
+            );
+            await insertLogLines(ref, [
+              `skipped (${postSkip}): extracted tree [${describeArchiveStats(exStats)}]`,
+            ]).catch(() => {});
+            warn(`skipped (${postSkip}): ${rel} [extracted tree]`);
+            result = "skipped";
+          } else {
           setActivity("Moving to destination");
           const promoted = await rc.promote(rel, tmp, dryRun, ref, tmpTop, (stats) => {
             engineState.commandStats = stats;
@@ -954,6 +1001,7 @@ export async function runEngine(
               logger.info(`done: ${rel}`);
               result = "done";
             }
+          }
           }
         }
         }
@@ -1014,26 +1062,28 @@ export async function runEngine(
             runRowId,
           ]);
         }
-        // Best effort: drop the now-empty per-archive temp dir. It stays
-        // around (and failing rmdir is only a warning) when extraction did
-        // not finish, so any partial data is kept.
+        // Best effort: remove the per-archive temp dir with whatever is
+        // left in it. `rmdir` refuses non-empty dirs, which would leak
+        // partial extractions — purge instead. Only ever called on the
+        // app-owned archive dir.
         if (tmpAttempted) {
           setActivity("Cleaning up");
-          const rmdir = await rc.rmdir(archiveTmpDir, dryRun, ref);
+          const purged = await rc.purge(archiveTmpDir, dryRun, ref);
           setActivity("");
-          if (rmdir.code !== 0) {
+          if (purged.code !== 0) {
             warn(
-              `rmdir failed: ${archiveTmpDir} [$ ${rmdir.command}] ${rmdir.stderr.trim() || "not empty"}`,
+              `temp purge failed: ${archiveTmpDir} [$ ${purged.command}] ${purged.stderr.trim() || "unknown error"}`,
             );
           }
         }
       }
     }
 
-    // Best effort: drop the now-empty run-level temp dir. If it is not
-    // empty (e.g. an archive was force-stopped mid-flight), purge only that
-    // exact directory — never the shared temp root, which may hold entries
-    // owned by the user that the app must not delete.
+    // Best effort: remove the now-possibly-empty run-level temp dir. If it
+    // still holds extracted data (e.g. an archive was force-stopped
+    // mid-flight), purge only that exact directory — never the shared
+    // temp root, which may hold other runs' data that the app must not
+    // delete.
     setActivity("Cleaning up");
     const tmpRootNorm = tmpRoot.replace(/\/+$/, "");
     const runDir = tmpRunDir(tmpRootNorm, runRowId);
@@ -1042,7 +1092,7 @@ export async function runEngine(
       tmpRootNorm !== "/" &&
       !tmpRootNorm.endsWith(":") &&
       !/^[A-Za-z]:[\\/]?$/.test(tmpRootNorm) &&
-      runDir === `${tmpRootNorm}/${runRowId}`;
+      runDir === tmpRunDir(tmpRootNorm, runRowId);
     const runRes = await rc.rmdir(runDir, dryRun);
     if (runRes.code !== 0) {
       if (tmpRootIsSafe) {

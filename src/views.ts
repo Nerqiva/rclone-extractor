@@ -9,7 +9,8 @@ import { esc, info } from "./ui";
 import { formatBytes } from "./format";
 import { encryptionEnabled } from "./crypto";
 import { APP_PASSWORD, RCLONE_CONF } from "./config";
-import { TMP_DIR_DEFAULT } from "./tmpdir";
+import { TMP_DIR } from "./tmpdir";
+import { TRASH } from "./archive";
 
 export function controlsFragment(): string {
   // Idle state: Start form. Reuse-scan and Start are visually grouped.
@@ -70,7 +71,10 @@ export function controlsFragment(): string {
   return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
     ${note}
     ${skipCluster}
-    <button class="btn danger btn-stop" data-modal-open="stop-modal">Stop</button>
+    <button class="btn danger btn-stop" data-modal-open="stop-modal">Stop</button>${info(
+      "Soft stop: the current archive finishes, then the run stops. Hard stop: the current archive is aborted immediately.",
+      "Stop",
+    )}
   </div>`;
 }
 
@@ -83,9 +87,8 @@ function settingRow(
   return `<div class="setting">
     <div class="setting-head">
       <div class="setting-info">
-        <span class="setting-label">${esc(label)}${opts.key ? ` <code class="setting-key">${esc(opts.key)}</code>` : ""}</span>
+        <span class="setting-label">${esc(label)}${opts.key ? ` <code class="setting-key">${esc(opts.key)}</code>` : ""}${opts.desc ? ` ${info(opts.desc, label)}` : ""}</span>
         <span class="setting-value${opts.unset ? " unset" : ""}">${esc(value)}</span>
-        ${opts.desc ? `<span class="setting-desc">${esc(opts.desc)}</span>` : ""}
       </div>
       <button type="button" class="btn small" data-edit>Edit</button>
     </div>
@@ -106,8 +109,7 @@ function toggleRow(
   checked: boolean,
   desc: string,
 ): string {
-  return `<label class="setting setting-toggle"><input type="checkbox" name="${esc(name)}"${checked ? " checked" : ""}> <span class="setting-label">${esc(label)} <code class="setting-key">${esc(name)}</code></span>
-  <span class="setting-desc">${esc(desc)}</span></label>`;
+  return `<label class="setting setting-toggle"><input type="checkbox" name="${esc(name)}"${checked ? " checked" : ""}> <span class="setting-label">${esc(label)} <code class="setting-key">${esc(name)}</code> ${info(desc, label)}</span></label>`;
 }
 
 function section(title: string, body: string): string {
@@ -150,6 +152,11 @@ export async function configForm(note = ""): Promise<string> {
   const minSizeBytes =
     Number.isFinite(minSizeRaw) && minSizeRaw > 0 ? Math.floor(minSizeRaw) : 0;
   const minSizeSplit = splitSizeLimit(minSizeBytes);
+  const bufferRaw = Number(s.rclonex_archive_buffer_size ?? "16777216");
+  const bufferBytes =
+    Number.isFinite(bufferRaw) && bufferRaw > 0 ? Math.floor(bufferRaw) : 0;
+  const bufferSplit = splitSizeLimit(bufferBytes || 16777216);
+  const bufferOff = bufferBytes <= 0;
   const maxSizeTooHigh = maxSizeBytes > 0 && minSizeBytes > 0 && maxSizeBytes < minSizeBytes;
   // While a task is running every setting on this page is out of reach;
   // Clear queues (Maintenance) stays usable. The fieldset disables all
@@ -259,14 +266,14 @@ export async function configForm(note = ""): Promise<string> {
     "Extract",
     settingRow(
       "Extract to",
-      s.tmp_dir || TMP_DIR_DEFAULT,
-      `<label class="field"><input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR_DEFAULT}" aria-label="tmp_dir"></label>`,
+      s.tmp_dir || TMP_DIR,
+      `<label class="field"><input type="text" name="tmp_dir" value="${esc(s.tmp_dir ?? "")}" placeholder="${TMP_DIR}" aria-label="tmp_dir"></label>`,
       { key: "tmp_dir", desc: "Where archives are unpacked. Relative paths resolve inside the scan root." },
     ) +
     settingRow(
       "Trash folder",
-      s.trash_subdir ?? "trash",
-      `<label class="field"><input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? "trash")}" aria-label="trash_subdir"></label>`,
+      s.trash_subdir ?? TRASH,
+      `<label class="field"><input type="text" name="trash_subdir" value="${esc(s.trash_subdir ?? TRASH)}" aria-label="trash_subdir"></label>`,
       { key: "trash_subdir", desc: "Folder processed archives are moved to." },
     ),
   )}
@@ -281,8 +288,7 @@ export async function configForm(note = ""): Promise<string> {
     toggleRow("rclonex", "Enable RcloneX", s.rclonex === "1", "Extract RAR/7Z/ISO with rclonex; everything else stays on rclone.") +
     toggleRow("rclonex_skip_inspection", "Skip inspection for RcloneX formats", (s.rclonex_skip_inspection ?? "1") === "1", "Don't list RAR/7Z contents (rclone cannot). ISO is always skipped.") +
     `<div class="setting setting-toggle setting-compound">
-      <span class="setting-label"><input type="checkbox" name="rclonex_archive_password_enabled" id="rclonex-pw"${s.rclonex_archive_password_enabled === "1" ? " checked" : ""}> <label for="rclonex-pw">Archive password <code class="setting-key">rclonex_archive_password</code></label></span>
-      <span class="setting-desc">Password for encrypted RAR/7Z archives. Blank keeps the stored one.</span>
+      <span class="setting-label"><input type="checkbox" name="rclonex_archive_password_enabled" id="rclonex-pw"${s.rclonex_archive_password_enabled === "1" ? " checked" : ""}> <label for="rclonex-pw">Archive password <code class="setting-key">rclonex_archive_password</code> ${info("Password for encrypted RAR/7Z archives. Blank keeps the stored one.", "rclonex_archive_password")}</label></span>
       <span class="field-inline">
         <input class="check-input" type="password" name="rclonex_archive_password" placeholder="${s.rclonex_archive_password ? "leave blank to keep stored" : "not set"}" autocomplete="new-password" aria-label="rclonex archive password">
         <button type="button" class="btn small" hx-post="/config/rclonex-clear" hx-target="#config-form" hx-swap="outerHTML" data-confirm="Clear stored archive password?|Clear password"><span class="spinner" aria-hidden="true"></span>Clear</button>
@@ -291,11 +297,22 @@ export async function configForm(note = ""): Promise<string> {
   )}
   ${section(
     "Advanced",
-    `<div class="setting setting-toggle setting-compound">
-      <span class="setting-label"><input type="checkbox" name="rclonex_window_size_enabled" id="rclonex-win"${s.rclonex_window_size_enabled === "1" ? " checked" : ""}> <label for="rclonex-win">Override rclonex window size <code class="setting-key">rclonex_window_size</code></label></span>
-      <span class="setting-desc">Sliding-window cache in bytes for rclonex reads. 0 disables. Default: 16777216.</span>
-      <span class="field-inline"><input class="check-input small-num" type="number" min="0" name="rclonex_window_size" value="${esc(s.rclonex_window_size ?? "16777216")}" aria-label="rclonex window size"></span>
-    </div>`,
+    settingRow(
+      "Archive buffer",
+      bufferOff ? "rclonex default" : formatSizeLimit(bufferBytes),
+      `<label class="field"><div class="field-inline">
+        <input type="number" name="rclonex_archive_buffer_size" min="0" step="any" value="${esc(bufferOff ? "0" : bufferSplit.value)}" placeholder="0" aria-label="rclonex_archive_buffer_size">
+        <select name="rclonex_archive_buffer_size_unit" aria-label="rclonex_archive_buffer_size unit">
+          <option value="MB"${bufferSplit.unit === "MB" ? " selected" : ""}>MB</option>
+          <option value="GB"${bufferSplit.unit === "GB" ? " selected" : ""}>GB</option>
+        </select>
+      </div></label>`,
+      {
+        unset: bufferOff,
+        key: "rclonex_archive_buffer_size",
+        desc: "Sliding-window buffer in memory for rclonex reads (7Z, ISO). 0 keeps rclonex's own default.",
+      },
+    ),
   )}
   <div class="btn-row">
     <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Save</button>

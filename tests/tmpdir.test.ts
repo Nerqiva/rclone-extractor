@@ -6,15 +6,16 @@ import {
   tmpStemDir,
   tmpRunDir,
   tmpArchiveDir,
-  TMP_DIR_DEFAULT,
+  TMP_DIR,
+  TMP_RUN_DIR_RE,
 } from "../src/tmpdir";
 
 const ROOT = "remote:bucket";
 const TRASH = "trash";
 
 test("default relative value is accepted", () => {
-  const spec = parseTmpDir(TMP_DIR_DEFAULT, ROOT, TRASH);
-  expect(spec).toEqual({ kind: "relative", value: ".rclone-extractor-tmp" });
+  const spec = parseTmpDir(TMP_DIR, ROOT, TRASH);
+  expect(spec).toEqual({ kind: "relative", value: ".Rclone-Extractor-tmp" });
 });
 
 test("nested relative value is accepted and normalized", () => {
@@ -82,13 +83,22 @@ test("tmpRootPath resolves relative paths against the root", () => {
 });
 
 test("tmpTopSegment is the first segment for relative specs, null for absolute", () => {
-  expect(tmpTopSegment({ kind: "relative", value: ".rclone-extractor-tmp" })).toBe(".rclone-extractor-tmp");
+  expect(tmpTopSegment({ kind: "relative", value: ".Rclone-Extractor-tmp" })).toBe(".Rclone-Extractor-tmp");
   expect(tmpTopSegment({ kind: "relative", value: "a/b/c" })).toBe("a");
   expect(tmpTopSegment({ kind: "absolute", value: "/abs/tmp" })).toBeNull();
 });
 
 test("run/archive/stem path layout", () => {
-  expect(tmpRunDir("root/tmp", 42)).toBe("root/tmp/42");
-  expect(tmpArchiveDir("root/tmp", 42, 7)).toBe("root/tmp/42/7");
-  expect(tmpStemDir("root/tmp", 42, 7, "archive")).toBe("root/tmp/42/7/archive");
+  expect(tmpRunDir("root/tmp", 42)).toBe("root/tmp/run_42");
+  expect(tmpArchiveDir("root/tmp", 42, 7)).toBe("root/tmp/run_42/7");
+  expect(tmpStemDir("root/tmp", 42, 7, "archive")).toBe("root/tmp/run_42/7/archive");
+});
+
+test("TMP_RUN_DIR_RE matches only app-owned run dirs", () => {
+  expect(TMP_RUN_DIR_RE.test("run_1")).toBe(true);
+  expect(TMP_RUN_DIR_RE.test("run_12345")).toBe(true);
+  expect(TMP_RUN_DIR_RE.test("123")).toBe(false);
+  expect(TMP_RUN_DIR_RE.test("keep-me")).toBe(false);
+  expect(TMP_RUN_DIR_RE.test("run_")).toBe(false);
+  expect(TMP_RUN_DIR_RE.test("run_x")).toBe(false);
 });

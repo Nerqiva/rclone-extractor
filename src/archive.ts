@@ -1,3 +1,6 @@
+/** Default trash subdirectory (override with the trash_subdir setting). */
+export const TRASH = ".Trash";
+
 const SUPPORTED = [
   ".tar.gz",
   ".tar.bz2",

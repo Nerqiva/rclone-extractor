@@ -16,7 +16,7 @@ mkdirSync(binDir, { recursive: true });
 const mockScript = `#!/bin/sh
 if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
-  echo "123/"
+  echo "run_123/"
   exit 0
 fi
 if [ "$1" = "purge" ]; then
@@ -58,7 +58,7 @@ async function insertRun() {
 test("clear everything wipes history, queue and caches, resets sequence and purges app temp dirs (dry-run)", async () => {
   const savedTmpDir = (await getSetting("tmp_dir")) ?? "";
   const tmpRoot = mkdtempSync(join(tmpdir(), "rx-maint-tmp-"));
-  mkdirSync(join(tmpRoot, "123")); // app-owned numeric run dir
+  mkdirSync(join(tmpRoot, "run_123")); // app-owned run dir
   mkdirSync(join(tmpRoot, "keep-me")); // not app-owned: must survive
   await setSetting("tmp_dir", tmpRoot);
   await setSetting("dry_run", "1");
