@@ -75,6 +75,7 @@ async function initDbOnce(): Promise<void> {
   await migrateRunsOutcome();
   await migrateRunsErrorKind();
   await migrateRunsLastState();
+  await migrateRunsLastTouch();
   await migrateBackfillRunOutcome();
   await migrateDropLogs();
   await migrateDropLogLinesSeq();
@@ -98,6 +99,22 @@ async function initDbOnce(): Promise<void> {
 
   await removeLegacyPassword();
   await migratePlaintextSecrets();
+  // A SECRET_KEY set/changed after secrets were stored makes them
+  // unreadable; without this an operator sees an empty app and no cause.
+  if (encryptionEnabled()) {
+    const unreadable: string[] = [];
+    for (const row of existing) {
+      if (SECRET_KEYS.has(row.key) && isEncrypted(row.value) && !decrypt(row.value)) {
+        unreadable.push(row.key);
+      }
+    }
+    if (unreadable.length) {
+      console.error(
+        `settings unreadable (SECRET_KEY changed or lost): ${unreadable.join(", ")} — ` +
+          "re-enter them on the Configuration page",
+      );
+    }
+  }
 }
 
 /**
@@ -220,29 +237,33 @@ async function migrateDropLogs(): Promise<void> {
  * column also drops its dependent index on Postgres; the explicit DROP INDEX
  * keeps SQLite honest.
  */
+/** Existence check that works on both backends (DROP COLUMN is not
+ * supported before SQLite 3.35, so sniffing error text is not portable). */
+async function columnExists(table: string, column: string): Promise<boolean> {
+  if (store.backend() === "sqlite") {
+    const rows = await store.query<{ name: string }>(`PRAGMA table_info(${table})`);
+    return rows.some((r) => r.name === column);
+  }
+  const rows = await store.query(
+    "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ? AND column_name = ?",
+    [table, column],
+  );
+  return rows.length > 0;
+}
+
 async function migrateDropLogLinesSeq(): Promise<void> {
   await store.run("DROP INDEX IF EXISTS idx_log_lines_scope");
-  try {
+  if (await columnExists("log_lines", "seq")) {
     await store.run("ALTER TABLE log_lines DROP COLUMN seq");
     console.log("migrated: dropped log_lines.seq");
-  } catch (e) {
-    const msg = String(e).toLowerCase();
-    if (!msg.includes("no such column") && !msg.includes("does not exist")) {
-      throw e;
-    }
   }
 }
 
 /** Drop `sessions.created_at`, which the app never read. */
 async function migrateDropSessionsCreatedAt(): Promise<void> {
-  try {
+  if (await columnExists("sessions", "created_at")) {
     await store.run("ALTER TABLE sessions DROP COLUMN created_at");
     console.log("migrated: dropped sessions.created_at");
-  } catch (e) {
-    const msg = String(e).toLowerCase();
-    if (!msg.includes("no such column") && !msg.includes("does not exist")) {
-      throw e;
-    }
   }
 }
 
@@ -270,6 +291,18 @@ async function removeLegacyPassword(): Promise<void> {
  * migration). Powers the Logs page's per-run Archives tab. Idempotent; the
  * fresh-install schema already includes the column.
  */
+/**
+ * Add the `runs.last_touch_at` heartbeat: the engine bumps it while a run
+ * is alive; recoverStale only reclaims runs whose heartbeat is stale, so a
+ * second instance (rolling deploy / replicas) never closes a live peer's
+ * run. NULL for legacy rows — recovery falls back to started_at.
+ */
+async function migrateRunsLastTouch(): Promise<void> {
+  if (await columnExists("runs", "last_touch_at")) return;
+  await store.run("ALTER TABLE runs ADD COLUMN last_touch_at TEXT");
+  console.log("migrated: added runs.last_touch_at");
+}
+
 async function migrateArchivesLastRun(): Promise<void> {
   try {
     await store.run(

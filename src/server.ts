@@ -3,7 +3,7 @@ import { serveStatic } from "hono/bun";
 import { APP_PASSWORD, BIND, PORT } from "./config";
 import { initDb, store, getSetting } from "./db";
 import { recoverStale } from "./engine";
-import { checkRclone, checkRclonex, Rclone } from "./rclone";
+import { checkRclone, checkRclonex, Rclone, killActiveProcs } from "./rclone";
 import { tmpRootPath } from "./tmpdir";
 import { loadTmpDirSettings } from "./tmpsweep";
 import { auth, authMiddleware, csrfMiddleware } from "./routes/auth";
@@ -86,6 +86,9 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`received ${signal}; closing database connections`);
+  // Kill in-flight rclone/rclonex children first: orphaned extracts kept
+  // moving files after the parent exited (double-move on the next boot).
+  killActiveProcs();
   try {
     await Logger.flushAll();
   } catch (e) {
@@ -122,10 +125,17 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 app.get("/healthz", (c) => c.text("ok"));
 
 // HTML is live run state, never cacheable — the browser must not serve a
-// stale progress page on Back/Forward. /public/* assets keep default caching;
-// the log download already marks itself no-store.
+// stale progress page on Back/Forward. /public/* assets carry a ?v=VERSION
+// buster from asset(), but browsers apply heuristic caching: force
+// revalidation so a replaced file is picked up immediately (304s keep it
+// cheap). The log download already marks itself no-store.
 app.use("*", async (c, next) => {
   await next();
+  c.header(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  );
+  c.header("X-Content-Type-Options", "nosniff");
   if (
     !c.req.path.startsWith("/public/") &&
     !c.req.path.startsWith("/healthz") &&
@@ -135,6 +145,10 @@ app.use("*", async (c, next) => {
   }
 });
 
+app.use("/public/*", async (c, next) => {
+  c.header("Cache-Control", "public, max-age=0, must-revalidate");
+  await next();
+});
 app.use("/public/*", serveStatic({ root: "./" }));
 
 app.use("*", authMiddleware);

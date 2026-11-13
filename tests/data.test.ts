@@ -130,3 +130,34 @@ test("malformed records are rejected before anything is written", async () => {
   const body = (await res.json()) as { ok: boolean };
   expect(body.ok).toBe(false);
 });
+
+test("import rejects a backup whose archive path is not a safe relative path", async () => {
+  const ts = new Date().toISOString();
+  const backup = {
+    version: 1,
+    exported_at: ts,
+    settings: {},
+    archives: [
+      {
+        id: 990001,
+        path: "../escape.txt",
+        size: 1,
+        status: "queued",
+        error_kind: null,
+        created_at: ts,
+        updated_at: ts,
+      },
+    ],
+    runs: [],
+    log_lines: [],
+  };
+  const form = new FormData();
+  form.append("archive", new File([JSON.stringify(backup)], "backup.json", { type: "application/json" }));
+  const res = await jsonRequest("/import", form);
+  expect(res.status).toBe(400);
+  const body = (await res.json()) as { ok: boolean; message?: string };
+  expect(body.ok).toBe(false);
+  expect(body.message).toContain("safe relative");
+  const row = await db.store.get1("SELECT id FROM archives WHERE id = 990001");
+  expect(row).toBeNull();
+});

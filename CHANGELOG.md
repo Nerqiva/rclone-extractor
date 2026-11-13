@@ -194,6 +194,9 @@ to `main`.
   production-ready: real `role="tooltip"` spans with `aria-describedby`
   and `aria-expanded`, they flip above the control when there is no room
   below, and they close on Escape, tap-outside and scroll.
+- **Session expiry is sliding** — an authenticated request within 24 h of a
+  session's expiry renews it by 7 days, so active users are not logged out
+  mid-use; idle sessions still expire on schedule.
 
 ### Removed
 - **`--archive-continue-on-error` (no such flag in rclonex)** — enabling
@@ -211,7 +214,90 @@ to `main`.
   `forceStopEngine` share one cancel-persist block; tests `s2.test.ts` and
   `s3.test.ts` renamed to `archive.test.ts` and `engine-flow.test.ts`.
 
+### Security
+- **Archive-extraction trash moves can no longer overwrite** — a *new* file
+  at the same trash path as an older archive is refused instead of silently
+  destroyed: `moveto` carries `--immutable` (promote gets it too, so stem
+  contents never overwrite an unrelated same-named file). Refusals surface
+  as `error_kind='trash'`/`'promote'`, not silent data loss.
+- **Shutdown no longer orphans rclone/rclonex processes** — the SIGTERM/SIGINT
+  handler SIGKILLs every in-flight child before the database is closed, so a
+  deploy with a run in flight cannot leave an extract/promote racing the next
+  boot (double-move risk).
+- **Import confinement** — imported backup rows whose `archives.path` is not a
+  safe relative path are rejected (400, nothing written); `Rclone` construction
+  refuses an empty `scan_root` outright, instead of joining `${root}/${rel}`
+  onto an absolute local path for file operations; import also caps
+  archive/run/log-line counts and requires `size`/`ref_id` ≥ 0.
+- **Error pages can no longer render stored XSS** — `relativeTime()`'s raw
+  output is escaped like everywhere else; hostile backups can no longer inject
+  markup into the Errors page.
+- **Sessions are hashed at rest** — the database stores `sha256(id)`, not the
+  raw session id (existing sessions are invalidated once; sign in again).
+  Cross-site login is closed too: `/login` now requires a double-submit
+  nonce (cross-site POSTs can no longer sign you in) and mutating routes
+  without a session fail closed with 403.
+- **Secrets never reach child processes** — rclone/rclonex spawn with a
+  minimal environment instead of the full process env (`APP_PASSWORD`,
+  `SECRET_KEY`, `DATABASE_URL` no longer leak into them); sensitive-flag
+  values that start with `-` are redacted from logs; `SECRET_KEY` changes
+  are now reported at boot (settings exist but are undecryptable) instead
+  of silently emptying the Configuration and aborting runs with
+  `no_scan_root`. `RCLONE_*` env vars pass through, so env-configured
+  remotes keep working.
+- **Security headers** — every response carries a Content-Security-Policy
+  (`default-src 'self'`, inline scripts/styles allowed, `frame-ancestors
+  'none'`) and `X-Content-Type-Options: nosniff`. The login throttle's
+  `TRUST_PROXY=1` bypass is now spelled out in the README.
+- **Postgres placeholders** — `?` inside SQL string literals is no longer
+  renumbered into bind variables.
+- **Old-SQLite boot crash fixed** — `DROP COLUMN` privileges are checked via
+  `PRAGMA table_info` (or `information_schema`) instead of error-message
+  sniffing, which misfired on SQLite < 3.35 and wedged the boot.
+
 ### Fixed
+- **The tooltip help text rendered permanently on the page** — `/public/*`
+  assets kept browser heuristic caching, so a redeploy could pair fresh
+  (no-store) HTML with a pre-tooltip stylesheet: every `role="tooltip"`
+  span printed its text inline, never hiding. Stylesheet/script/icon
+  URLs now carry the release version (`?v=<VERSION>`) and `/public/*`
+  answers with `Cache-Control: public, max-age=0, must-revalidate`
+  (304s keep it cheap). The info `(i)` glyph is also a touch bigger and
+  stronger next to option labels.
+- **Polled fragments wiped tooltips, focus and open log views mid-read** —
+  `#dashboard-panel` and `#controls` re-render every second (and the Archives
+  tab every 2 s). Polled swaps are now skipped when the fragment re-renders
+  to the exact bytes it already shows, and whenever an info tooltip is open
+  inside the fragment; both resume once the condition clears. Live fragments
+  (elapsed timers) still swap as before.
+- **Modal dialogs put keyboard focus on the destructive action** —
+  Soft/Hard stop and the confirm dialog focused their first button (and
+  Tab walked out of the dialog onto the page behind it; Escape left a stale
+  pending confirmation and lost the invoking control). Both dialogs now
+  focus the benign Cancel, trap Tab, restore focus to the invoker on close,
+  and clear pending confirmations.
+- **The Errors page showed an error block as one unreadable paragraph** —
+  `Logger.error` embedded the detail block as a single multi-line store
+  line, which the folder never recognized; detail blocks now write one row
+  per line, so the "Show full output" fold works.
+- **Stop / Edit / Cancel buttons were disabled for 60 s on one click** —
+  the busy-state hook marked every `.btn` without an `hx-trigger=every…`
+  busy for a minute with no completion path; modal-openers, inline editor
+  buttons and other non-request buttons are now exempt.
+- **Chatty remotes could deadlock a run at listing stage** — `lsf`/`lsl`/
+  `lsjson` spawned with an undrained stderr pipe could fill the 64 KB buffer
+  and wedge the run; their stderr is now ignored.
+- **Soft stop reported as a listing failure** — a listing non-zero exit
+  while a stop was pending was recorded as `error_kind='listing_failed'`;
+  `stopRequested` now counts as a user cancel alongside `forceStop`.
+- **Crashed runs could re-queue an archive that was already in trash** —
+  recovery now finalizes archives whose trash copy exists as `done` instead
+  of re-queueing them into a permanent extract failure.
+- **Invalid `rclonex_archive_buffer_size` silently ignored** — an
+  unparseable override used to disable itself with no warning; it now logs one.
+- **Archive logs quoted `"` and the Logs tab showed a raw error body on a
+  failed load** — log-toggle failures now show a message instead of the
+  response text; archive log panels honor non-200 responses.
 - **The Progress page rendered empty on every page load and refresh** — the
   shell shipped two lazy `hx-get` placeholders and the controls popped in
   before the (DB-backed) progress panel; both are now rendered inline by
@@ -257,6 +343,30 @@ to `main`.
   entirely in that window, but the request was refused. The UI only showed
   the button mid-binary, so this is an API-guard fix (and fixes a flaky
   `skipflow` failure on slow CI runners).
+
+- **Crash recovery was dangerous on a second instance** — `recoverStale`
+  used to close *every* unfinished run and re-queue *every* `extracting`
+  archive, so a rolling deploy or a sibling replica on the same Postgres
+  could steal a live run. Runs now carry a heartbeat (`runs.last_touch_at`,
+  migrated automatically, refreshed while the engine lists/inspects/extracts)
+  and only runs untouched for 10 minutes are reclaimed; a live peer's run and
+  in-flight archives are left completely alone. Boot recovery also settles
+  archives whose trash copy already exists as `done` instead of re-queueing
+  them into a guaranteed extract failure.
+- **Post-extraction inspection trusted partial listings** — a non-zero exit
+  or stream error with some entries already streamed still led to
+  website/torrent classification, which purged the extracted tree; partial
+  listings are now treated as inconclusive.
+- **Login throttle defeated by randomizing `X-Forwarded-For`** — behind
+  `TRUST_PROXY=1` the per-IP lockout could be bypassed entirely; the whole
+  process now pays a fixed 400 ms delay on every login attempt once the
+  global failure budget (20 in 10 minutes) is exhausted.
+- **Archive-download `Content-Length` could lie** — the streamed (>32 MB)
+  path kept the stat-time length even when the remote file changed
+  mid-download; the header is now only sent for buffered downloads
+  (chunked transfer otherwise).
+- **Backups dropped the run heartbeat** — import restores `last_touch_at`
+  alongside the other run columns.
 
 ### Added
 - **RcloneX integration** (off by default): when **Enable RcloneX** is set on
@@ -345,6 +455,7 @@ to `main`.
   restored from the back-forward cache reloads itself — Back/Forward in the
   URL bar can no longer resurrect a stale progress view or a stale Stop
   button. Navigating with the URL bar has no effect on a running task.
+
 
 ### Removed
 - The "Warnings & Errors" filter chips on the Logs page — redundant with the

@@ -167,6 +167,9 @@ export function isSafeRel(p: string): boolean {
   if (typeof p !== "string") return false;
   const t = p.trim();
   if (!t || t.length > 4096 || t.includes("\0")) return false;
+  // Backslashes and control chars: local backends may read "..\evil" as
+  // traversal, and CR/LF would forge log rows.
+  if (/[\\\x00-\x1f\x7f]/.test(t)) return false;
   if (t.startsWith("/") || /^[A-Za-z]:[\\/]/.test(t)) return false;
   for (const seg of t.split("/")) {
     if (seg === "" || seg === "." || seg === "..") return false;

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
-import { layout, esc, fmtDisplayTime, info } from "../ui";
+import { layout, esc, fmtDisplayTime, info, asset } from "../ui";
 import { csrfFor } from "./auth";
 import { configForm, controlsFragment } from "../views";
 import { resolveOutcome } from "../runs";
@@ -75,7 +75,7 @@ pages.get("/config", async (c) => {
     <fieldset class="bare-fieldset"${dis}>
     <form id="export-form" method="post" action="/export">
       <input type="hidden" name="csrf_token" value="${esc(csrf ?? "")}">
-      <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, database_url) ${info("Exports contain unencrypted secrets. Only tick it if you store backups somewhere safe.", "include secrets")}</label>
+      <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, database_url, archive password) ${info("Exports contain unencrypted secrets. Only tick it if you store backups somewhere safe.", "include secrets")}</label>
       <button class="btn" type="submit" data-loading-label="Exporting…"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Export JSON</span></button>
     </form>
     <form id="import-form" style="margin-top:14px" method="post" action="/import" enctype="multipart/form-data">
@@ -142,7 +142,7 @@ pages.get("/config", async (c) => {
       exportForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         if (exportForm.include_rclone && exportForm.include_rclone.checked &&
-            !window.confirm("The export will contain unencrypted secrets (rclone.conf, database_url). Continue?")) {
+            !window.confirm("The export will contain unencrypted secrets: rclone.conf, database_url and the archive password. Continue?")) {
           return;
         }
         var btn = exportForm.querySelector('button[type="submit"]');
@@ -401,7 +401,7 @@ pages.get("/logs", async (c) => {
     ${showLog || isArchivesTab ? copyToolbar : ""}
     ${logBlock}
     ${isArchivesTab ? LOG_TOGGLE_SCRIPT : ""}
-    <script src="/public/copy.js" defer></script>`;
+    <script src="${asset("copy.js")}" defer></script>`;
   return c.html(layout("Logs", body, "logs", csrfFor(c), "Raw output of each run, newest session first."));
 });
 
@@ -425,6 +425,10 @@ document.addEventListener("click", async function (event) {
     box.innerHTML = '<p class="muted" style="padding:10px 14px">Loading…</p>';
     try {
       var res = await fetch("/logs/archive/" + encodeURIComponent(id) + "/fragment?limit=300");
+      if (!res.ok) {
+        box.innerHTML = '<p class="muted" style="padding:10px 14px">Could not load the log.</p>';
+        return;
+      }
       box.innerHTML = await res.text();
       box.dataset.loaded = "1";
     } catch (e) {
@@ -450,6 +454,6 @@ pages.get("/errors", async (c) => {
     <h2 class="section-title">Password-protected ${info("Skipped during runs: a warning is logged and the run moves on. Delete moves the file to the trash folder; Restore returns it to the queue.", "Password-protected")}</h2>
     ${renderPasswordList(pwRows)}
     ${LOG_TOGGLE_SCRIPT}
-    <script src="/public/copy.js" defer></script>`;
+    <script src="${asset("copy.js")}" defer></script>`;
   return c.html(layout("Errors", body, "errors", csrfFor(c), "Archives that need attention: failures and password-protected files."));
 });

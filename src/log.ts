@@ -81,9 +81,13 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
     }
 
     const isCmd = line.startsWith("$ ");
-    const cls = isCmd ? "log-entry log-cmd" : `log-entry log-${level.toLowerCase() || "info"}`;
+    // Imported levels are arbitrary strings; the class wants a bare slug.
+    const lvl = /^[a-z0-9-]+$/.test(level.toLowerCase())
+      ? level.toLowerCase()
+      : "info";
+    const cls = isCmd ? "log-entry log-cmd" : `log-entry log-${lvl}`;
     const chip = level
-      ? `<span class="log-chip log-chip-${level.toLowerCase()}">${esc(level)}</span>`
+      ? `<span class="log-chip log-chip-${lvl}">${esc(level)}</span>`
       : "";
 
     const isContinuation = !level && !isCmd && entries.length > 0;
@@ -131,8 +135,16 @@ export class Logger {
   }
 
   error(msg: string, detail?: string): void {
-    const body = detail !== undefined ? `${DASHES}\n${detail}\n${DASHES}` : msg;
-    this.write("ERROR", detail !== undefined ? `${msg}\n${body}` : msg);
+    if (detail === undefined) {
+      this.write("ERROR", msg);
+      return;
+    }
+    // Detail blocks are rows, not one embedded-newline string: the folder
+    // (renderLogEntries) needs each dash line of its own to collapse.
+    this.write("ERROR", msg);
+    this.write(null, DASHES);
+    for (const l of detail.split(/\r?\n/)) this.write(null, l);
+    this.write(null, DASHES);
   }
 
   /** Resolves once every write queued so far has landed (or failed). */
@@ -145,7 +157,7 @@ export class Logger {
     await Promise.allSettled([...Logger.pending]);
   }
 
-  private write(level: string, line: string): void {
+  private write(level: string | null, line: string): void {
     const ts = new Date().toISOString();
     const insert = this.chain.then(async () => {
       try {

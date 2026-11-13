@@ -54,12 +54,32 @@ export function describeSpawnError(
   );
 }
 
+// Children get a minimal env: the app's own secrets (APP_PASSWORD,
+// SECRET_KEY, DATABASE_URL) must never leak into rclone/rclonex processes.
+// RCLONE_* is passed through — users may configure rclone entirely through
+// the environment (RCLONE_CONFIG_<remote>_*).
+function minimalEnv(): Record<string, string> {
+  const keep = [
+    "PATH", "HOME", "TMPDIR", "TZ", "LANG",
+    "SystemRoot", "SystemDrive", "USERPROFILE", "TEMP", "TMP",
+  ];
+  const out: Record<string, string> = {};
+  for (const k of keep) {
+    const v = process.env[k];
+    if (v) out[k] = v;
+  }
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith("RCLONE_") && v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
 function spawnBinary(
   bin: string,
   args: string[],
   options: {
     stdout: "pipe";
-    stderr: "pipe";
+    stderr: "pipe" | "ignore";
     stdin?: "pipe" | "inherit" | "ignore";
     env?: Record<string, string | undefined>;
     cwd?: string;
@@ -68,7 +88,7 @@ function spawnBinary(
   try {
     const proc = Bun.spawn([bin, ...args], {
       ...options,
-      env: { ...process.env, ...(options.env ?? {}) },
+      env: { ...minimalEnv(), ...(options.env ?? {}) },
     });
     activeProcs.add(proc);
     void proc.exited.finally(() => {
@@ -186,7 +206,7 @@ export function killActiveProcs(): void {
   }
 }
 
-function redactArgs(args: string[]): string[] {
+export function redactArgs(args: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -205,7 +225,8 @@ function redactArgs(args: string[]): string[] {
       continue;
     }
     out.push(name);
-    if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
+    // Over-redact rather than leak: a password may itself start with "-".
+    if (i + 1 < args.length) {
       out.push("***");
       i++;
     }
@@ -461,6 +482,10 @@ export class Rclone {
     opts: { rclonex?: boolean } = {},
   ): Promise<Rclone> {
     const root = (await getSetting("scan_root", "")) ?? "";
+    // An empty root joins to absolute local paths; never build one.
+    if (!root.trim()) {
+      throw new Error("scan_root is not configured");
+    }
     const flagsRaw = (await getSetting("remote_flags", "")) ?? "";
     const flagsRawList = stripConfFlags(
       flagsRaw.split(/\s+/).filter((f) => f.length > 0),
@@ -787,7 +812,7 @@ export class Rclone {
       buffer += decoder.decode();
       if (buffer) handleLine(buffer);
     };
-    await Promise.all([pump(proc.stdout), pump(proc.stderr)]);
+    await Promise.all([pump(proc.stdout ?? null), pump(proc.stderr ?? null)]);
     flush(true);
     await flushChain;
     const code = await proc.exited;
@@ -855,6 +880,8 @@ export class Rclone {
       // top level so archive contents that are themselves named like the
       // temp dir are still promoted. Absolute temp dirs need no exclusion.
       "--delete-empty-src-dirs",
+      // Never overwrite a same-named unrelated file at the destination.
+      "--immutable",
       "--stats",
       "1s",
       "--stats-one-line",
@@ -893,7 +920,8 @@ export class Rclone {
     this.announce(args);
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
-      stderr: "pipe",
+      // Never read: an unread pipe fills (64KB) and blocks the child.
+      stderr: "ignore",
     });
     const [out, code] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -942,6 +970,7 @@ export class Rclone {
         "moveto",
         `${this.root}/${rel}`,
         `${this.root}/${subdir}/${rel}`,
+        "--immutable",
         "--stats",
         "1s",
         "--stats-one-line",
@@ -963,7 +992,8 @@ export class Rclone {
     const args = [...this.confArgs(), "lsl", `${this.root}/${rel}`, ...this.flags];
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
-      stderr: "pipe",
+      // Never read: an unread pipe fills (64KB) and blocks the child.
+      stderr: "ignore",
     });
     const [out, code] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -1043,7 +1073,8 @@ export class Rclone {
     const args = [...this.confArgs(), "lsjson", `${this.root}/${rel}`, ...this.flags];
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
-      stderr: "pipe",
+      // Never read: an unread pipe fills (64KB) and blocks the child.
+      stderr: "ignore",
     });
     const [out, code] = await Promise.all([
       new Response(proc.stdout).text(),

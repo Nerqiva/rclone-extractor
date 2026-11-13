@@ -199,6 +199,35 @@ function resetCancelCache(): void {
   cancelCache = { at: 0, value: "0" };
 }
 
+// Run heartbeat. recoverStale only reclaims runs whose heartbeat is older
+// than its staleness threshold, so a second instance never closes a live
+// peer's run. Throttled: one write per 30 s is plenty.
+const TOUCH_THROTTLE_MS = 30_000;
+let lastTouchAt = 0;
+
+async function touchRun(runId: number): Promise<void> {
+  const nowMs = Date.now();
+  if (nowMs - lastTouchAt < TOUCH_THROTTLE_MS) return;
+  lastTouchAt = nowMs;
+  try {
+    await store.run("UPDATE runs SET last_touch_at = ? WHERE id = ?", [
+      new Date(nowMs).toISOString(),
+      runId,
+    ]);
+  } catch {
+    // heartbeat is auxiliary; never fail an archive over it
+  }
+}
+
+/** Shared onStats closure for transfers: updates the live panel and the
+ * run's heartbeat (a 4-hour extract must not look dead to a peer). */
+function statsTracker(runId: number) {
+  return (stats: ExtractStats) => {
+    engineState.commandStats = stats;
+    void touchRun(runId);
+  };
+}
+
 /** Tag an archive as processed by this run (Logs page Archives tab). */
 async function markRunTouch(archiveId: number, runId: number): Promise<void> {
   try {
@@ -206,6 +235,7 @@ async function markRunTouch(archiveId: number, runId: number): Promise<void> {
   } catch {
     // tagging is auxiliary; never fail the archive over it
   }
+  await touchRun(runId);
 }
 
 async function cancelRequestedCached(): Promise<boolean> {
@@ -230,62 +260,158 @@ async function cancelRequestedCached(): Promise<boolean> {
  * signal handler that exits early). `reason` is recorded on the run so the
  * Progress and Logs pages can show why it was killed.
  */
+/**
+ * A crash between trash() succeeding and the done-UPDATE leaves the row in
+ * 'extracting' although the files are already in the trash; re-queueing
+ * would fail it forever. When the trash copy exists, finalize as done.
+ * Only call in a context where rclone calls are acceptable — never from the
+ * signal handler.
+ */
+/**
+ * Archives whose trash copy exists were fully processed — the crash happened
+ * between trash() and the done-UPDATE. Finalize them as done instead of
+ * re-queueing into a permanent extract failure. Only ever called with the
+ * ids of archives this recovery owns (see recoverStale).
+ */
+async function settleTrashMovedArchives(ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const ph = ids.map(() => "?").join(", ");
+  const rows = await store.query<{ id: number | string; path: string }>(
+    `SELECT id, path FROM archives WHERE status='extracting' AND id IN (${ph})`,
+    ids,
+  );
+  if (rows.length === 0) return 0;
+  let rc: Rclone | null = null;
+  const trash = parseTrashSubdir((await getSetting("trash_subdir", TRASH)) ?? TRASH);
+  if (trash) {
+    try {
+      rc = await Rclone.fromSettings();
+    } catch {
+      rc = null; // remote unreachable — fall back to plain re-queue
+    }
+  }
+  if (!rc) return 0;
+  let settled = 0;
+  for (const row of rows) {
+    const rel = String(row.path);
+    if (!isSafeRel(rel)) continue;
+    let hit = false;
+    try {
+      hit = await rc.existsPath(`${trash}/${rel}`);
+    } catch {
+      hit = false;
+    }
+    if (!hit) continue;
+    await store.run(
+      "UPDATE archives SET status='done', error_kind=NULL, updated_at=? WHERE id=?",
+      [now(), row.id],
+    );
+    await insertLogLines(
+      { scope: "archive", refId: Number(row.id), kind: "extract" },
+      ["recovered: archive was already moved to trash; finalized as done"],
+    ).catch(() => {});
+    settled++;
+  }
+  return settled;
+}
+
+// A run row with no finish time is only treated as crashed (and reclaimed)
+// once its heartbeat is this old. Anything fresher belongs to a live peer
+// process and is left completely alone.
+const STALE_MS = 10 * 60 * 1000;
+
+// One delayed re-check at most: a crash seconds before a replica boots must
+// still be reclaimed once it goes quiet for STALE_MS, instead of sitting in
+// 'extracting' forever (boot/start recovery only runs at those moments).
+let recheckPending = false;
+
 export async function recoverStale(
   recoverArchives = true,
   reason = "previous process exited mid-run (crash or kill)",
   excludeRunId = -1,
+  settleTrash = false,
 ): Promise<number> {
-  const before = await store.query<{ c: number }>(
-    "SELECT COUNT(*) AS c FROM archives WHERE status='extracting'",
+  const cutoffIso = new Date(Date.now() - STALE_MS).toISOString();
+  const unfinished = await store.query<{
+    id: number | string;
+    started_at: string | null;
+    last_touch_at: string | null;
+  }>(
+    "SELECT id, started_at, last_touch_at FROM runs WHERE finished_at IS NULL AND id != ?",
+    [excludeRunId],
   );
-  const n = Number(before[0]?.c ?? 0);
-  if (n > 0) {
+  const staleRunIds: number[] = [];
+  let freshPeer = false;
+  for (const r of unfinished) {
+    // Legacy rows predate the heartbeat; their start time is the best signal.
+    const base = r.last_touch_at ?? r.started_at ?? "";
+    if (base < cutoffIso) staleRunIds.push(Number(r.id));
+    else freshPeer = true;
+  }
+  const extracting = await store.query<{ id: number | string; last_run_id: number | null }>(
+    "SELECT id, last_run_id FROM archives WHERE status='extracting'",
+  );
+  const staleSet = new Set(staleRunIds);
+  const owned = extracting.filter((a) => {
+    const rid = Number(a.last_run_id ?? 0);
+    if (rid) return staleSet.has(rid);
+    // Untagged rows: no owner signal — reclaim only when nothing is live.
+    return !freshPeer;
+  });
+  const n = owned.length;
+  if (owned.length > 0) {
+    const ownedIds = owned.map((a) => Number(a.id));
+    const ph = ownedIds.map(() => "?").join(", ");
     if (recoverArchives) {
+      if (settleTrash) {
+        const settled = await settleTrashMovedArchives(ownedIds);
+        if (settled > 0) {
+          console.log(`recoverStale: finalized ${settled} archive(s) already in trash as done`);
+        }
+      }
       await store.run(
-        "UPDATE archives SET status='queued', updated_at=? WHERE status='extracting'",
-        [now()],
+        `UPDATE archives SET status='queued', updated_at=? WHERE status='extracting' AND id IN (${ph})`,
+        [now(), ...ownedIds],
       );
     } else {
       // No binary output exists for these; store a webapp diagnostic per
       // archive so the error row's Copy/Download is not an empty 404.
-      const rows = await store.query<{ id: number | string }>(
-        "SELECT id FROM archives WHERE status='extracting'",
-      );
       await store.run(
-        "UPDATE archives SET status='failed', error_kind='killed', updated_at=? WHERE status='extracting'",
-        [now()],
+        `UPDATE archives SET status='failed', error_kind='killed', updated_at=? WHERE status='extracting' AND id IN (${ph})`,
+        [now(), ...ownedIds],
       );
-      for (const row of rows) {
+      for (const a of owned) {
         await insertLogLines(
-          { scope: "archive", refId: Number(row.id), kind: "extract" },
+          { scope: "archive", refId: Number(a.id), kind: "extract" },
           ["killed: app stopped before extraction finished"],
         ).catch(() => {});
       }
     }
   }
-  // A run row with no finish time is a run from a previous process. Close it so
-  // the logs page and progress panel do not show it as indefinitely running,
-  // and leave a log line behind so the interruption and its cause are visible
-  // in both the main and the errors log (nothing else survives a crash).
-  // excludeRunId keeps the caller's own freshly created row out of this.
-  const stale = await store.query<{ id: number | string }>(
-    "SELECT id FROM runs WHERE finished_at IS NULL AND id != ?",
-    [excludeRunId],
-  );
-  await store.run(
-    "UPDATE runs SET finished_at=?, outcome='killed', interrupted=1, interrupted_reason=?, error_kind='killed' WHERE finished_at IS NULL AND id != ?",
-    [now(), reason, excludeRunId],
-  );
-  for (const row of stale) {
-    const refId = Number(row.id);
-    await insertLogLines(
-      { scope: "run", refId, kind: "main" },
-      [`[killed] ${reason}`],
-    ).catch(() => {});
-    await insertLogLines(
-      { scope: "run", refId, kind: "errors" },
-      [`[killed] ${reason}`],
-    ).catch(() => {});
+  if (freshPeer && !recheckPending) {
+    recheckPending = true;
+    const t = setTimeout(() => {
+      recheckPending = false;
+      void recoverStale(recoverArchives, reason, excludeRunId, settleTrash).catch(() => {});
+    }, STALE_MS);
+    t.unref?.();
+  }
+  if (staleRunIds.length > 0) {
+    const ph = staleRunIds.map(() => "?").join(", ");
+    await store.run(
+      `UPDATE runs SET finished_at=?, outcome='killed', interrupted=1, interrupted_reason=?, error_kind='killed' WHERE finished_at IS NULL AND id IN (${ph})`,
+      [now(), reason, ...staleRunIds],
+    );
+    for (const id of staleRunIds) {
+      await insertLogLines(
+        { scope: "run", refId: id, kind: "main" },
+        [`[killed] ${reason}`],
+      ).catch(() => {});
+      await insertLogLines(
+        { scope: "run", refId: id, kind: "errors" },
+        [`[killed] ${reason}`],
+      ).catch(() => {});
+    }
   }
   return n;
 }
@@ -390,6 +516,7 @@ export async function runEngine(
   logger.info(`run ${runRowId} started`);
   engineState.runId = runRowId;
   engineState.startedAt = startedAt;
+  await touchRun(runRowId);
 
   if (!scanRoot) {
     await abortWithError("no_scan_root", "scan_root not set");
@@ -412,7 +539,7 @@ export async function runEngine(
 
   try {
     const resumeEnabled = (await getSetting("resume", "1")) === "1";
-    const recovered = await recoverStale(resumeEnabled, undefined, runRowId);
+    const recovered = await recoverStale(resumeEnabled, undefined, runRowId, true);
     if (recovered > 0) {
       console.log(
         resumeEnabled
@@ -481,24 +608,21 @@ export async function runEngine(
     // Sliding-window buffer for random-access formats read by rclonex
     // (7Z, ISO) — stored as bytes; 0 disables the override (rclonex keeps
     // its own default).
-    const rclonexBufferSize = Number(
-      await getSetting("rclonex_archive_buffer_size", "16777216"),
-    );
+    const rawBuffer = await getSetting("rclonex_archive_buffer_size", "16777216");
+    const rclonexBufferSize = Number(rawBuffer);
     const rclonexFlags: string[] = [];
     if (rclonexPasswordEnabled && rclonexPassword) {
       rclonexFlags.push("--archive-password", rclonexPassword);
     }
-    if (rclonexBufferSize > 0) {
-      if (Number.isFinite(rclonexBufferSize)) {
-        rclonexFlags.push(
-          "--archive-window-size",
-          String(Math.floor(rclonexBufferSize)),
-        );
-      } else {
-        logger.warn(
-          `rclonex_archive_buffer_size is invalid (${await getSetting("rclonex_archive_buffer_size", "")}); the buffer override is ignored`,
-        );
-      }
+    if (!Number.isFinite(rclonexBufferSize) || rclonexBufferSize < 0) {
+      logger.warn(
+        `rclonex_archive_buffer_size is invalid (${rawBuffer}); the buffer override is ignored`,
+      );
+    } else if (rclonexBufferSize > 0) {
+      rclonexFlags.push(
+        "--archive-window-size",
+        String(Math.floor(rclonexBufferSize)),
+      );
     }
     const autoSkipKnown = (await getSetting("auto_skip_known", "1")) === "1";
     const dryRun = (await getSetting("dry_run", "0")) === "1";
@@ -556,6 +680,7 @@ export async function runEngine(
       reuseScan || skipListingAtStart
         ? null
         : await rc.list(async (rel, size) => {
+      await touchRun(runRowId);
       if (engineState.skipListing) return false;
       if (await cancelRequestedCached()) return false;
       // A hostile or corrupt remote could return paths that escape the scan
@@ -642,7 +767,9 @@ export async function runEngine(
       if (!skipConsumed && listed.streamError) {
         await setSetting("scan_cache_state", "incomplete");
         const cancelRequested =
-          engineState.forceStop || (await getSetting("cancel", "0")) === "1";
+          engineState.forceStop ||
+          engineState.stopRequested ||
+          (await getSetting("cancel", "0")) === "1";
         // A force-stopped listing is an intentional stop, not a failure.
         if (!cancelRequested) {
           const msg = "listing stream failed";
@@ -662,7 +789,9 @@ export async function runEngine(
         // A hard stop kills the listing process; a non-zero exit then means
         // the user interrupted the run, not that the remote broke.
         const cancelRequested =
-          engineState.forceStop || (await getSetting("cancel", "0")) === "1";
+          engineState.forceStop ||
+          engineState.stopRequested ||
+          (await getSetting("cancel", "0")) === "1";
         if (cancelRequested) {
           logger.info("listing stopped by user");
         } else {
@@ -826,9 +955,10 @@ export async function runEngine(
           // `archive list` reads RAR/7Z fine, rclonex does not extend it and
           // would only add a full-stream re-read.
           setActivity("Inspecting archive");
-          const listOut = await rc.archiveList(rel, ref, (entry) =>
-            addArchiveEntry(stats, entry.path, entry.size),
-          );
+          const listOut = await rc.archiveList(rel, ref, (entry) => {
+            addArchiveEntry(stats, entry.path, entry.size);
+            void touchRun(runRowId);
+          });
           // Skip-archive takes precedence over the inspection outcome:
           // re-queue the archive instead of classifying/extracting it.
           throwIfSkipArchive();
@@ -876,9 +1006,7 @@ export async function runEngine(
           tmp,
           dryRun,
           ref,
-          (stats) => {
-            engineState.commandStats = stats;
-          },
+          statsTracker(runRowId),
           useRclonex ? rclonexFlags : undefined,
         );
         setActivity("");
@@ -928,9 +1056,12 @@ export async function runEngine(
             );
             setActivity("");
             throwIfSkipArchive();
-            if (listOut.code !== 0 && exStats.total === 0) {
+            // A listing that failed partway through streamed partial data;
+            // classification of a partial tree would purge it wrongly.
+            const listFailed = Boolean(listOut.streamError) || listOut.code !== 0;
+            if (listFailed) {
               warn(
-                `post-extraction listing failed for ${rel} [$ ${listOut.command}]; continuing`,
+                `post-extraction listing failed for ${rel} [$ ${listOut.command}]; continuing unclassified`,
               );
             } else if (exStats.total > 0) {
               const reason = classifyArchive(exStats);
@@ -960,9 +1091,7 @@ export async function runEngine(
             result = "skipped";
           } else {
           setActivity("Moving to destination");
-          const promoted = await rc.promote(rel, tmp, dryRun, ref, tmpTop, (stats) => {
-            engineState.commandStats = stats;
-          });
+          const promoted = await rc.promote(rel, tmp, dryRun, ref, tmpTop, statsTracker(runRowId));
           setActivity("");
           throwIfSkipArchive();
           if (promoted.code !== 0) {
@@ -994,9 +1123,7 @@ export async function runEngine(
             throwIfSkipArchive();
 
             setActivity("Moving to trash");
-            const trashed = await rc.trash(rel, trashSubdir, dryRun, ref, (stats) => {
-              engineState.commandStats = stats;
-            });
+            const trashed = await rc.trash(rel, trashSubdir, dryRun, ref, statsTracker(runRowId));
             setActivity("");
             throwIfSkipArchive();
             if (trashed.code !== 0) {

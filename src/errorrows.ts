@@ -49,7 +49,7 @@ export function renderErrorCards(rows: ErrorRow[]): string {
         </div>
         <div class="error-path muted">${esc(r.path)}</div>
         <div class="error-card-foot">
-          <span class="muted" title="${esc(r.updated_at)}">${relativeTime(r.updated_at)}</span>
+          <span class="muted" title="${esc(r.updated_at)}">${esc(relativeTime(r.updated_at))}</span>
           <span class="error-actions">
             <button class="btn small" data-copy-url="/download/archive/${encodeURIComponent(String(r.id))}?kind=extract"
               title="Copy the full error log" aria-label="Copy error log for ${esc(name)}">Copy</button>

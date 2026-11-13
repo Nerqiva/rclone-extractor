@@ -28,7 +28,7 @@ beforeAll(async () => {
   const scanRoot = join(base, "scan");
   mkdirSync(scanRoot, { recursive: true });
 
-  // STUB_BLOCK selects which operation hangs (until the engine kills it):
+  // RCLONE_STUB_BLOCK selects which operation hangs (until the engine kills it):
   //   lsf     - the recursive listing blocks forever
   //   list    - the archive inspection blocks forever
   //   extract - the extraction blocks forever
@@ -39,18 +39,18 @@ if [ "$1" = "--config" ]; then shift 2; fi
 if [ "$1" = "lsf" ]; then
   case "$*" in
     *--recursive*)
-      if [ "$STUB_BLOCK" = "lsf" ]; then exec sleep 3600; fi
+      if [ "$RCLONE_STUB_BLOCK" = "lsf" ]; then exec sleep 3600; fi
       echo "./victim.zip;100000"; exit 0 ;;
     *) exit 0 ;;
   esac
 fi
 if [ "$1" = "archive" ] && [ "$2" = "list" ]; then
-  if [ "$STUB_BLOCK" = "list" ]; then exec sleep 3600; fi
+  if [ "$RCLONE_STUB_BLOCK" = "list" ]; then exec sleep 3600; fi
   printf '40000 ./big.bin\\n'
   exit 0
 fi
 if [ "$1" = "archive" ] && [ "$2" = "extract" ]; then
-  if [ "$STUB_BLOCK" = "extract" ]; then exec sleep 3600; fi
+  if [ "$RCLONE_STUB_BLOCK" = "extract" ]; then exec sleep 3600; fi
   exit 0
 fi
 exit 0
@@ -88,14 +88,14 @@ beforeEach(async () => {
   engine.engineState.failed = 0;
   engine.engineState.skipped = 0;
   engine.engineState.total = 0;
-  process.env.STUB_BLOCK = "";
+  process.env.RCLONE_STUB_BLOCK = "";
 });
 
 test("skip listing stops the scan early and continues with the stored queue", async () => {
   await db!.store.run(
     "INSERT INTO archives(path, size, status, created_at, updated_at) VALUES('seeded.zip', 100000, 'queued', 't', 't')",
   );
-  process.env.STUB_BLOCK = "lsf";
+  process.env.RCLONE_STUB_BLOCK = "lsf";
   const done = engine.runEngine();
   const sawListing = await waitFor(() => engine.engineState.stage === "listing");
   expect(sawListing).toBe(true);
@@ -114,7 +114,7 @@ test("skip listing stops the scan early and continues with the stored queue", as
 });
 
 test("skip inspection bypasses the inspection and extracts the archive", async () => {
-  process.env.STUB_BLOCK = "list";
+  process.env.RCLONE_STUB_BLOCK = "list";
   const done = engine.runEngine();
   const sawInspect = await waitFor(
     () => engine.engineState.activity === "Inspecting archive",
@@ -131,7 +131,7 @@ test("skip inspection bypasses the inspection and extracts the archive", async (
 });
 
 test("skip archive re-queues the current archive and finishes the run", async () => {
-  process.env.STUB_BLOCK = "extract";
+  process.env.RCLONE_STUB_BLOCK = "extract";
   const done = engine.runEngine();
   const sawExtract = await waitFor(
     () => engine.engineState.activity === "Extracting",

@@ -537,7 +537,14 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
   `auto_skip_known`).
 - **Start** re-queues archives in the `failed` state and clears their
   `error_kind`. Stale `extracting` rows are also recovered on boot/Start
-  (re-queued with `resume` on, marked `killed` with it off).
+  (re-queued with `resume` on, marked `killed` with it off). Recovery is
+  heartbeat-based: a run is only treated as crashed once its heartbeat
+  (`runs.last_touch_at`, bumped while the engine lists, inspects and
+  extracts/promotes/moves) is older than 10 minutes — a second instance
+  pointed at the same shared Postgres during a rolling deploy or as a
+  replica never closes or re-queues a live peer's run; a run abandoned by a
+  crashed peer is reclaimed on the next boot/start or, at the latest, by a
+  one-shot 10-minute re-check the process schedules on finding fresh rows.
 - **Stop** sits at the right edge of the controls row and asks for
   confirmation first (just the two choices): **Soft stop** lets the
   current archive finish; **Hard
@@ -633,6 +640,9 @@ button is not possible.
 - The login throttle is best-effort and per-IP (5 failures / 10 minutes). It
   uses the socket IP unless `TRUST_PROXY=1`, in which case it trusts the
   first `X-Forwarded-For` entry — set that only behind a proxy that sets it.
+  When `TRUST_PROXY=1`, a client can spoof `X-Forwarded-For` and defeat the
+  per-IP throttle entirely; prefer adding a network-level rate limit in
+  front of the app if you need it.
 - Note: sessions did not exist as server-side rows before this; upgrading
   signs everyone out once.
 

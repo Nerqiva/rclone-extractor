@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS runs(
   outcome TEXT NOT NULL DEFAULT '',
   error_kind TEXT,
   last_archive TEXT,
-  last_command TEXT
+  last_command TEXT,
+  last_touch_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS log_lines(
@@ -88,7 +89,8 @@ CREATE TABLE IF NOT EXISTS runs(
   outcome TEXT NOT NULL DEFAULT '',
   error_kind TEXT,
   last_archive TEXT,
-  last_command TEXT
+  last_command TEXT,
+  last_touch_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS log_lines(
@@ -157,10 +159,40 @@ export function schemaStmtPreview(stmt: string): string {
  * Convert a `?`-placeholder statement into a Postgres `$n`-placeholder one.
  * Applies only the divergent patterns the app uses (see PG_SCHEMA and the
  * INSERT OR IGNORE / INSERT OR REPLACE rewrites below).
+ * String literals may legitimately contain '?'; placeholders inside quotes
+ * are not placeholders, so scan and only rewrite outside of them.
  */
 export function toPgPlaceholders(sql: string): string {
   let n = 0;
-  return sql.replace(/\?/g, () => `$${++n}`);
+  let out = "";
+  let quote: string | null = null;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    if (quote) {
+      out += ch;
+      if (ch === quote) {
+        // SQL escapes a quote by doubling it ('' or ""); consume it as part
+        // of the literal, never as a terminator.
+        if (sql[i + 1] === quote) {
+          out += sql[++i];
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === "?") {
+      out += `$${++n}`;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 export function toPgInsert(sql: string): string {

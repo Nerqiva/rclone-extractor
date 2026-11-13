@@ -1150,11 +1150,11 @@ textarea {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--muted);
   background: transparent;
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 600;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
   font-style: italic;
   line-height: 1;
   cursor: pointer;

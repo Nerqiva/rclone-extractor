@@ -9,7 +9,8 @@ import {
   addArchiveEntry,
   classifyArchive,
 } from "../src/archive";
-import { parseArchiveListLine } from "../src/rclone";
+import { parseArchiveListLine, redactArgs } from "../src/rclone";
+import { isSafeRel } from "../src/archive";
 
 test("supported", () => {
   expect(isSupported("a.zip")).toBe(true);
@@ -165,4 +166,24 @@ test("classifyArchive: torrent takes precedence over tiny/website", () => {
     ["x.js", 100],
   ]);
   expect(classifyArchive(stats)).toBe("torrent");
+});
+
+test("isSafeRel rejects backslash traversal and control characters", () => {
+  expect(isSafeRel("dir/file.zip")).toBe(true);
+  expect(isSafeRel("..\\evil")).toBe(false);
+  expect(isSafeRel("dir\\..\\evil")).toBe(false);
+  expect(isSafeRel("dir\nwith/newline.zip")).toBe(false);
+  expect(isSafeRel("dir\rcarriage.zip")).toBe(false);
+  expect(isSafeRel("dir/tab\there.zip")).toBe(false);
+});
+
+test("redactArgs redacts a sensitive value even when it starts with a dash", () => {
+  const redacted = redactArgs(["rclonex", "archive", "extract", "--archive-password", "-p4ssw0rd", "--size", "10"]);
+  expect(redacted.join(" ")).not.toContain("-p4ssw0rd");
+  expect(redacted).toContain("***");
+  expect(redacted).toContain("--size");
+  // inline form still redacted
+  expect(redactArgs(["--archive-password=hunter2"])[0]).toBe("--archive-password=***");
+  // non-sensitive flags pass through untouched
+  expect(redactArgs(["--config", "/app/rclone.conf"])[0]).toBe("--config");
 });

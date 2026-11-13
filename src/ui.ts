@@ -1,4 +1,18 @@
 import { APP_TZ } from "./config";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// Cache buster for /public/* assets: HTML is no-store, but browsers apply
+// heuristic caching to the stylesheet/scripts, which once served a stale
+// pre-tooltip stylesheet next to fresh HTML. The release-bumped VERSION
+// changes the URL on every deploy; /public/* itself revalidates (server.ts).
+const APP_VERSION = readFileSync(
+  join(import.meta.dir, "..", "VERSION"),
+  "utf8",
+).trim();
+export function asset(name: string): string {
+  return `/public/${name}?v=${APP_VERSION}`;
+}
 
 /** Sanitize a message for an HX-Trigger appToast header (ASCII-safe). */
 function sanitizeToast(message: string): string {
@@ -50,7 +64,7 @@ export function fmtDisplayTime(iso: string, withDate = false): string {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
-        hour12: false,
+        hourCycle: "h23",
         timeZoneName: "short",
       }
     : {
@@ -58,7 +72,7 @@ export function fmtDisplayTime(iso: string, withDate = false): string {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
-        hour12: false,
+        hourCycle: "h23",
       };
   return new Intl.DateTimeFormat("en-GB", opts).format(new Date(t));
 }
@@ -174,6 +188,9 @@ const GLOBAL_SCRIPT = `<script>
     if (cfm && !cfm.hasAttribute("data-confirmed")) return;
     if (btn.id === "confirm-ok" || btn.disabled) return;
     if (btn.getAttribute("aria-disabled") === "true") return;
+    // Buttons that only open/close UI (modals, inline editors) have no
+    // completion path; marking them busy disabled them for 60 s.
+    if (btn.closest("[data-modal-open], [data-modal-close], [data-edit], [data-cancel]")) return;
     var trg = btn.getAttribute("hx-trigger");
     if (trg && trg.indexOf("every") !== -1) return;
     mark(btn, true);
@@ -272,6 +289,33 @@ const GLOBAL_SCRIPT = `<script>
     }
   }, true);
   window.addEventListener("scroll", closeInfoTips, true);
+  // Polled fragments (progress panel, controls, the Archives tab) swap every
+  // 1–2 s, which would wipe an open info tooltip mid-read. Skip the swap
+  // while one is showing inside it; it resumes when the tooltip closes.
+  // In addition: when a polled fragment re-renders to the exact bytes it
+  // already shows, skip the swap — identical polls would only throw away
+  // focus, open log views and an in-flight click. Live fragments (elapsed
+  // timers) still swap as before.
+  var pollHtml = window.__pollHtml || (window.__pollHtml = {});
+  document.body.addEventListener("htmx:beforeSwap", function (event) {
+    var target = event.detail && event.detail.target;
+    if (!target) return;
+    if (target.querySelector && target.querySelector(".info-tip.open")) {
+      event.preventDefault();
+      return;
+    }
+    var elt = event.detail.elt;
+    var trigger = elt && elt.getAttribute ? elt.getAttribute("hx-trigger") : null;
+    if (!trigger || trigger.indexOf("every") === -1) return;
+    var id = target.id || (elt && elt.id) || "";
+    if (!id) return;
+    var response = typeof event.detail.serverResponse === "string" ? event.detail.serverResponse : "";
+    if (pollHtml[id] === response) {
+      event.preventDefault();
+      return;
+    }
+    pollHtml[id] = response;
+  });
   // A page restored from the back-forward cache can show a stale run state
   // (e.g. an old Stop button). Re-fetch fresh instead.
   window.addEventListener("pageshow", function (event) {
@@ -282,16 +326,27 @@ const GLOBAL_SCRIPT = `<script>
     if (event.key === "Escape") closeInfoTips();
   });
 
+  var lastOpener = null;
   function showModal(id) {
     var overlay = document.getElementById(id);
     if (!overlay) return;
+    lastOpener = document.activeElement;
     overlay.hidden = false;
-    var first = overlay.querySelector("button");
-    if (first) first.focus();
+    // Focus the benign choice (both modals end with Cancel), never the
+    // destructive default.
+    var buttons = overlay.querySelectorAll(".modal-actions button");
+    var benign = buttons[buttons.length - 1] || overlay.querySelector("button");
+    if (benign) benign.focus();
   }
   function hideModals() {
     var overlays = document.querySelectorAll(".modal-overlay");
     for (var i = 0; i < overlays.length; i++) overlays[i].hidden = true;
+    // A stale confirmed button or opener must not survive an Escape close.
+    pendingConfirm = null;
+    if (lastOpener && document.contains(lastOpener) && lastOpener.focus) {
+      lastOpener.focus();
+    }
+    lastOpener = null;
   }
 
   var pendingConfirm = null;
@@ -328,6 +383,22 @@ const GLOBAL_SCRIPT = `<script>
 
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape") hideModals();
+    if (event.key !== "Tab") return;
+    var open = document.querySelector(".modal-overlay:not([hidden])");
+    if (!open) return;
+    var focusables = open.querySelectorAll(
+      "button, [href], input, select, textarea",
+    );
+    if (!focusables.length) return;
+    var first = focusables[0];
+    var last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
 
   document.body.addEventListener("click", function (event) {
@@ -349,8 +420,11 @@ const GLOBAL_SCRIPT = `<script>
 const MODALS = `<div class="modal-overlay" id="stop-modal" hidden role="dialog" aria-modal="true" aria-label="Stop">
   <div class="modal-card">
     <div class="modal-actions">
-      <button type="button" class="btn danger" hx-post="/run/stop" hx-vals='{"mode":"soft"}' hx-target="#controls" hx-swap="outerHTML" data-modal-close>Soft stop</button>
-      <button type="button" class="btn danger solid" hx-post="/run/stop" hx-vals='{"mode":"hard"}' hx-target="#controls" hx-swap="outerHTML" data-modal-close>Hard stop</button>
+      <!-- hx-swap="none" swaps nothing but still runs the stop request and
+           the HX-Trigger toast on every page (incl. those without #controls);
+           the polling controls refresh themselves on the next tick. -->
+      <button type="button" class="btn danger" hx-post="/run/stop" hx-vals='{"mode":"soft"}' hx-target="body" hx-swap="none" data-modal-close>Soft stop</button>
+      <button type="button" class="btn danger solid" hx-post="/run/stop" hx-vals='{"mode":"hard"}' hx-target="body" hx-swap="none" data-modal-close>Hard stop</button>
       <button type="button" class="btn ghost" data-modal-close>Cancel</button>
     </div>
   </div>
@@ -438,12 +512,13 @@ function setRail(open) {
 }
 
 var isMobile = window.matchMedia("(max-width: 719px)").matches;
-var stored = localStorage.getItem("rail-open");
+var stored = null;
+try { stored = localStorage.getItem("rail-open"); } catch (e) { stored = null; }
 setRail(isMobile ? false : stored !== "0");
 
 btn.addEventListener("click", function () {
   setRail(!bodyEl.classList.contains("rail-open"));
-  localStorage.setItem("rail-open", bodyEl.classList.contains("rail-open") ? "1" : "0");
+  try { localStorage.setItem("rail-open", bodyEl.classList.contains("rail-open") ? "1" : "0"); } catch (e) {}
 });
 overlay.addEventListener("click", function () {
   setRail(false);
@@ -456,9 +531,9 @@ overlay.addEventListener("click", function () {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${csrf ? `<meta name="csrf-token" content="${esc(csrf)}">` : ""}
 <title>${esc(title)} · rclone-extractor</title>
-<link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
-<link rel="stylesheet" href="/public/styles.css">
-<script src="/public/htmx.min.js" defer></script>
+<link rel="icon" type="image/svg+xml" href="${asset("favicon.svg")}">
+<link rel="stylesheet" href="${asset("styles.css")}">
+<script src="${asset("htmx.min.js")}" defer></script>
 </head>
 <body>
 ${railHtml}

@@ -3,11 +3,13 @@ import { store, allSettings, SECRET_KEYS } from "../db";
 import { encryptionEnabled, encrypt } from "../crypto";
 import { engineState } from "../engine";
 import { LOG_EXPORT_LIMIT } from "../log";
+import { isSafeRel } from "../archive";
 
 export const data = new Hono();
 
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024; // 50 MB of JSON is already absurd
 const LOG_LINES_PER_ARCHIVE_IMPORT_LIMIT = 100_000;
+const IMPORT_ARRAY_LIMIT = 100_000;
 
 data.post("/export", async (c) => {
   const form = await c.req.formData().catch(() => null);
@@ -47,6 +49,12 @@ function omitSecrets(settings: Record<string, string>): Record<string, string> {
 
 type RawRecord = Record<string, unknown>;
 
+function asDateStr(v: unknown, max = 64): string | null {
+  const s = asStr(v, max);
+  if (!s) return null;
+  return Number.isNaN(Date.parse(s)) ? null : s;
+}
+
 function asInt(v: unknown): number | null {
   const n = Number(v);
   if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
@@ -72,6 +80,7 @@ interface ValidatedArchive {
   error_kind: string | null;
   created_at: string;
   updated_at: string;
+  last_run_id: number | null;
 }
 
 interface ValidatedRun {
@@ -88,6 +97,7 @@ interface ValidatedRun {
   error_kind: string | null;
   last_archive: string | null;
   last_command: string | null;
+  last_touch_at: string | null;
 }
 
 interface ValidatedLogLine {
@@ -101,6 +111,7 @@ interface ValidatedLogLine {
 
 function validateArchives(raw: unknown): ValidatedArchive[] | string {
   if (!Array.isArray(raw)) return "archives must be an array";
+  if (raw.length > IMPORT_ARRAY_LIMIT) return `archives exceeds ${IMPORT_ARRAY_LIMIT} rows`;
   const out: ValidatedArchive[] = [];
   for (let i = 0; i < raw.length; i++) {
     const a = raw[i] as RawRecord;
@@ -111,19 +122,31 @@ function validateArchives(raw: unknown): ValidatedArchive[] | string {
     const status = asStr(a.status, 64);
     if (id === null || id < 0) return `archives[${i}].id is not a non-negative integer`;
     if (!path) return `archives[${i}].path is missing or too long`;
-    if (!Number.isFinite(size)) return `archives[${i}].size is not a number`;
+    // Paths join onto scan_root (or resolve against the local filesystem);
+    // a hostile backup must not smuggle an outside-the-root entry in.
+    if (!isSafeRel(path)) return `archives[${i}].path is not a safe relative path`;
+    if (!Number.isFinite(size) || size < 0) return `archives[${i}].size is not a non-negative number`;
     if (!status) return `archives[${i}].status is missing`;
     const error_kind = asOptStr(a.error_kind, 64);
     if (error_kind === undefined) return `archives[${i}].error_kind is not a string`;
-    const created_at = asStr(a.created_at, 64) ?? new Date().toISOString();
-    const updated_at = asStr(a.updated_at, 64) ?? new Date().toISOString();
-    out.push({ id, path, size: Math.trunc(size), status, error_kind, created_at, updated_at });
+    const created_at = asDateStr(a.created_at) ?? new Date().toISOString();
+    const updated_at = asDateStr(a.updated_at) ?? new Date().toISOString();
+    // last_run_id links the row to its run for the Archives tab; older
+    // backups predate the column and import with null.
+    const lastRunIdRaw = a.last_run_id;
+    const last_run_id =
+      lastRunIdRaw === null || lastRunIdRaw === undefined ? null : asInt(lastRunIdRaw);
+    if (last_run_id === undefined || (last_run_id !== null && last_run_id < 0)) {
+      return `archives[${i}].last_run_id is not a non-negative integer`;
+    }
+    out.push({ id, path, size: Math.trunc(size), status, error_kind, created_at, updated_at, last_run_id });
   }
   return out;
 }
 
 function validateRuns(raw: unknown): ValidatedRun[] | string {
   if (!Array.isArray(raw)) return "runs must be an array";
+  if (raw.length > IMPORT_ARRAY_LIMIT) return `runs exceeds ${IMPORT_ARRAY_LIMIT} rows`;
   const out: ValidatedRun[] = [];
   for (let i = 0; i < raw.length; i++) {
     const r = raw[i] as RawRecord;
@@ -165,7 +188,12 @@ function validateRuns(raw: unknown): ValidatedRun[] | string {
     if (last_command === undefined) {
       return `runs[${i}].last_command is not a string`;
     }
-    out.push({ id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome: outcomeValue, error_kind, last_archive, last_command });
+    // last_touch_at heartbeat: old backups predate it; import with null.
+    const last_touch_at = asOptStr(r.last_touch_at, 64);
+    if (last_touch_at === undefined) {
+      return `runs[${i}].last_touch_at is not a string`;
+    }
+    out.push({ id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome: outcomeValue, error_kind, last_archive, last_command, last_touch_at });
   }
   return out;
 }
@@ -183,7 +211,7 @@ function validateLogLines(raw: unknown): ValidatedLogLine[] | string {
     if (!scope) return `log_lines[${i}].scope must be "run" or "archive"`;
     const ref_id = asInt(l.ref_id);
     const kind = asStr(l.kind, 32);
-    if (ref_id === null) return `log_lines[${i}].ref_id is not an integer`;
+    if (ref_id === null || ref_id < 0) return `log_lines[${i}].ref_id is not a non-negative integer`;
     if (!kind) return `log_lines[${i}].kind is missing`;
     const ts = asStr(l.ts, 64) ?? new Date().toISOString();
     const level = asOptStr(l.level, 16);
@@ -273,8 +301,8 @@ data.post("/import", async (c) => {
         await tx.run("DELETE FROM log_lines WHERE scope = 'archive' AND ref_id = ?", [a.id]);
         await tx.run("DELETE FROM archives WHERE id = ? OR path = ?", [a.id, a.path]);
         await tx.run(
-          "INSERT INTO archives(id, path, size, status, error_kind, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
-          [a.id, a.path, a.size, a.status, a.error_kind, a.created_at, a.updated_at],
+          "INSERT INTO archives(id, path, size, status, error_kind, created_at, updated_at, last_run_id) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+          [a.id, a.path, a.size, a.status, a.error_kind, a.created_at, a.updated_at, a.last_run_id],
         );
       }
       if (archives.length > 0) counts.push(`${archives.length} archives`);
@@ -283,8 +311,8 @@ data.post("/import", async (c) => {
         await tx.run("DELETE FROM log_lines WHERE scope = 'run' AND ref_id = ?", [r.id]);
         await tx.run("DELETE FROM runs WHERE id = ?", [r.id]);
         await tx.run(
-          "INSERT INTO runs(id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind, last_archive, last_command) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped, r.interrupted, r.interrupted_reason, r.outcome, r.error_kind, r.last_archive, r.last_command],
+          "INSERT INTO runs(id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind, last_archive, last_command, last_touch_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [r.id, r.started_at, r.finished_at, r.total, r.done, r.failed, r.skipped, r.interrupted, r.interrupted_reason, r.outcome, r.error_kind, r.last_archive, r.last_command, r.last_touch_at],
         );
       }
       if (runs.length > 0) counts.push(`${runs.length} runs`);

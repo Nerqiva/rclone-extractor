@@ -22,7 +22,9 @@ beforeAll(async () => {
 async function seedUnfinishedRun(): Promise<number> {
   const id = await db!.store.insertReturningId(
     "INSERT INTO runs(started_at, finished_at) VALUES(?, NULL)",
-    [new Date().toISOString()],
+    // The heartbeat recovery only reclaims runs untouched for 10 minutes;
+    // a crashed run is that old by the time anyone looks at it.
+    [new Date(Date.now() - 11 * 60 * 1000).toISOString()],
   );
   return id;
 }

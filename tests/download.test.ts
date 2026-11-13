@@ -60,6 +60,10 @@ beforeAll(async () => {
   store = db.store;
   await db.initDb();
   engineState = (await import("../src/engine")).engineState;
+  const scanRoot = join(process.env.DATA_DIR!, "scan");
+  mkdirSync(scanRoot, { recursive: true });
+  const { setSetting } = db;
+  await setSetting("scan_root", scanRoot);
   const { logsapi } = await import("../src/routes/logsapi");
   const app = new Hono();
   app.route("/", logsapi);

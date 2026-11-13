@@ -348,13 +348,16 @@ logsapi.get("/download/archive-file/:id", async (c) => {
     };
     if (total !== null) {
       headers["Accept-Ranges"] = "bytes";
-      headers["Content-Length"] = String(window ? count : total);
       if (window) {
         headers["Content-Range"] = `bytes ${offset}-${offset + count - 1}/${total}`;
       }
     }
     const sizeWanted = window ? count : (total ?? 0);
     if (total !== null && sizeWanted <= MAX_BUFFERED) {
+      // Only the buffered path ships a truthful Content-Length; a streamed
+      // body may not match the stat (the remote can change size mid-flight),
+      // so advertise chunked instead.
+      headers["Content-Length"] = String(sizeWanted);
       const bytes = await buffer(stdout);
       return new Response(new Uint8Array(bytes), { status: window ? 206 : 200, headers });
     }

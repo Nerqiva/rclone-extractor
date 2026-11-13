@@ -54,6 +54,9 @@ beforeAll(async () => {
   setSetting = db.setSetting;
   await db.initDb();
   engineState = (await import("../src/engine")).engineState;
+  const scanRoot = join(process.env.DATA_DIR!, "scan");
+  mkdirSync(scanRoot, { recursive: true });
+  await setSetting("scan_root", scanRoot);
   await setSetting("trash_subdir", "trash"); // pin it; mock markers key off "trash"
   actions = (await import("../src/routes/actions")).actions;
   const app = new Hono();

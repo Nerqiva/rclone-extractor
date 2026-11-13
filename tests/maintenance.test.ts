@@ -60,6 +60,7 @@ test("clear everything wipes history, queue and caches, resets sequence and purg
   const tmpRoot = mkdtempSync(join(tmpdir(), "rx-maint-tmp-"));
   mkdirSync(join(tmpRoot, "run_123")); // app-owned run dir
   mkdirSync(join(tmpRoot, "keep-me")); // not app-owned: must survive
+  await setSetting("scan_root", mockBase);
   await setSetting("tmp_dir", tmpRoot);
   await setSetting("dry_run", "1");
   await setSetting("last_run_id", "42");
