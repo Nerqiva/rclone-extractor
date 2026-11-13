@@ -199,6 +199,15 @@ function resetCancelCache(): void {
   cancelCache = { at: 0, value: "0" };
 }
 
+/** Tag an archive as processed by this run (Logs page Archives tab). */
+async function markRunTouch(archiveId: number, runId: number): Promise<void> {
+  try {
+    await store.run("UPDATE archives SET last_run_id = ? WHERE id = ?", [runId, archiveId]);
+  } catch {
+    // tagging is auxiliary; never fail the archive over it
+  }
+}
+
 async function cancelRequestedCached(): Promise<boolean> {
   const nowMs = Date.now();
   if (nowMs - cancelCache.at >= CANCEL_CACHE_MS) {
@@ -748,6 +757,7 @@ export async function runEngine(
           "UPDATE archives SET status='failed', error_kind='unsafe_path', updated_at=? WHERE id=?",
           [now(), row.id],
         );
+        await markRunTouch(Number(row.id), runRowId);
         // No binary output exists; store the webapp diagnostic so the
         // error row's Copy/Download shows something instead of a 404.
         await insertLogLines(
@@ -777,6 +787,7 @@ export async function runEngine(
         "UPDATE archives SET status='extracting', updated_at=? WHERE id=?",
         [now(), row.id],
       );
+      await markRunTouch(Number(row.id), runRowId);
 
       const baseName = rel.slice(rel.lastIndexOf("/") + 1);
       const useRclonex =
@@ -848,6 +859,7 @@ export async function runEngine(
             "UPDATE archives SET status='skipped', error_kind=?, updated_at=? WHERE id=?",
             [skipReason, now(), row.id],
           );
+          await markRunTouch(Number(row.id), runRowId);
           // Webapp-made diagnosis (no binary output is produced for skip
           // classifications); store it so Copy/Download on the error row is
           // not an empty 404.
@@ -879,6 +891,7 @@ export async function runEngine(
               "UPDATE archives SET status='skipped', error_kind='password', updated_at=? WHERE id=?",
               [now(), row.id],
             );
+            await markRunTouch(Number(row.id), runRowId);
             await insertLogLines(ref, [
               `skipped (password): extraction failed (exit ${ex.code})`,
             ]).catch(() => {});
@@ -893,6 +906,7 @@ export async function runEngine(
               "UPDATE archives SET status='failed', error_kind='extract', updated_at=? WHERE id=?",
               [now(), row.id],
             );
+            await markRunTouch(Number(row.id), runRowId);
             fail(
               `extract failed: ${rel}`,
               `$ ${ex.command}\n${ex.tail.join("\n")}`.trim(),
@@ -938,6 +952,7 @@ export async function runEngine(
               "UPDATE archives SET status='skipped', error_kind=?, updated_at=? WHERE id=?",
               [postSkip, now(), row.id],
             );
+            await markRunTouch(Number(row.id), runRowId);
             await insertLogLines(ref, [
               `skipped (${postSkip}): extracted tree [${describeArchiveStats(exStats)}]`,
             ]).catch(() => {});
@@ -959,6 +974,7 @@ export async function runEngine(
               "UPDATE archives SET status='failed', error_kind='promote', updated_at=? WHERE id=?",
               [now(), row.id],
             );
+            await markRunTouch(Number(row.id), runRowId);
             fail(
               `promote failed: ${rel}`,
               `$ ${promoted.command}\n${promoted.tail.join("\n")}`.trim(),
@@ -988,6 +1004,7 @@ export async function runEngine(
                 "UPDATE archives SET status='failed', error_kind='trash', updated_at=? WHERE id=?",
                 [now(), row.id],
               );
+              await markRunTouch(Number(row.id), runRowId);
               fail(
                 `trash failed: ${rel}`,
                 `$ ${trashed.command}\n${trashed.tail.join("\n")}`.trim(),
@@ -997,6 +1014,7 @@ export async function runEngine(
                 "UPDATE archives SET status='done', error_kind=NULL, updated_at=? WHERE id=?",
                 [now(), row.id],
               );
+              await markRunTouch(Number(row.id), runRowId);
               logger.info(`done: ${rel}`);
               result = "done";
             }
@@ -1014,6 +1032,7 @@ export async function runEngine(
             "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=? AND status NOT IN ('done','skipped')",
             [now(), row.id],
           );
+          await markRunTouch(Number(row.id), runRowId);
           if (engineState.forceStop) {
             logger.info(`hard stop — re-queued: ${rel}`);
           } else {
@@ -1025,6 +1044,7 @@ export async function runEngine(
           "UPDATE archives SET status='failed', error_kind='spawn', updated_at=? WHERE id=?",
           [now(), row.id],
         );
+        await markRunTouch(Number(row.id), runRowId);
         // No binary output exists when the webapp itself throws (spawn
         // failure, DB error, ...); store the diagnostic so the error row's
         // Copy/Download is not empty.
@@ -1044,6 +1064,7 @@ export async function runEngine(
             "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=? AND status NOT IN ('done', 'skipped')",
             [now(), row.id],
           );
+            await markRunTouch(Number(row.id), runRowId);
           engineState.currentCommand = "";
           engineState.commandStats = null;
           engineState.activity = "";

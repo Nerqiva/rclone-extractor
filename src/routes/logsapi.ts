@@ -3,6 +3,7 @@ import { store, getSetting } from "../db";
 import { tailRendered, readAll, insertLogLines, LOG_TAIL_LIMIT, LOG_EXPORT_LIMIT } from "../log";
 import { engineState } from "../engine";
 import { readErrorRows, renderErrorCards } from "../errorrows";
+import { readArchiveLogRows, renderArchiveLogRows } from "../archiverows";
 import { Rclone } from "../rclone";
 import { isSafeRel, parseTrashSubdir, normalizeRel, TRASH } from "../archive";
 import {
@@ -98,18 +99,78 @@ logsapi.get("/download/run/:id", async (c) => {
   });
 });
 
+/** Clamp an optional `limit` query param to [1, LOG_EXPORT_LIMIT]. */
+function limitParam(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.floor(n), LOG_EXPORT_LIMIT);
+}
+
+/**
+ * Export everything a run produced as one text file: the run log, the run's
+ * error log, and every per-archive extraction log (in processing order).
+ * Section headers delimit each part; empty sections are kept so every
+ * processed archive is present. 404 when the run produced no output at all.
+ */
+logsapi.get("/download/run/:id/all", async (c) => {
+  noStore(c);
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const run = await store.get1<{ id: number | string }>(
+    "SELECT id FROM runs WHERE id = ?",
+    [id],
+  );
+  if (!run) return c.text("not found", 404);
+
+  const sep = (label: string) => `===== ${label} =====`;
+  const sections: string[] = [];
+  const main = await readAll({ scope: "run", refId: id, kind: "main" });
+  if (main.length > 0) sections.push([sep(`RUN #${id} — run log`), ...main].join("\n"));
+  const errors = await readAll({ scope: "run", refId: id, kind: "errors" });
+  if (errors.length > 0) sections.push([sep(`RUN #${id} — errors`), ...errors].join("\n"));
+  for (const a of await readArchiveLogRows(id)) {
+    const lines = await readAll({ scope: "archive", refId: Number(a.id), kind: "extract" });
+    sections.push(
+      [
+        sep(`ARCHIVE #${a.id} — ${a.path}`),
+        ...(lines.length > 0 ? lines : ["(no log lines recorded)"]),
+      ].join("\n"),
+    );
+  }
+  if (sections.length === 0) return c.text("not found", 404);
+  return new Response(sections.join("\n\n") + "\n", {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Disposition": `attachment; filename="run-${id}-all.log"`,
+    },
+  });
+});
+
 logsapi.get("/logs/archive/:id/fragment", async (c) => {
   noStore(c);
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const limit = limitParam(c.req.query("limit"), LOG_EXPORT_LIMIT);
   const { entries } = await tailRendered(
     { scope: "archive", refId: id, kind: "extract" },
-    LOG_EXPORT_LIMIT,
+    limit,
   );
   if (entries.length === 0) {
     return c.html(`<p class="muted">No log lines for this archive.</p>`);
   }
-  return c.html(entries.map((e) => e.html).join(""));
+  const tail =
+    limit < LOG_EXPORT_LIMIT
+      ? `<p class="muted">Most recent ${limit} lines — <a href="/download/archive/${id}">download the full log</a>.</p>`
+      : "";
+  return c.html(`${tail}${entries.map((e) => e.html).join("")}`);
+});
+
+/** Cards for the Archives tab (Logs page) of one run. */
+logsapi.get("/logs/archives-fragment", async (c) => {
+  noStore(c);
+  const runId = Number(c.req.query("run"));
+  if (!Number.isInteger(runId) || runId <= 0) return c.text("not found", 404);
+  return c.html(renderArchiveLogRows(await readArchiveLogRows(runId)));
 });
 
 logsapi.get("/download/archive/:id", async (c) => {

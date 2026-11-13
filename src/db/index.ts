@@ -80,6 +80,7 @@ async function initDbOnce(): Promise<void> {
   await migrateDropLogLinesSeq();
   await migrateDropSessionsCreatedAt();
   await migrateRclonexArchiveBufferSize();
+  await migrateArchivesLastRun();
 
   const seen = new Set<string>();
   const existing = await store.query<{ key: string; value: string }>(
@@ -263,6 +264,33 @@ async function removeLegacyPassword(): Promise<void> {
  * then drops the legacy keys. Runs before the defaults are inserted so a
  * legacy value is upgraded instead of silently replaced by the default.
  */
+/**
+ * Add the `archives.last_run_id` column: which run last processed the
+ * archive (NULL for archives never processed, or processed before this
+ * migration). Powers the Logs page's per-run Archives tab. Idempotent; the
+ * fresh-install schema already includes the column.
+ */
+async function migrateArchivesLastRun(): Promise<void> {
+  try {
+    await store.run(
+      "ALTER TABLE archives ADD COLUMN last_run_id BIGINT",
+    );
+    console.log("migrated: added archives.last_run_id");
+  } catch (e) {
+    const msg = String(e).toLowerCase();
+    if (!msg.includes("duplicate") && !msg.includes("already exists")) {
+      throw e;
+    }
+  }
+  try {
+    await store.run(
+      "CREATE INDEX IF NOT EXISTS idx_archives_last_run ON archives(last_run_id)",
+    );
+  } catch (e) {
+    console.warn(`could not create archives.last_run_id index: ${String(e)}`);
+  }
+}
+
 async function migrateRclonexArchiveBufferSize(): Promise<void> {
   const rows = await store.query<{ key: string; value: string }>(
     "SELECT key, value FROM settings WHERE key IN ('rclonex_window_size_enabled', 'rclonex_window_size', 'rclonex_archive_buffer_size')",

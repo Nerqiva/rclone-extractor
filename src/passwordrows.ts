@@ -50,7 +50,7 @@ export function renderPasswordList(rows: PasswordRow[]): string {
         <div class="error-card-foot">
           <span class="muted" title="${esc(r.updated_at)}">${esc(relativeTime(r.updated_at))} · ${esc(formatBytes(Number(r.size)))}</span>
           <span class="error-actions">
-            <button class="btn small" type="button" data-pw-log="${idAttr}" aria-expanded="false" aria-controls="pw-log-${idAttr}">Log view</button>
+            <button class="btn small" type="button" data-log-toggle="${idAttr}" aria-expanded="false" aria-controls="pw-log-${idAttr}">Log view</button>
             <button class="btn small" type="button" data-copy-url="/download/archive/${idAttr}?kind=extract" title="Copy the archive log" aria-label="Copy log for ${esc(name)}">Copy log</button>
             <a class="btn small ghost" href="/download/archive-file/${idAttr}" data-download-archive data-archive-id="${idAttr}">Download</a>
             ${action}

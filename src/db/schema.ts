@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS archives(
   status TEXT NOT NULL,
   error_kind TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  last_run_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS runs(
@@ -53,6 +54,8 @@ CREATE INDEX IF NOT EXISTS idx_log_lines_scope_id
 CREATE INDEX IF NOT EXISTS idx_archives_error
   ON archives(error_kind, updated_at DESC)
   WHERE error_kind IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_archives_last_run ON archives(last_run_id);
 `;
 
 export const PG_SCHEMA = `
@@ -68,7 +71,8 @@ CREATE TABLE IF NOT EXISTS archives(
   status TEXT NOT NULL,
   error_kind TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  last_run_id BIGINT
 );
 
 CREATE TABLE IF NOT EXISTS runs(
@@ -110,6 +114,8 @@ CREATE INDEX IF NOT EXISTS idx_log_lines_scope_id
 CREATE INDEX IF NOT EXISTS idx_archives_error
   ON archives(error_kind, updated_at DESC)
   WHERE error_kind IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_archives_last_run ON archives(last_run_id);
 `;
 
 /**

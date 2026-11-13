@@ -10,6 +10,7 @@ import { checkRclone, checkRclonex, pendingRcloneConfNotice } from "../rclone";
 import { tailRendered, LOG_TAIL_LIMIT } from "../log";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
+import { readArchiveLogRows, renderArchiveLogRows } from "../archiverows";
 import { progressPanel } from "./dashboard";
 
 export const pages = new Hono();
@@ -21,7 +22,7 @@ pages.get("/", async (c) => {
   // inline it here or it would never be seen on a fresh page load.
   const confNotice = pendingRcloneConfNotice();
   const noticeScript = confNotice
-    ? `<script>window.addEventListener("load",function(){window.appToast&&window.appToast(${JSON.stringify(confNotice).replace(/</g, "\u003c")},"err");});</script>`
+    ? `<script>window.addEventListener("load",function(){window.appToast&&window.appToast(${JSON.stringify(confNotice).replace(/</g, "\\u003c")},"err");});</script>`
     : "";
   const [panel, controls] = await Promise.all([
     progressPanel(),
@@ -246,7 +247,8 @@ pages.get("/logs", async (c) => {
 
   // Tab selection.
   const tabParam = c.req.query("tab");
-  const tab = tabParam === "errors" ? "errors" : "main";
+  const tab = tabParam === "errors" ? "errors" : tabParam === "archives" ? "archives" : "main";
+  const isArchivesTab = tab === "archives";
   const kind = tab === "errors" ? "errors" : "main";
 
   const running = engineState.running && engineState.runId > 0;
@@ -263,6 +265,7 @@ pages.get("/logs", async (c) => {
   const tabs = `<div class="log-tabs">
     <a class="log-tab${tab === "main" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=main">Run log</a>
     <a class="log-tab${tab === "errors" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=errors">Errors</a>
+    <a class="log-tab${tab === "archives" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=archives">Archives</a>
   </div>`;
 
   if (runs.length === 0) {
@@ -281,10 +284,15 @@ pages.get("/logs", async (c) => {
   const selected = runs.find((r) => Number(r.id) === selectedId) ?? runs[0];
   const isLive = running && Number(selected.id) === engineState.runId;
 
-  const { entries, lastId } = await tailRendered(
-    { scope: "run", refId: Number(selected.id), kind },
-    LOG_TAIL_LIMIT,
-  );
+  const { entries, lastId } = isArchivesTab
+    ? { entries: [], lastId: 0 }
+    : await tailRendered(
+        { scope: "run", refId: Number(selected.id), kind },
+        LOG_TAIL_LIMIT,
+      );
+  const archiveRows = isArchivesTab
+    ? await readArchiveLogRows(Number(selected.id))
+    : [];
   const hasLog = lastId > 0;
   const showLog = isLive || hasLog;
 
@@ -357,7 +365,13 @@ pages.get("/logs", async (c) => {
   </div>`;
 
   const downloadHref = `/download/run/${selected.id}?kind=${kind}`;
-  const copyToolbar = `<div class="log-actions" role="toolbar" aria-label="Log actions">
+  const copyToolbar = isArchivesTab
+    ? `<div class="log-actions" role="toolbar" aria-label="Archive log actions">
+      <span class="log-actions-right">
+        <a class="btn small ghost" href="/download/run/${selected.id}/all">Download all logs</a>
+      </span>
+    </div>`
+    : `<div class="log-actions" role="toolbar" aria-label="Log actions">
       <span class="log-actions-right">
         <button class="btn small" type="button" data-copy-url="${esc(downloadHref)}">Copy all</button>
         <a class="btn small ghost" href="${esc(downloadHref)}">Download ${kind === "errors" ? "errors" : "log"}</a>
@@ -365,43 +379,52 @@ pages.get("/logs", async (c) => {
     </div>`;
 
   const entriesHtml = entries.map((e) => e.html).join("");
-  const logBlock = showLog
-    ? `<div class="log-viewer" id="logViewer" data-run="${selected.id}" data-kind="${kind}" data-live="${
-        isLive ? "1" : "0"
-      }" data-last-id="${lastId}">${entriesHtml}</div>`
-    : `<div class="empty-state"><p class="muted">${
-        kind === "errors" ? "No errors in this session." : "No log lines yet."
-      }</p></div>`;
+  const pollAttr =
+    isLive && isArchivesTab
+      ? ` hx-get="/logs/archives-fragment?run=${selected.id}" hx-trigger="every 2s" hx-swap="innerHTML"`
+      : "";
+  const logBlock = isArchivesTab
+    ? `<div id="ar-list"${pollAttr}>${renderArchiveLogRows(archiveRows ?? [])}</div>`
+    : showLog
+      ? `<div class="log-viewer" id="logViewer" data-run="${selected.id}" data-kind="${kind}" data-live="${
+          isLive ? "1" : "0"
+        }" data-last-id="${lastId}">${entriesHtml}</div>`
+      : `<div class="empty-state"><p class="muted">${
+          kind === "errors" ? "No errors in this session." : "No log lines yet."
+        }</p></div>`;
 
   const body = `<div class="log-toolbar">
       ${picker}
       ${tabs}
     </div>
     ${summary}
-    ${showLog ? copyToolbar : ""}
+    ${showLog || isArchivesTab ? copyToolbar : ""}
     ${logBlock}
+    ${isArchivesTab ? LOG_TOGGLE_SCRIPT : ""}
     <script src="/public/copy.js" defer></script>`;
-  return c.html(layout("Logs", body, "logs", csrfFor(c), "Raw output of each run."));
+  return c.html(layout("Logs", body, "logs", csrfFor(c), "Raw output of each run, newest session first."));
 });
 
-const PW_TOGGLE_SCRIPT = `<script>
+const LOG_TOGGLE_SCRIPT = `<script>
 document.addEventListener("click", async function (event) {
-  var btn = event.target.closest ? event.target.closest("[data-pw-log]") : null;
+  var btn = event.target.closest ? event.target.closest("[data-log-toggle]") : null;
   if (!btn) return;
-  var id = btn.getAttribute("data-pw-log");
-  var box = document.getElementById("pw-log-" + id);
-  if (!box) return;
+  var id = btn.getAttribute("data-log-toggle");
+  var boxId = btn.getAttribute("aria-controls");
+  var box = boxId ? document.getElementById(boxId) : null;
+  if (!box || !id) return;
   var collapsed = !box.hidden;
   if (collapsed) {
     box.hidden = true;
     btn.textContent = "Log view";
     btn.setAttribute("aria-expanded", "false");
+    if (window.appUnmark) window.appUnmark(btn);
     return;
   }
   if (!box.dataset.loaded) {
     box.innerHTML = '<p class="muted" style="padding:10px 14px">Loading…</p>';
     try {
-      var res = await fetch("/logs/archive/" + id + "/fragment");
+      var res = await fetch("/logs/archive/" + encodeURIComponent(id) + "/fragment?limit=300");
       box.innerHTML = await res.text();
       box.dataset.loaded = "1";
     } catch (e) {
@@ -411,6 +434,7 @@ document.addEventListener("click", async function (event) {
   box.hidden = false;
   btn.textContent = "Hide log";
   btn.setAttribute("aria-expanded", "true");
+  if (window.appUnmark) window.appUnmark(btn);
 });
 </script>`;
 
@@ -425,7 +449,7 @@ pages.get("/errors", async (c) => {
     <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
     <h2 class="section-title">Password-protected ${info("Skipped during runs: a warning is logged and the run moves on. Delete moves the file to the trash folder; Restore returns it to the queue.", "Password-protected")}</h2>
     ${renderPasswordList(pwRows)}
-    ${PW_TOGGLE_SCRIPT}
+    ${LOG_TOGGLE_SCRIPT}
     <script src="/public/copy.js" defer></script>`;
   return c.html(layout("Errors", body, "errors", csrfFor(c), "Archives that need attention: failures and password-protected files."));
 });

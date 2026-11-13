@@ -614,7 +614,16 @@ button is not possible.
 The **Logs** page opens on the current (latest) session. While a task is
 running, only that live session is shown. When the app is idle, the same log
 window has a session picker so older runs can be viewed without leaving the
-page, plus tabs for the run log and the errors log.
+page, plus tabs for the run log, the errors log, and the per-archive logs.
+
+- The **Archives** tab lists every archive that run processed — done, failed,
+  skipped, or still in progress — with an inline **Log view** (most recent
+  300 lines; a link downloads the full extraction log), a **Copy log**
+  button and a **Download** button for that archive's raw output. Live
+  sessions refresh the list every 2 seconds. **Download all** exports one
+  text file with the run log, the errors log and every per-archive log of
+  the session, delimited by section headers.
+
 
 - Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
   and appended, and polling stops as soon as the run finishes — finished
@@ -681,13 +690,17 @@ src/
   ui.ts            HTML layout + escaping
   views.ts         UI fragment builders (run controls, Configuration form)
   format.ts        shared byte/duration formatters
+  errorrows.ts     error-card rendering (Errors page)
+  passwordrows.ts  password-protected rows (Errors page section)
+  archiverows.ts   per-run archive rows (Logs page, Archives tab)
+  downloads.ts     in-flight archive-download registry
   runs.ts          run-outcome resolution (legacy interrupted-flag fallback)
   routes/
     pages.ts       GET /  /config  /logs  /errors
     auth.ts        login/logout, DB sessions, CSRF middleware
     dashboard.ts   GET /dashboard/fragment (progress panel poll target)
     actions.ts     POST /run/start  /run/stop  /run/skip  /config  /config/rclonex-clear
-    logsapi.ts     GET /logs/fragment  /errors/fragment  + downloads
+    logsapi.ts     GET /logs/fragment  /errors/fragment  /logs/archives-fragment  + downloads
     data.ts        POST /export  POST /import
 public/
   favicon.svg      r/ monogram icon
@@ -714,6 +727,8 @@ POST /maintenance/queues  /maintenance/logs  /maintenance/all  /maintenance/tmp-
 GET  /download/run/:id  /download/archive/:id  (auth)
 GET  /download/archive-file/:id                   (auth, streams the archive itself; Range-resumable)
 GET  /download/archive-file/active                (auth, {"active": n} in-flight archive downloads)
+GET  /logs/archives-fragment                    (auth, per-run archive rows for the Archives tab)
+GET  /download/run/:id/all                       (auth, run log + errors + every archive log as one .txt)
 GET  /logs/archive/:id/fragment                   (auth)
 POST /archives/:id/delete  /archives/:id/restore  (auth)
 POST /export  /import                          (auth)
