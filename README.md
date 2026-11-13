@@ -272,7 +272,6 @@ database. They can also be seeded from environment variables.
 | `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `rclonex` | **Enable RcloneX** (default off). When on, archives whose format rclone cannot handle — RAR/RAR5, multivolume RAR (`x.partN.rar` / `x.r00…`), 7Z, split/multivolume 7Z (`x.7z.NNN`), and ISO9660 — are queued and extracted with rclonex, including multivolume sets (only the first volume is queued: `part1.rar` / `.7z.001` / plain `.rar`). Everything else stays on rclone's native `archive extract`. When off, these formats are not queued at all. |
-| `rclonex_skip_inspection` | Skip the archive content inspection for archives handled by RcloneX (default on — slow full-stream reads). ISO archives are always skipped (not listable). When off, RAR/7Z inspection runs through rclone (`archive list` reads them fine); an inspection failure marks the archive `unreadable` and it is never extracted. ZIP/TAR family is always inspected. |
 | `auto_skip_known` | Keep reappearing archives classified as a torrent or website dump skipped automatically (default on — they are never re-queued/re-inspected). Uncheck to re-inspect such reappearing archives on later runs. |
 | `rclonex_archive_password_enabled` + `rclonex_archive_password` | RcloneX flag `--archive-password` (default off): password for encrypted RAR/7Z archives (multivolume sets included). The password is stored encrypted at rest; leaving the field blank on save keeps the stored value, and the **Clear** button removes it (disables the flag). |
 | `rclonex_archive_buffer_size` | RcloneX flag `--archive-window-size` (how much of the archive is buffered in memory while rclonex reads random-access formats such as 7Z/ISO). Bytes; `0` keeps rclonex's own default. The Configuration page asks for MB/GB. |
@@ -457,14 +456,21 @@ Enable it with **Enable RcloneX** on the Configuration page.
 - When RcloneX is disabled, those formats are not queueable at all (they are
   filtered out of the listing exactly like `.sqfs`), and every archive-family
   capability beyond upstream rclone is off.
-- **Inspection is skipped by default** for RcloneX-handled archives (it
-  means streaming the whole archive through `archive list`), controlled by
-  the **Skip inspection for RcloneX formats** option. ISO9660 archives are
-  always skipped — ISO is only identified on the extract path, so
-  `archive list` can never succeed there. When off, RAR/7Z inspection runs
-  through **rclone** (upstream's `archive list` reads them); an inspection
-  failure marks the archive `unreadable` and it is never extracted.
-  ZIP/TAR/etc. always inspect as before.
+- **Inspection happens after extraction** for RcloneX-handled archives
+  (RAR/RAR5, 7Z, ISO9660): the archive is extracted into a temporary tree
+  and **then** the extracted contents are listed. This avoids a slow
+  full-stream `archive list` read, and works for ISO9660, which cannot be
+  identified by `archive list` anyway. A **Skip inspection** control still
+  appears while the (rclone) inspection of a ZIP/TAR archive is in flight,
+  treating it as passed for that archive only.
+- **Content checks are applied to the extracted tree.** After extraction,
+  the tree is classified exactly like a pre-extraction listing: a dump with
+  two or more distinct web-development extensions is treated as a
+  **website dump**, and a collection that is at least 60% `.torrent` files
+  as **torrent**; in both cases the extracted tree is purged from the
+  temporary directory and the archive is left in place (never promoted,
+  never moved to trash). ZIP/TAR/etc. are classified before extraction, as
+  before.
 - **Flags**: `--archive-password` (encrypted at rest, blank field on save
   keeps the stored value, **Clear** removes it) and `--archive-window-size`
   (bytes; `0` disables caching) are exposed as Configuration checkboxes, all
@@ -483,12 +489,16 @@ Enable it with **Enable RcloneX** on the Configuration page.
   floor. `RCLONE_BIN` / `RCLONEX_BIN` set by the operator always win. The
   config page shows an rclonex version row when the feature is enabled.
 
-### Content filters (before extraction)
+### Content filters
 
-Every archive is inspected before anything is extracted, using
-`rclone archive list --files-only`. Only files are counted — directories are
-excluded — and all extension matching is case-insensitive. Sizes are in
-bytes, and KB means 1024 bytes.
+For rclone-handled formats (ZIP, TAR, …), every archive is inspected before
+anything is extracted, using `rclone archive list --files-only`. Only files
+are counted — directories are excluded — and all extension matching is
+case-insensitive. Sizes are in bytes, and KB means 1024 bytes.
+
+For RcloneX-handled formats (RAR/RAR5, 7Z, ISO9660), the archive is
+extracted to a temporary tree first, and the extracted contents are
+classified in the same way.
 
 An archive is **skipped** (`status='skipped'`, never extracted) when ANY of
 these holds:

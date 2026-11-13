@@ -597,8 +597,6 @@ export async function runEngine(
       await getSetting("min_archive_size", "0"),
     );
     const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
-    const rclonexSkipInspection =
-      (await getSetting("rclonex_skip_inspection", "1")) === "1";
     // RcloneX-specific extraction flags (default off). A stored archive
     // password is only passed when its checkbox enabled it.
     const rclonexPasswordEnabled =
@@ -932,24 +930,21 @@ export async function runEngine(
         // Inspect the archive before any extraction happens. Archives that
         // match the skip rules (empty, torrent, website, tiny) or cannot be
         // read are skipped and never extracted. For RcloneX-handled formats
-        // the inspection is skipped by default (rclonex does not implement
-        // `archive list` for rar/7z/iso) unless the user enabled it — then it
-        // goes through the same binary selected for extraction. The
-        // inspection-skip setting applies consistently to every archive of
-        // those formats; a per-archive user skip applies only to this one.
+        // the archive itself cannot be cheaply listed, so inspection is
+        // skipped up front and the extracted tree is checked instead
+        // (website dumps / torrent collections are purged from the temp
+        // dir, archive stays in place). ISO is not listable by
+        // mholt/archives, so it also takes this fast path. A per-archive
+        // "Skip inspection" request still passes the inspection through here
+        // for rclone-handled formats.
         const stats = createArchiveStats();
         let inspectionDetail: string | null = null;
         let skipReason: SkipReason | "unreadable" | "password" | null = null;
         if (engineState.skipInspection) {
           engineState.skipInspection = false; // consumed by this archive only
           logger.info(`inspection skipped by user: ${rel}`);
-        } else if (useRclonex && rclonexSkipInspection) {
+        } else if (useRclonex || /\.iso$/i.test(baseName)) {
           logger.info(`skipping archive inspection for ${rel} (rclonex)`);
-        } else if (useRclonex && /\.iso$/i.test(baseName)) {
-          // mholt/archives cannot list ISO (identified only on the extract
-          // path), so rclone's `archive list` would always fail here — and
-          // "unreadable" would park the archive forever. Skip instead.
-          logger.info(`skipping inspection for ${rel} (ISO archives are not listable)`);
         } else {
           // Inspection always goes through the rclone binary: upstream's
           // `archive list` reads RAR/7Z fine, rclonex does not extend it and

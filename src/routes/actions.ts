@@ -307,10 +307,6 @@ actions.post("/config", async (c) => {
   }
   await setSetting("rclonex", form.get("rclonex") !== null ? "1" : "0");
   await setSetting(
-    "rclonex_skip_inspection",
-    form.get("rclonex_skip_inspection") !== null ? "1" : "0",
-  );
-  await setSetting(
     "auto_skip_known",
     form.get("auto_skip_known") !== null ? "1" : "0",
   );

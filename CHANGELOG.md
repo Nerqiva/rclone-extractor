@@ -11,6 +11,17 @@ to `main`.
 
 ## [Unreleased]
 
+### Changed
+- **Inspection for RcloneX-handled formats (RAR/RAR5, 7Z, ISO9660) now runs
+  after extraction instead of before.** The `rclonex_skip_inspection`
+  configuration option is removed: rclonex archives are extracted into a
+  temporary tree and then the extracted contents are listed. Website dumps
+  and torrent collections are purged from the temporary tree and the
+  archive is left in place (never promoted, never trashed); everything else
+  is promoted as normal. **Skip inspection** still appears while an
+  rclone-handled archive (ZIP/TAR) is being inspected, treating it as
+  passed for that archive only.
+
 ### Added
 - **Runtime refresh of rclone and rclonex at container start** — at every
   boot the entrypoint fetches the latest release of **both** binaries into
@@ -379,10 +390,10 @@ to `main`.
   `archive extract`. A `RCLONEX_BIN` env var (default `rclonex`) selects the
   binary; the Configuration page shows a version probe when the feature is
   enabled. When disabled, these formats are not queued at all.
-- **RcloneX archive inspection** — skipped by default for RcloneX-handled
-  formats (`rclonex_skip_inspection`; default on). When off, inspection runs
-  through rclone (upstream `archive list` reads RAR/7Z fine); ISO archives
-  always skip inspection (not listable). ZIP/TAR always inspect as before.
+- **RcloneX archive inspection** — RcloneX-handled formats are not inspected
+  before extraction anymore (`rclonex_skip_inspection` removed). Inspection now
+  runs after extraction on the extracted tree, and website/torrent dumps are
+  purged there with the archive left in place; ZIP/TAR always inspect as before.
 - **RcloneX flags** on the Configuration page (all unchecked by default):
   `--archive-password` (encrypted at rest; write-only — blank field keeps
   the stored value, Clear removes it) and `--archive-window-size` (via the

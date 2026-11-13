@@ -86,7 +86,7 @@ test("queueing stage shows no skip controls", () => {
   expect(html).not.toContain("Skip inspection");
 });
 
-test("inspecting an archive shows Skip inspection and Skip archive", () => {
+test("while rclone inspects an archive, Skip inspection and Skip archive are shown", () => {
   engineState.running = true;
   engineState.stage = "extracting";
   engineState.activity = "Inspecting archive";

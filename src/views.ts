@@ -286,7 +286,6 @@ export async function configForm(note = ""): Promise<string> {
   ${section(
     "RcloneX",
     toggleRow("rclonex", "Enable RcloneX", s.rclonex === "1", "Extract RAR/7Z/ISO with rclonex; everything else stays on rclone.") +
-    toggleRow("rclonex_skip_inspection", "Skip inspection for RcloneX formats", (s.rclonex_skip_inspection ?? "1") === "1", "Don't list RAR/7Z contents (rclone cannot). ISO is always skipped.") +
     `<div class="setting setting-toggle setting-compound">
       <span class="setting-label"><input type="checkbox" name="rclonex_archive_password_enabled" id="rclonex-pw"${s.rclonex_archive_password_enabled === "1" ? " checked" : ""}> <label for="rclonex-pw">Archive password <code class="setting-key">rclonex_archive_password</code> ${info("Password for encrypted RAR/7Z archives. Blank keeps the stored one.", "rclonex_archive_password")}</label></span>
       <span class="field-inline">

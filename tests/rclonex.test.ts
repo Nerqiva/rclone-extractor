@@ -126,22 +126,23 @@ test("inspection is skipped for rclonex formats by default, kept for zip", async
   expect(rcLog).toContain("archive list");
 });
 
-test("inspection runs through rclone (never rclonex) when the skip is disabled", async () => {
+test("RAR/7Z are never pre-inspected through rclone (inspection is post-extraction for rclonex)", async () => {
   resetLogs();
-  await setSetting("rclonex_skip_inspection", "0");
   await runEngine();
   const rxLog = readLog(rclonexLog);
-  // rclonex gets no `archive list` — upstream rclone lists RAR/7Z itself.
-  expect(rxLog).not.toContain("archive list");
   const rcLog = readLog(rcloneLog);
+  // RAR/7Z never go through `archive list`: rclonex formats skip pre-extraction
+  // inspection and are validated after extraction instead.
+  expect(rxLog).not.toContain("archive list");
+  // Zip, handled by rclone, is still inspected before extraction; only one
+  // `archive list` call in the whole run.
+  expect(rcLog.split("archive list").length - 1).toBe(1);
   expect(rcLog).toContain("archive list");
-  expect(rcLog).toContain("big.rar");
-  await setSetting("rclonex_skip_inspection", "1");
+  expect(rcLog).toContain("big.zip");
 });
 
-test("ISO archives skip inspection even when inspection is enabled", async () => {
+test("ISO archives are never pre-inspected — extraction proceeds normally", async () => {
   resetLogs();
-  await setSetting("rclonex_skip_inspection", "0");
   await runEngine();
   const isoLists = readLog(rcloneLog)
     .split("\n")
@@ -152,7 +153,6 @@ test("ISO archives skip inspection even when inspection is enabled", async () =>
   );
   // Not "skipped (unreadable)" — extraction proceeds normally.
   expect(rows[0]?.status).toBe("done");
-  await setSetting("rclonex_skip_inspection", "1");
 });
 
 test("rclonex flags land on the extraction command line", async () => {

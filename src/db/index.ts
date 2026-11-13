@@ -37,7 +37,6 @@ const defaults: Record<string, string> = {
   rclone_conf: "",
   last_run_id: "0",
   rclonex: "0",
-  rclonex_skip_inspection: "1",
   rclonex_archive_password_enabled: "0",
   rclonex_archive_password: "",
   rclonex_archive_buffer_size: "16777216",
