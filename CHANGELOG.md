@@ -12,6 +12,17 @@ to `main`.
 ## [Unreleased]
 
 ### Added
+- **Runtime refresh of rclone and rclonex at container start** — at every
+  boot the entrypoint fetches the latest release of **both** binaries into
+  `/app/data/bin` (checksum-verified: rclone against the signed
+  `SHA256SUMS` on downloads.rclone.org, rclonex against the release's
+  `checksums.txt`; rclonex prefers the latest stable release and falls
+  back to the newest pre-release, mirroring its official installer).
+  Version markers keep restarts cheap (no re-download when current), any
+  failure keeps the previous copy and starts the app anyway, and the
+  image keeps build-time copies at `/usr/local/bin` as an offline floor.
+  `RCLONE_BIN` / `RCLONEX_BIN` set by the operator win over the refreshed
+  binaries.
 - **Password-protected archives tab** on the Logs page (third tab, layout Next to Run log and Errors): lists every archive that was skipped as
   `password` (a warning is logged and the run moves to the next archive).
   Each row shows the name, path and size; an inline **Log view**; **Copy

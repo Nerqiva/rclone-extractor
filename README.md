@@ -192,7 +192,7 @@ DATA_DIR=/app/data                     # SQLite file (only needed for SQLite); r
 # --- rclone ---
 RCLONE_CONF=                           # generate with: base64 -w0 rclone.conf
 RCLONE_BIN=rclone                      # full path to rclone (arch-matching build, for hosts without /usr/local/bin/rclone)
-RCLONEX_BIN=rclonex                    # full path to the rclonex binary (the Docker image installs it at /usr/local/bin/rclonex)
+RCLONEX_BIN=rclonex                    # full path to the rclonex binary (Docker refreshes both binaries at startup into /app/data/bin; set this to pin your own)
 
 # --- http ---
 BIND=0.0.0.0                           # bind address
@@ -220,7 +220,7 @@ database. They can also be seeded from environment variables.
 | `SECRET_KEY` | *(empty)* | Passphrase for encrypting stored secrets. **Omit to disable encryption.** |
 | `RCLONE_CONF` | *(empty)* | Base64-encoded `rclone.conf`, used as a fallback when the stored `rclone_conf` setting is empty. Generate with `base64 -w0 rclone.conf`. |
 | `RCLONE_BIN` | `rclone` | Path to the rclone binary. Set this to a full path if your host does not have rclone on `PATH`, or if you must install the build that matches your CPU (arm64 vs amd64). |
-| `RCLONEX_BIN` | `rclonex` | Path to the rclonex binary. The Docker image installs it at `/usr/local/bin/rclonex` via the official [install script](https://github.com/Nerqiva/rclonex) (always the latest release, checksum-verified). |
+| `RCLONEX_BIN` | `rclonex` | Path to the rclonex binary. The Docker image refreshes rclone and rclonex to the latest release at every container start (checksum-verified) into `/app/data/bin`; operator-provided `RCLONE_BIN` / `RCLONEX_BIN` override that. |
 | `DATABASE_URL` | *(empty)* | Postgres connection string. When empty, SQLite at `DATA_DIR/app.db` is used. |
 | `PG_POOL_MAX` | `4` | Max connections this app opens to Postgres (keep small; see below). |
 | `COOKIE_SECURE` | `1` | Session cookie is `Secure` (HTTPS only). Set `0` only when serving over plain HTTP. |
@@ -440,11 +440,17 @@ Enable it with **Enable RcloneX** on the Configuration page.
   **off by default**. `--archive-*` flags placed in `remote_flags` are passed
   to rclonex only — they are stripped (with a warning) for the rclone
   binary, where they would make every command fail.
-- **Docker**: the image installs the latest rclonex release (or the newest
-  pre-release when no stable exists) via the official install script, with
-  sha256 checksums verified, installed to `/usr/local/bin/rclonex`. Outside
-  Docker set `RCLONEX_BIN` to a full path. The config page shows an rclonex
-  version row when the feature is enabled.
+- **Docker**: at every container start the entrypoint refreshes both
+  **rclone** and **rclonex** to the latest release into `/app/data/bin`
+  (checksum-verified: rclone against the signed `SHA256SUMS` on
+  downloads.rclone.org, rclonex against the release's `checksums.txt`, and
+  rclonex prefers the latest stable release, falling back to the newest
+  pre-release). Restarts are cheap — the refresh only runs when a newer
+  release exists. If the download or verification fails (e.g. no network at
+  boot), the previous binary is kept and the app starts either way; the
+  image also bakes in build-time copies at `/usr/local/bin` as an offline
+  floor. `RCLONE_BIN` / `RCLONEX_BIN` set by the operator always win. The
+  config page shows an rclonex version row when the feature is enabled.
 
 ### Content filters (before extraction)
 

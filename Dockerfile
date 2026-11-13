@@ -4,12 +4,12 @@ FROM oven/bun:1.4-slim
 # hardcoding the amd64 build, which fails with ENOEXEC on arm64 hosts.
 ARG TARGETARCH
 ARG TARGETVARIANT
-# RcloneX (Nerqiva/rclonex) is installed right after rclone via the official
-# install script: resolves the latest release (falling back to the newest
-# pre-release when no stable exists), picks the linux/<arch> build (uname -m
-# reports the target arch under QEMU), verifies the published sha256
-# checksums, and installs to /usr/local/bin/rclonex with mode 0755. Any
-# failure aborts the build.
+# rclone and rclonex are installed here as the OFFLINE FLOOR. At every
+# container start the entrypoint refreshes both to the latest release
+# (bin/fetch-deps.sh) into /app/data/bin — downloads are checksum-verified
+# (rclone against downloads.rclone.org's signed SHA256SUMS, rclonex against
+# the release's checksums.txt), and any failure keeps the previous binary,
+# so the app starts either way. curl/unzip/tar are kept for that refresh.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl unzip tar gzip tzdata \
  && ARCH="${TARGETARCH:-amd64}" \
@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       else echo "rclonex installation failed (exit $code) — aborting build" >&2; exit "$code"; fi; } \
  && rclonex version \
  && rm -rf rclone-* \
- && apt-get purge -y curl unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
@@ -50,4 +50,7 @@ ENV DATA_DIR=/app/data PORT=8080 TZ=Asia/Omsk
 VOLUME /app/data
 EXPOSE 8080
 USER bun
+# The entrypoint refreshes rclone/rclonex to the latest release at every
+# container start (best-effort, checksum-verified) and then execs the app.
+ENTRYPOINT ["/app/bin/entrypoint.sh"]
 CMD ["bun","run","src/server.ts"]
