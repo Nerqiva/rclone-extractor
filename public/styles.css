@@ -380,6 +380,12 @@ textarea {
   margin: 0;
   max-width: 420px;
 }
+.maint-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .btn-row {
   display: flex;
   gap: 10px;
@@ -1082,11 +1088,6 @@ textarea {
 .setting.editing .setting-head [data-edit] {
   display: none;
 }
-.setting-desc {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
 .setting-key {
   color: var(--muted);
   font-size: 11px;
@@ -1107,18 +1108,10 @@ textarea {
 .setting-toggle input[type="checkbox"] {
   margin-right: 8px;
 }
-.setting-toggle .setting-desc {
-  display: block;
-  margin: 4px 0 0 22px;
-}
 .setting-compound .setting-label {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.setting-compound .setting-desc {
-  display: block;
-  margin: 4px 0 8px 22px;
 }
 .setting-compound .field-inline {
   margin-left: 22px;
@@ -1145,6 +1138,11 @@ textarea {
 }
 
 /* ---- superscript info indicator + tooltip ---- */
+.info-tip {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
 .info-i {
   display: inline-flex;
   align-items: center;
@@ -1163,23 +1161,17 @@ textarea {
   vertical-align: super;
   padding: 0;
   margin-left: 4px;
-  flex: none;
 }
 .info-i:hover,
 .info-i:focus-visible,
-.info-i.open {
+.info-tip.open .info-i {
   color: var(--accent);
   border-color: var(--accent);
   outline: none;
 }
-.info-i {
-  position: relative;
-}
-.info-i::after {
-  content: attr(data-tip);
+.info-tip-bubble {
   position: absolute;
-  /* Opens downward: config rows sit high on the page, so an upward tooltip
-     ends up off-viewport. */
+  /* Opens downward by default; .flip repositions it above the button. */
   top: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%) translateY(-2px);
@@ -1188,47 +1180,59 @@ textarea {
   border-radius: 6px;
   color: var(--text);
   font-size: 11px;
-  font-style: normal;
-  font-weight: 400;
   line-height: 1.35;
-  letter-spacing: 0;
-  text-transform: none;
-  text-align: left;
-  padding: 6px 9px;
-  width: max-content;
   max-width: 240px;
+  width: max-content;
+  padding: 6px 9px;
   white-space: normal;
   overflow-wrap: anywhere;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.12s ease, transform 0.12s ease;
-  z-index: 30;
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+  z-index: 210;
 }
-.info-i:hover::after,
-.info-i:focus-visible::after,
-.info-i.open::after {
+.info-tip:hover .info-tip-bubble,
+.info-i:focus-visible + .info-tip-bubble,
+.info-tip.open .info-tip-bubble {
   opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+.info-tip.flip .info-tip-bubble {
+  top: auto;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%) translateY(2px);
+}
+.info-tip.flip:hover .info-tip-bubble,
+.info-tip.flip .info-i:focus-visible + .info-tip-bubble,
+.info-tip.flip.open .info-tip-bubble {
   transform: translateX(-50%) translateY(0);
 }
 /* The controls dock sits flush against the right edge; keep its tooltips
    inside the viewport. */
-.controls-dock .info-i::after,
-.controls-row .info-i::after {
+.controls-dock .info-tip-bubble,
+.controls-row .info-tip-bubble {
   left: auto;
   right: 0;
   transform: translateY(-2px);
 }
-.controls-dock .info-i:hover::after,
-.controls-dock .info-i:focus-visible::after,
-.controls-dock .info-i.open::after,
-.controls-row .info-i:hover::after,
-.controls-row .info-i:focus-visible::after,
-.controls-row .info-i.open::after {
+.controls-dock .info-tip:hover .info-tip-bubble,
+.controls-dock .info-i:focus-visible + .info-tip-bubble,
+.controls-dock .info-tip.open .info-tip-bubble,
+.controls-row .info-tip:hover .info-tip-bubble,
+.controls-row .info-i:focus-visible + .info-tip-bubble,
+.controls-row .info-tip.open .info-tip-bubble {
   transform: translateY(0);
 }
+.controls-dock .info-tip.flip .info-tip-bubble,
+.controls-row .info-tip.flip .info-tip-bubble {
+  right: 0;
+  left: auto;
+}
 @media (max-width: 719px) {
-  .info-i::after {
+  .info-tip-bubble {
     max-width: 180px;
   }
 }
@@ -1508,9 +1512,6 @@ button[disabled] {
 }
 
 /* ---- password-protected archives (errors page) ---- */
-.pw-intro {
-  margin: 0 0 14px;
-}
 .pw-log {
   margin: 0 14px 14px;
   max-height: 320px;

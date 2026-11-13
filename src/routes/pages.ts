@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
-import { layout, esc, fmtDisplayTime } from "../ui";
+import { layout, esc, fmtDisplayTime, info } from "../ui";
 import { csrfFor } from "./auth";
 import { configForm } from "../views";
 import { resolveOutcome } from "../runs";
@@ -65,13 +65,13 @@ pages.get("/config", async (c) => {
     <fieldset class="bare-fieldset"${dis}>
     <form id="export-form" method="post" action="/export">
       <input type="hidden" name="csrf_token" value="${esc(csrf ?? "")}">
-      <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, database_url)</label>
+      <label class="check"><input type="checkbox" name="include_rclone" value="1"> include secrets (rclone.conf, database_url) ${info("Exports contain unencrypted secrets. Only tick it if you store backups somewhere safe.", "include secrets")}</label>
       <button class="btn" type="submit" data-loading-label="Exporting…"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Export JSON</span></button>
     </form>
     <form id="import-form" style="margin-top:14px" method="post" action="/import" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="${esc(csrf ?? "")}">
       <label class="field"><span>Import backup (.json)</span><input type="file" name="archive" accept=".json,application/json"></label>
-      <button class="btn danger" type="submit" data-loading-label="Importing…"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Import (replaces data)</span></button>
+      <button class="btn danger" type="submit" data-loading-label="Importing…"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Import (replaces data)</span></button>${info("Overwrites matching rows in the current database. Settings not in the file are kept.", "Import")}
     </form>
     </fieldset>
     ${
@@ -84,10 +84,10 @@ pages.get("/config", async (c) => {
     <h2 class="section-title" style="margin-top:0">Maintenance</h2>
     ${running ? `<p class="muted">Task running — options are disabled.</p>` : ""}
     <div class="btn-row">
-      <button class="btn" hx-post="/maintenance/queues" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear the queue?|Clear queues"><span class="spinner" aria-hidden="true"></span>Clear queues</button>
-      <button class="btn" hx-post="/maintenance/logs" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear logs and errors?|Clear logs"${dis}><span class="spinner" aria-hidden="true"></span>Clear logs</button>
-      <button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" data-confirm="Clear the tmp directory?|Clear tmp directory"${dis}><span class="spinner" aria-hidden="true"></span>Clear tmp directory</button>
-      <button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear everything (queue, history, logs, errors, tmp directory)?|Clear everything"${dis}><span class="spinner" aria-hidden="true"></span>Clear everything</button>
+      <span class="maint-btn"><button class="btn" hx-post="/maintenance/queues" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear the queue?|Clear queues"><span class="spinner" aria-hidden="true"></span>Clear queues</button>${info("Deletes queued archives (and their logs). A running engine skips the deleted rows; run count and history are kept.", "Clear queues")}</span>
+      <span class="maint-btn"><button class="btn" hx-post="/maintenance/logs" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear logs and errors?|Clear logs"${dis}><span class="spinner" aria-hidden="true"></span>Clear logs</button>${info("Wipes log lines and error flags only. Runs and archives are kept.", "Clear logs")}</span>
+      <span class="maint-btn"><button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" data-confirm="Clear the tmp directory?|Clear tmp directory"${dis}><span class="spinner" aria-hidden="true"></span>Clear tmp directory</button>${info("Purges stale app-owned run_* directories (honors dry run).", "Clear tmp directory")}</span>
+      <span class="maint-btn"><button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear everything (queue, history, logs, errors, tmp directory)?|Clear everything"${dis}><span class="spinner" aria-hidden="true"></span>Clear everything</button>${info("Queue, history, logs, errors and the tmp directory — next run starts from #1.", "Clear everything")}</span>
     </div>
     <div id="tmp-purge-result"></div>
     <div id="maintenance-result"></div>
@@ -407,14 +407,13 @@ document.addEventListener("click", async function (event) {
 pages.get("/errors", async (c) => {
   const running = engineState.running && engineState.runId > 0;
   const [rows, pwRows] = await Promise.all([readErrorRows(store), readPasswordRows()]);
-  const body = `<h2 class="section-title" style="margin-top:0">Failed archives</h2>
+  const body = `<h2 class="section-title" style="margin-top:0">Failed archives ${info("Archives with an error_kind set, newest first. Password-protected archives are excluded — they have their own section below. Copy fetches the raw output of the failing command.", "Failed archives")}</h2>
     <div class="log-actions" role="toolbar" aria-label="Error actions">
       ${running ? `<span class="pill warn" id="livePill">live</span>` : ""}
       <button class="btn small" type="button" data-copy-table="#errorCards">Copy all errors</button>
     </div>
     <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
-    <h2 class="section-title">Password-protected</h2>
-    <p class="muted pw-intro">Password-protected archives are skipped during runs: a warning is logged and the run moves on to the next archive. <strong>Delete</strong> moves the file to the trash folder; <strong>Restore</strong> returns it to the queue.</p>
+    <h2 class="section-title">Password-protected ${info("Skipped during runs: a warning is logged and the run moves on. Delete moves the file to the trash folder; Restore returns it to the queue.", "Password-protected")}</h2>
     ${renderPasswordList(pwRows)}
     ${PW_TOGGLE_SCRIPT}
     <script src="/public/copy.js" defer></script>`;

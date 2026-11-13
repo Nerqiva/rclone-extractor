@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { engineState } from "../engine";
 import { store, getSetting } from "../db";
-import { esc, toastTriggerHeaders, fmtDisplayTime } from "../ui";
+import { esc, toastTriggerHeaders, fmtDisplayTime, info } from "../ui";
 import { formatBytes, formatRate, formatDuration } from "../format";
 import { resolveOutcome } from "../runs";
 import type { ExtractStats } from "../rclone";
@@ -333,23 +333,23 @@ export async function progressPanel(): Promise<string> {
     <dl class="detail-grid">
       <div>
         <dt>Scan root</dt>
-        <dd>${esc(s.scanRoot || "—")}</dd>
+        <dd>${esc(s.scanRoot || "—")} ${info("rclone remote or local path this app scans.", "Scan root")}</dd>
       </div>
       <div>
         <dt>${archiveLabel}</dt>
-        <dd title="${esc(archive)}">${esc(archive)}</dd>
+        <dd title="${esc(archive)}">${esc(archive)} ${info("Archive currently being processed (this run's last one when idle).", archiveLabel)}</dd>
       </div>
       <div>
         <dt>${commandLabel}</dt>
-        <dd class="cmd" title="${esc(command)}">${esc(command)}</dd>
+        <dd class="cmd" title="${esc(command)}">${esc(command)} ${info("rclone command currently running (or the last one that ran).", commandLabel)}</dd>
       </div>
       <div>
         <dt>Rate</dt>
-        <dd title="Archives processed per minute (done + failed + skipped)">${esc(rateLabel(processed, elapsedMs))}</dd>
+        <dd>${esc(rateLabel(processed, elapsedMs))} ${info("Archives processed per minute (done + failed + skipped).", "Rate")}</dd>
       </div>
       <div>
         <dt>ETA</dt>
-        <dd title="Estimated time to finish the remaining queue">${esc(etaLabel(processed, s.total, elapsedMs))}</dd>
+        <dd>${esc(etaLabel(processed, s.total, elapsedMs))} ${info("Estimated time to finish the remaining queue.", "ETA")}</dd>
       </div>
     </dl>
 

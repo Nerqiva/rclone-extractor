@@ -63,16 +63,19 @@ export function fmtDisplayTime(iso: string, withDate = false): string {
   return new Intl.DateTimeFormat("en-GB", opts).format(new Date(t));
 }
 
+// Unique ids for the tooltip spans, per render (process-wide counter keeps
+// ids unique even when a fragment is swapped in and out).
+let infoTipSeq = 0;
+
 /**
- * Small superscript "(i)" indicator beside a control. Hover/focus shows the
- * tooltip on desktop; tapping toggles it on touch devices (and hides it via
- * the shared .open class). Rendered as a real button so it is keyboard
- * accessible. Tips are deliberately short (a sentence, not a paragraph) —
- * use the README for the long story. `label` names the thing the tip
- * describes for screen readers.
+ * Superscript "(i)" indicator rendered with its tooltip bubble. Hover or
+ * keyboard focus reveals it (CSS), tapping toggles it (global script in
+ * layout()). `tip` is the full description shown to mouse/touch users;
+ * `label` names the thing for screen readers ("More info: <label>").
  */
 export function info(tip: string, label: string): string {
-  return `<button type="button" class="info-i" data-tip="${esc(tip)}" aria-label="More info: ${esc(label)}">i</button>`;
+  const id = `info-tip-${++infoTipSeq}`;
+  return `<span class="info-tip"><button type="button" class="info-i" aria-expanded="false" aria-describedby="${id}" aria-label="More info: ${esc(label)}">i</button><span class="info-tip-bubble" role="tooltip" id="${id}">${esc(tip)}</span></span>`;
 }
 
 // Shared toast + busy-state behaviour for every page. htmx buttons show a
@@ -131,25 +134,46 @@ const GLOBAL_SCRIPT = `<script>
   });
 
   // Superscript "(i)" info indicators: tap toggles the tooltip (touch
-  // devices); Escape or a tap elsewhere closes it. Hover/focus styling is
-  // handled in CSS, so desktop needs no JS at all.
+  // devices); Escape or a tap elsewhere closes it; scroll closes it too
+  // (touch tooltips shouldn't float over new content). Hover/focus styling
+  // is handled in CSS, so desktop needs no JS at all. The bubble flips
+  // above the button when it would fall off the bottom of the viewport.
   function closeInfoTips() {
-    var open = document.querySelectorAll(".info-i.open");
-    for (var i = 0; i < open.length; i++) open[i].classList.remove("open");
+    var open = document.querySelectorAll(".info-tip.open");
+    for (var i = 0; i < open.length; i++) {
+      var btn = open[i].querySelector(".info-i");
+      if (btn) btn.setAttribute("aria-expanded", "false");
+      open[i].classList.remove("open");
+    }
   }
   document.body.addEventListener("click", function (event) {
     var tip = event.target.closest ? event.target.closest(".info-i") : null;
     if (!tip) {
-      if (!event.target.closest || !event.target.closest(".info-i")) closeInfoTips();
+      closeInfoTips();
       return;
     }
     // Keep a tap from activating the surrounding label/button.
     event.preventDefault();
     event.stopPropagation();
-    var wasOpen = tip.classList.contains("open");
+    var wrap = tip.closest(".info-tip");
+    var wasOpen = wrap.classList.contains("open");
     closeInfoTips();
-    if (!wasOpen) tip.classList.add("open");
+    if (!wasOpen) {
+      wrap.classList.add("open");
+      tip.setAttribute("aria-expanded", "true");
+      var bubble = wrap.querySelector(".info-tip-bubble");
+      var button = tip.getBoundingClientRect();
+      if (bubble) {
+        var needed = bubble.offsetHeight + 12;
+        if (button.bottom + needed > window.innerHeight) {
+          wrap.classList.add("flip");
+        } else {
+          wrap.classList.remove("flip");
+        }
+      }
+    }
   }, true);
+  window.addEventListener("scroll", closeInfoTips, true);
   // A page restored from the back-forward cache can show a stale run state
   // (e.g. an old Stop button). Re-fetch fresh instead.
   window.addEventListener("pageshow", function (event) {
