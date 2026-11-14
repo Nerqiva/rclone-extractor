@@ -88,7 +88,8 @@ you add/remove an endpoint, env var, or setting.**
 - `dry_run` is honored by every destructive operation.
 - Skip state is **never persisted** — skips are per-run, in-memory only.
 - The archive file is never deleted outright by the app: "Delete" means
-  *move to the trash subdir*; trash moves refuse to overwrite.
+  *move to the trash subdir*. Moves overwrite an existing destination file
+  (the `--immutable` no-overwrite guard was removed deliberately).
 
 ## Release flow (what happens on push to `main`)
 

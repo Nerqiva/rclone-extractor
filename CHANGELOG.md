@@ -21,6 +21,13 @@ to `main`.
   is promoted as normal. **Skip inspection** still appears while an
   rclone-handled archive (ZIP/TAR) is being inspected, treating it as
   passed for that archive only.
+- **Archive trash and promote moves no longer pass `--immutable`.** A
+  same-named file already at the destination is now overwritten instead of
+  the move failing with `immutable file modified`. This relaxes the earlier
+  guarantee recorded under **Security** that trash/promote moves never
+  overwrite anything. The webapp Delete/Restore actions still refuse up
+  front when the destination exists (`existsPath` pre-check); the engine's
+  promote/trash moves have no such pre-check and will overwrite.
 
 ### Added
 - **Runtime refresh of rclone and rclonex at container start** — at every

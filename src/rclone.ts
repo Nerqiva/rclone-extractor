@@ -880,8 +880,6 @@ export class Rclone {
       // top level so archive contents that are themselves named like the
       // temp dir are still promoted. Absolute temp dirs need no exclusion.
       "--delete-empty-src-dirs",
-      // Never overwrite a same-named unrelated file at the destination.
-      "--immutable",
       "--stats",
       "1s",
       "--stats-one-line",
@@ -970,7 +968,6 @@ export class Rclone {
         "moveto",
         `${this.root}/${rel}`,
         `${this.root}/${subdir}/${rel}`,
-        "--immutable",
         "--stats",
         "1s",
         "--stats-one-line",
@@ -1004,15 +1001,15 @@ export class Rclone {
 
   /**
    * Move `root/<srcRel>` to `root/<dstRel>` for webapp actions (delete to
-   * trash, restore from trash). Refuses to overwrite the destination
-   * (`--immutable`); the caller should also check `existsPath` for a clear
-   * error message. Logs raw binary output to the archive's log.
+   * trash, restore from trash). Overwrites the destination if one exists;
+   * the caller can check `existsPath` first to refuse instead. Logs raw
+   * binary output to the archive's log.
    */
   async moveToRel(srcRel: string, dstRel: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
     assertSafeRel(srcRel);
     assertSafeRel(dstRel);
     return this.streamTransfer(
-      ["moveto", `${this.root}/${srcRel}`, `${this.root}/${dstRel}`, "--immutable"],
+      ["moveto", `${this.root}/${srcRel}`, `${this.root}/${dstRel}`],
       dry,
       ref,
     );
