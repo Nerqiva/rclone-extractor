@@ -1,7 +1,12 @@
 import { writeFileSync, renameSync, chmodSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { getSetting } from "./db";
-import { isSupported, isSafeRel, parseTrashSubdir } from "./archive";
+import {
+  isSupported,
+  isSafeRel,
+  parseTrashSubdir,
+  archiveIncludePatterns,
+} from "./archive";
 import { isAbsoluteTmpPath, type SweepResult, TMP_RUN_DIR_RE } from "./tmpdir";
 import {
   RCLONE_CONF,
@@ -118,6 +123,12 @@ export type Outcome = {
 export type ListOutcome = Outcome & {
   stopped: boolean;
   streamError?: string;
+};
+
+/** Client-side scan-listing filters pushed into `lsf` args (bytes). */
+export type ScanListFilter = {
+  minSizeBytes?: number;
+  maxSizeBytes?: number;
 };
 
 export type ArchiveListOutcome = Outcome & {
@@ -549,14 +560,17 @@ export class Rclone {
       rel: string,
       size: number,
     ) => boolean | void | Promise<boolean | void>,
+    filter: ScanListFilter = {},
   ): Promise<ListOutcome> {
-    return this.listPath(this.root, onFile, true);
+    return this.listPath(this.root, onFile, true, filter);
   }
 
   /**
    * List the files under `path` (absolute, or relative to the scan root)
    * with `lsf --files-only`. Used for both the scan listing (archive-name
-   * filter) and post-extraction inspection of a temp tree (no filter).
+   * and size filter) and post-extraction inspection of a temp tree (no
+   * filter). The filter arguments only reach the scan listing: the
+   * inspection listing must see every file to classify the tree.
    */
   async listPath(
     path: string,
@@ -565,6 +579,7 @@ export class Rclone {
       size: number,
     ) => boolean | void | Promise<boolean | void>,
     filterArchives = false,
+    scanFilter: ScanListFilter = {},
   ): Promise<ListOutcome> {
     const args = [
       ...this.confArgs(),
@@ -576,8 +591,21 @@ export class Rclone {
       "ps",
       "--separator",
       ";",
-      ...this.flags,
     ];
+    if (filterArchives) {
+      // Filters are applied client-side by rclone as objects stream in:
+      // fewer lines streamed, parsed and checked. The remote still
+      // enumerates everything; the in-app checks stay as a backstop.
+      args.push("--ignore-case");
+      for (const pattern of archiveIncludePatterns(this.rclonexEnabled)) {
+        args.push("--include", pattern);
+      }
+      const min = Math.floor(scanFilter.minSizeBytes ?? 0);
+      const max = Math.floor(scanFilter.maxSizeBytes ?? 0);
+      if (Number.isFinite(min) && min > 0) args.push("--min-size", `${min}B`);
+      if (Number.isFinite(max) && max > 0) args.push("--max-size", `${max}B`);
+    }
+    args.push(...this.flags);
     const command = this.announce(args);
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",

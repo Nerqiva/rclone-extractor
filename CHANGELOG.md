@@ -12,6 +12,17 @@ to `main`.
 ## [Unreleased]
 
 ### Changed
+- **The scan listing (`rclone lsf`) now filters at the rclone layer.** The
+  listing is spawned with `--ignore-case`, one `--include` glob per
+  supported archive extension (RAR/7z/ISO and split `name.7z.NNN` volumes
+  only when RcloneX is enabled; old-style `.rNN` volumes are never listed),
+  and `--min-size`/`--max-size` (bytes, inclusive bounds) mirroring
+  `min_archive_size`/`max_archive_size`. Fewer non-archive lines are
+  streamed, parsed and checked; the remote still enumerates everything. The
+  app re-checks names and sizes itself as a backstop, and multivolume
+  first-volume selection stays in-app. The "listing ignored N archive(s)
+  above/below limit" log lines normally stay at zero because rclone
+  pre-filters.
 - **Inspection for RcloneX-handled formats (RAR/RAR5, 7Z, ISO9660) now runs
   after extraction instead of before.** The `rclonex_skip_inspection`
   configuration option is removed: rclonex archives are extracted into a

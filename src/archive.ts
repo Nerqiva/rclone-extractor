@@ -62,6 +62,22 @@ export function isSupported(name: string, rclonex = false): boolean {
 }
 
 /**
+ * Glob patterns for `rclone lsf --include` matching the names
+ * {@link isSupported} accepts (case-insensitively, with --ignore-case).
+ * Multivolume volumes are matched broadly (`.7z.NNN`; `.partN.rar` via
+ * `*.rar`) because globs cannot express "zero or more padding then 1";
+ * first-volume selection stays in-app. Old-style `.rNN` volumes are not
+ * queueable at all, so no pattern is emitted for them.
+ */
+export function archiveIncludePatterns(rclonex = false): string[] {
+  const patterns = SUPPORTED.map((suffix) => `*${suffix}`);
+  if (rclonex) {
+    patterns.push("*.rar", "*.7z", "*.7z.[0-9][0-9][0-9]", "*.iso");
+  }
+  return patterns;
+}
+
+/**
  * Deterministic extractor selection. RcloneX is used only for the formats
  * listed above (including multivolume archives) when enabled; everything
  * else goes through rclone's native archive command. Non-first volumes are

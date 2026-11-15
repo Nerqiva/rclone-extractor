@@ -674,6 +674,14 @@ export async function runEngine(
     // A skip asked before the listing even starts (e.g. during the temp
     // purge) short-circuits it entirely — no process is spawned.
     const skipListingAtStart = engineState.skipListing;
+    if (!reuseScan && !skipListingAtStart) {
+      // One line per fresh listing; the per-run "ignored N archive(s)"
+      // counts stay at zero because rclone pre-filters out of range.
+      const filterNotes = ["--ignore-case", "--include (archive extensions)"];
+      if (minArchiveSize > 0) filterNotes.push(`--min-size ${minArchiveSize}B`);
+      if (maxArchiveSize > 0) filterNotes.push(`--max-size ${maxArchiveSize}B`);
+      logger.info(`listing filters: ${filterNotes.join(", ")}`);
+    }
     const listed =
       reuseScan || skipListingAtStart
         ? null
@@ -731,7 +739,7 @@ export async function runEngine(
         existing.set(rel, { path: rel, status: "queued", error_kind: null });
         queued++;
       }
-    });
+    }, { minSizeBytes: minArchiveSize, maxSizeBytes: maxArchiveSize });
 
     if (skippedUnsafe > 0) {
       warn(`listing skipped ${skippedUnsafe} unsafe path(s) from the remote`);

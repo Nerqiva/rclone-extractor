@@ -370,7 +370,7 @@ and shows a warning on the Configuration page.
 For each archive at `<ROOT>/<REL>`:
 
 ```
-list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";"
+list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";" --ignore-case --include "<each supported archive extension glob>" [--min-size <bytes>B] [--max-size <bytes>B]
 inspect: rclone archive list <ROOT>/<REL> --files-only (skipped for RcloneX formats by default, always for ISO)
 extract: rclone archive extract <ROOT>/<REL> <TMPDIR>/run_<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
          (or `rclonex archive extract` for RcloneX-handled formats, with the configured --archive-* flags)
@@ -379,6 +379,19 @@ cleanup: rclone purge <TMPDIR>/run_<runid>/<archiveid>/<stem>
 purge:   rclone purge <TMPDIR>/run_<runid>/<archiveid> (and the run dir; `rmdir` only removes dirs that are already empty)
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
+
+The listing is spawned with `--ignore-case` and one `--include` glob per
+supported archive extension (RAR/7z/ISO and split `name.7z.NNN` volumes only
+when RcloneX is enabled), plus `--min-size`/`--max-size` (bytes, inclusive
+bounds) mirroring `min_archive_size`/`max_archive_size`. rclone applies the
+filters as objects stream in, so far fewer non-archive lines are streamed,
+parsed and checked; the remote still enumerates everything. The app
+re-checks names and sizes itself as a backstop, so behavior is unchanged on
+odd backends that report sizes differently. Old-style `.rNN` volumes are
+never emitted by the glob list and never queued. Multivolume first-volume
+selection (`.part1.rar`, `.7z.001`) still happens in-app — the globs match
+volumes 2..N too, because globs cannot express "zero or more padding then
+1". An archive sized exactly at a limit is kept.
 
 `<TMPDIR>` is the configured `tmp_dir` (default `.Rclone-Extractor-tmp`):
 a relative path is resolved under `<ROOT>`, while `remote:path/to/dir` or
@@ -530,9 +543,11 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
 ### Queue and re-runs
 
 - `max_archive_size` / `min_archive_size` (in bytes; `0` = no limit) are
-  enforced while listing — out-of-range archives are ignored entirely (never
-  inserted into the queue) and re-evaluated on every run — and again when a
-  run selects queued rows, so rows queued before the limits were set are
+  enforced while listing — rclone is asked to skip out-of-range files
+  (`--min-size`/`--max-size`) and the app re-checks as a backstop — so
+  out-of-range archives are ignored entirely (never inserted into the
+  queue) and re-evaluated on every run. A limit is also enforced again when
+  a run selects queued rows, so rows queued before the limits were set are
   skipped too. An archive sized exactly at a limit is kept.
 - `queue_max` (clamped to a positive integer) caps both how many paths are
   accepted while listing and how many queued rows are selected for a run.
