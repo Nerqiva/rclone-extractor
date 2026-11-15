@@ -12,6 +12,26 @@ to `main`.
 ## [Unreleased]
 
 ### Changed
+- **Multiple archives of one family in one directory are no longer each
+  pre-inspected.** For rclone-handled formats, inspection of extracted files
+  is often faster than `archive list` (except for archives with many small
+  files), so the run now applies a directory-level, per-archive-family,
+  per-run rule: the first archive of one family per directory, in queue
+  order, keeps the usual pre-extraction inspection. The remaining archives
+  whose filenames are related — same digit-free skeleton (e.g. `pack1.zip`,
+  `pack02.zip`, `movie.2020.zip`) or Levenshtein similarity ≥ 0.8 — are
+  extracted into the temporary tree first and inspected there, mirroring the
+  RcloneX path: website dumps and torrent collections are purged from the
+  temporary tree and the archive stays in place (never promoted, never
+  moved to trash). A group whose first archive failed inspection
+  (torrent/website/tiny/empty/unreadable/password) keeps pre-extraction
+  inspection for all of its archives; unrelated filenames and different
+  archive families are pre-inspected individually, and grouping is not
+  recursive. Alias extensions of one format share a family (`.tgz` =
+  `.tar.gz`, `.tbz2` = `.tar.bz2`, …). An empty extracted tree is promoted
+  as usual, dry-run performs no post-extraction listing, and the grouping
+  lives in memory only — it never affects the next run. RcloneX behavior is
+  unchanged.
 - **The scan listing (`rclone lsf`) now filters at the rclone layer.** The
   listing is spawned with `--ignore-case`, one `--include` glob per
   supported archive extension (RAR/7z/ISO and split `name.7z.NNN` volumes

@@ -57,6 +57,14 @@ scan  →  extract  →  promote  →  trash
   (ZIP, TAR, …) stays on rclone's native `archive extract`. Encrypted
   archives and entry-error tolerance are exposed as Configuration-page
   checkboxes.
+- **Same-series archives in one directory skip pre-inspection** — the first
+  archive of one archive family per directory (per run) is inspected before
+  extraction; the rest of a similar incremental/decremental series are
+  extracted first and inspected on the extracted tree instead (website dumps
+  and torrent collections are skipped there, mirroring the RcloneX path).
+  If the first archive fails inspection, the whole group keeps
+  pre-inspection. Dissimilar names, a different archive family, or a
+  subdirectory each start their own group; nothing persists across runs.
 - **Content filters before extraction** — every archive is inspected with
   `rclone archive list --files-only`; torrent/website/tiny/empty or
   unreadable archives are skipped, never extracted. Archives in `trash_subdir`
@@ -66,7 +74,9 @@ scan  →  extract  →  promote  →  trash
   streams the whole archive — inspection additionally runs **after
   extraction** on the extracted tree: website dumps and torrent collections
   are skipped then (the extracted data is deleted, the archive is kept in
-  place). Everything else continues as a normal extraction.
+  place). Everything else continues as a normal extraction. The same
+  extract-first path also applies to the same-series rest of a group (see
+  "Content filters" below).
 - **Live progress page** — KPI cards, a segmented progress bar, stage text,
   per-run rate/ETA, the active rclone command, done/failed/skipped counters,
   and a slim live bar that follows the in-flight rclone command: real progress
@@ -482,8 +492,10 @@ Enable it with **Enable RcloneX** on the Configuration page.
   **website dump**, and a collection that is at least 60% `.torrent` files
   as **torrent**; in both cases the extracted tree is purged from the
   temporary directory and the archive is left in place (never promoted,
-  never moved to trash). ZIP/TAR/etc. are classified before extraction, as
-  before.
+  never moved to trash). ZIP/TAR/etc. are classified before extraction as
+  before — except the "rest of the series" archives of a directory that
+  contains multiple same-family archives (see **Content filters**), which
+  are classified on the extracted tree like the RcloneX formats.
 - **Flags**: `--archive-password` (encrypted at rest, blank field on save
   keeps the stored value, **Clear** removes it) and `--archive-window-size`
   (bytes; `0` disables caching) are exposed as Configuration checkboxes, all
@@ -512,6 +524,29 @@ case-insensitive. Sizes are in bytes, and KB means 1024 bytes.
 For RcloneX-handled formats (RAR/RAR5, 7Z, ISO9660), the archive is
 extracted to a temporary tree first, and the extracted contents are
 classified in the same way.
+
+**Multiple archives of one family in one directory.** Listing the extracted
+tree is usually faster than `archive list`, so the run applies a
+directory-level rule on top of the above. Archives are grouped by their
+**parent directory** (no recursion) and by archive **family** — aliases of
+one format share a family (`.tgz` is `.tar.gz`, `.tbz2` is `.tar.bz2`, and so
+on), and RcloneX-handled formats are excluded from the rule entirely. Within
+one group, the first archive in queue order keeps pre-extraction inspection.
+The remaining archives whose names are **related** to the first archive's
+name — same digit-free skeleton after stripping digits and non-letters
+(`pack1.zip`, `pack02.zip`; `movie.2020.zip`, `movie.2021.zip`;
+`archive (1).zip`, `archive (2).zip`), or Levenshtein similarity ≥ 0.8 —
+are extracted into the temporary tree first and inspected there, exactly
+like RcloneX-handled formats: website dumps and torrent collections are
+purged from the temporary directory and the archive stays in place (never
+promoted, never moved to trash). A group whose first archive **failed**
+inspection (torrent, website, tiny, empty, unreadable/password) keeps
+pre-extraction inspection for all of its archives. Unrelated filenames and
+archives of a different family in the same directory are pre-inspected
+individually. An empty extracted tree is promoted as usual, and dry-run
+performs no post-extraction listing at all. The grouping is per run and per
+archive type — it is kept in memory only, and the next run starts from
+scratch.
 
 An archive is **skipped** (`status='skipped'`, never extracted) when ANY of
 these holds:

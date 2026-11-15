@@ -100,6 +100,108 @@ export function selectExtractor(
 }
 
 const STEM_SUFFIXES = [...SUPPORTED, ...RCLONEX_SUPPORTED];
+
+// Canonical grouping for the archive families the per-directory rule keys on.
+// Aliases of one format share one key (.tgz is .tar.gz), so a directory
+// holding a mix of alias names still counts as one type. RcloneX-handled
+// formats map to null: they never enter the pre-inspection path this rule
+// optimizes. Multivolume markers are not in the map either, so multivolume
+// names return null by design.
+const FAMILY_BY_SUFFIX: Record<string, string> = {
+  ".zip": "zip",
+  ".tar": "tar",
+  ".tar.gz": "tar.gz",
+  ".tgz": "tar.gz",
+  ".taz": "taz",
+  ".tar.bz2": "tar.bz2",
+  ".tbz2": "tar.bz2",
+  ".tbz": "tar.bz2",
+  ".tb2": "tar.bz2",
+  ".tz2": "tar.bz2",
+  ".tar.lz": "tar.lz",
+  ".tar.lz4": "tar.lz4",
+  ".tar.xz": "tar.xz",
+  ".txz": "tar.xz",
+  ".tar.zst": "tar.zst",
+  ".tzst": "tar.zst",
+  ".tar.br": "tar.br",
+  ".tar.sz": "tar.sz",
+  ".tar.mz": "tar.mz",
+};
+
+/**
+ * Canonical archive family of a base file name, or null when the name is not
+ * a supported rclone-handled archive. Only the single-archive suffix the
+ * name actually ends with is considered.
+ */
+export function archiveFamily(base: string): string | null {
+  const lower = base.toLowerCase();
+  for (const suffix of STEM_SUFFIXES) {
+    if (lower.endsWith(suffix)) {
+      return FAMILY_BY_SUFFIX[suffix] ?? null;
+    }
+  }
+  return null;
+}
+
+/** Stem used for filename similarity: base name minus the matched suffix. */
+function stemForCompare(base: string): string {
+  const lower = base.toLowerCase();
+  for (const suffix of STEM_SUFFIXES) {
+    if (lower.endsWith(suffix)) {
+      return base.slice(0, base.length - suffix.length);
+    }
+  }
+  return base;
+}
+
+// Skeleton with everything except Unicode letters removed (digits go, so
+// "vol01" and "vol2" both become "vol").
+function skeleton(name: string): string {
+  return name.toLowerCase().replace(/[^\p{L}]/gu, "");
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  const curr = new Array<number>(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] = Math.min(
+        curr[j - 1] + 1,
+        prev[j] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
+  }
+  return prev[b.length];
+}
+
+const SIMILARITY_THRESHOLD = 0.8;
+
+/**
+ * Fuzzy filename match for archive collections. True when the two base names
+ * reduce to the same digit-free skeleton (incremental/decremental series),
+ * or the skeletons are Levenshtein-similar at or above 0.8. Plain unrelated
+ * names ("a.zip" vs "b.zip") are not related.
+ */
+export function namesRelated(a: string, b: string): boolean {
+  const sa = skeleton(stemForCompare(a));
+  const sb = skeleton(stemForCompare(b));
+  if (sa.length === 0 || sb.length === 0) {
+    // Both empty: a pure counter series ("1.zip", "2.zip"). One empty and
+    // one not: clearly different names.
+    return sa.length === 0 && sb.length === 0;
+  }
+  if (sa === sb) return true;
+  const dist = levenshtein(sa, sb);
+  const maxLen = Math.max(sa.length, sb.length);
+  return 1 - dist / maxLen >= SIMILARITY_THRESHOLD;
+}
 // Marker patterns to strip for multivolume stems, e.g. "x.part01.rar" -> "x".
 const MV_MARKERS = [/\.part\d+\.rar$/i, /\.7z\.\d{3}$/i, /\.r\d{2}$/i];
 

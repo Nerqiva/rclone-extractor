@@ -8,6 +8,8 @@ import {
   createArchiveStats,
   addArchiveEntry,
   classifyArchive,
+  archiveFamily,
+  namesRelated,
 } from "../src/archive";
 import { parseArchiveListLine, redactArgs } from "../src/rclone";
 import { isSafeRel } from "../src/archive";
@@ -186,4 +188,46 @@ test("redactArgs redacts a sensitive value even when it starts with a dash", () 
   expect(redactArgs(["--archive-password=hunter2"])[0]).toBe("--archive-password=***");
   // non-sensitive flags pass through untouched
   expect(redactArgs(["--config", "/app/rclone.conf"])[0]).toBe("--config");
+});
+
+test("archiveFamily normalizes aliases and rejects rclonex formats", () => {
+  expect(archiveFamily("a.zip")).toBe("zip");
+  expect(archiveFamily("A.ZIP")).toBe("zip");
+  expect(archiveFamily("a.tar")).toBe("tar");
+  expect(archiveFamily("a.tgz")).toBe("tar.gz");
+  expect(archiveFamily("a.tar.gz")).toBe("tar.gz");
+  expect(archiveFamily("a.tbz2")).toBe("tar.bz2");
+  expect(archiveFamily("a.tar.bz2")).toBe("tar.bz2");
+  expect(archiveFamily("a.txz")).toBe("tar.xz");
+  expect(archiveFamily("a.tzst")).toBe("tar.zst");
+  expect(archiveFamily("a.taz")).toBe("taz");
+  expect(archiveFamily("a.rar")).toBeNull();
+  expect(archiveFamily("a.7z")).toBeNull();
+  expect(archiveFamily("a.iso")).toBeNull();
+  expect(archiveFamily("a.part01.rar")).toBeNull();
+  expect(archiveFamily("a.7z.001")).toBeNull();
+});
+
+test("namesRelated matches incremental/decremental series", () => {
+  expect(namesRelated("pack1.zip", "pack2.zip")).toBe(true);
+  expect(namesRelated("pack01.zip", "pack002.zip")).toBe(true);
+  expect(namesRelated("pack1.tgz", "pack2.tar.gz")).toBe(true);
+  expect(namesRelated("vol-01.tar", "vol_02.tar")).toBe(true);
+  expect(namesRelated("movie.2020.zip", "movie.2021.zip")).toBe(true);
+  expect(namesRelated("archive (1).zip", "archive (2).zip")).toBe(true);
+  expect(namesRelated("1.zip", "2.zip")).toBe(true);
+  // case-insensitive
+  expect(namesRelated("Pack1.zip", "PACK2.zip")).toBe(true);
+});
+
+test("namesRelated fuzzy-matches close variants of the same stem", () => {
+  expect(namesRelated("backup.zip", "backups.zip")).toBe(true);
+  expect(namesRelated("My Acronyms.zip", "my-acronyms.zip")).toBe(true);
+});
+
+test("namesRelated rejects unrelated names", () => {
+  expect(namesRelated("a.zip", "b.zip")).toBe(false);
+  expect(namesRelated("pack1.zip", "zzz.zip")).toBe(false);
+  expect(namesRelated("report.zip", "other.zip")).toBe(false);
+  expect(namesRelated("1.zip", "a.zip")).toBe(false);
 });

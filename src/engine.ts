@@ -21,9 +21,39 @@ import {
   isSafeRel,
   parseTrashSubdir,
   selectExtractor,
+  archiveFamily,
+  namesRelated,
   TRASH,
   type SkipReason,
 } from "./archive";
+
+// Per-run state for the "first archive per (directory, archive family) gets
+// pre-inspection; the rest of a similar series are extracted first" rule.
+// `ref` is the first archive's base name in the group (set once its
+// inspection produced a verdict); `open` is true when it passed. Created
+// fresh each run — never persisted.
+type GroupState = { ref: string | null; open: boolean };
+
+/** Directory part of a relative archive path ("" for scan-root archives). */
+function dirOfRel(rel: string): string {
+  const i = rel.lastIndexOf("/");
+  return i === -1 ? "" : rel.slice(0, i);
+}
+
+/**
+ * Record the first archive's inspection verdict for its (directory, family)
+ * group. Only the first archive to reach a verdict sets the anchor; later
+ * archives of the group never move it.
+ */
+function noteGroupInspection(
+  group: GroupState | undefined,
+  baseName: string,
+  passed: boolean,
+): void {
+  if (!group || group.ref !== null) return;
+  group.ref = baseName;
+  group.open = passed;
+}
 
 export const engineState = {
   running: false,
@@ -862,6 +892,11 @@ export async function runEngine(
       : null;
     if (rclonexRc) wireCommand(rclonexRc);
 
+    // One entry per (directory, archive family) with more than one archive
+    // in this run. Discarded when the run ends; the next run starts from
+    // scratch.
+    const groupStates = new Map<string, GroupState>();
+
     for (const row of rows) {
       // A pending skip click between archives has no archive in flight:
       // discard it rather than leaking onto the next archive. Mid-archive
@@ -925,6 +960,34 @@ export async function runEngine(
       await markRunTouch(Number(row.id), runRowId);
 
       const baseName = rel.slice(rel.lastIndexOf("/") + 1);
+      // Family of the rclone-handled archive this archive is; null for
+      // RcloneX formats (they keep their existing always-extract-first
+      // behavior). The group key is the exact parent directory — not
+      // recursive. Grouping is per family and per run, never persisted.
+      const family = archiveFamily(baseName);
+      const groupKey =
+        family === null ? null : `${dirOfRel(rel)}|${family}`;
+      let group: GroupState | undefined;
+      if (groupKey !== null) {
+        group = groupStates.get(groupKey);
+        if (!group) {
+          group = { ref: null, open: false };
+          groupStates.set(groupKey, group);
+        }
+      }
+      // A "rest of the group" archive is extracted first and inspected on
+      // the extracted tree, provided the first archive already passed
+      // inspection and this name is related to it (incremental/decremental
+      // series or otherwise similar filenames).
+      let extractFirst = false;
+      if (
+        group &&
+        group.ref !== null &&
+        group.open &&
+        namesRelated(group.ref, baseName)
+      ) {
+        extractFirst = true;
+      }
       const useRclonex =
         rclonexRc !== null && selectExtractor(baseName, true) === "rclonex";
       const extractor = useRclonex && rclonexRc ? rclonexRc : rc;
@@ -942,7 +1005,14 @@ export async function runEngine(
         // skipped up front and the extracted tree is checked instead
         // (website dumps / torrent collections are purged from the temp
         // dir, archive stays in place). ISO is not listable by
-        // mholt/archives, so it also takes this fast path. A per-archive
+        // mholt/archives, so it also takes this fast path. The same
+        // extract-first path applies to the "rest of the group" rule below:
+        // archives in the same directory with a similar name of the same
+        // archive family as an archive already inspected this run are
+        // extracted first and inspected on the extracted tree — but only
+        // when the group's first archive passed inspection. Unrelated
+        // names, different families, and groups whose first archive failed
+        // inspection are pre-inspected as usual. A per-archive
         // "Skip inspection" request still passes the inspection through here
         // for rclone-handled formats.
         const stats = createArchiveStats();
@@ -951,8 +1021,15 @@ export async function runEngine(
         if (engineState.skipInspection) {
           engineState.skipInspection = false; // consumed by this archive only
           logger.info(`inspection skipped by user: ${rel}`);
+          noteGroupInspection(group, baseName, true);
         } else if (useRclonex || /\.iso$/i.test(baseName)) {
           logger.info(`skipping archive inspection for ${rel} (rclonex)`);
+        } else if (extractFirst) {
+          // Anchor archive already inspected this run and this name is part
+          // of the same series — extract first, inspect the tree after.
+          logger.info(
+            `inspection deferred to post-extract for ${rel} (similar to ${group!.ref} — first of this series already inspected this run)`,
+          );
         } else {
           // Inspection always goes through the rclone binary: upstream's
           // `archive list` reads RAR/7Z fine, rclonex does not extend it and
@@ -984,6 +1061,10 @@ export async function runEngine(
               inspectionDetail = describeArchiveStats(stats);
             }
           }
+          // A user skip mid-inspection is treated as passed (skipReason
+          // stays null) — same semantics for the group anchor as for the
+          // archive itself.
+          noteGroupInspection(group, baseName, skipReason === null);
         }
 
         if (skipReason) {
@@ -1044,15 +1125,17 @@ export async function runEngine(
             );
           }
         } else {
-          // Post-extraction inspection for rclonex-handled formats: the
-          // archive itself cannot be cheaply listed, but the extracted
-          // tree can. Website dumps and torrent collections are skipped
+          // Post-extraction inspection for rclonex-handled formats and for
+          // "rest of the group" archives deferred by the per-directory rule:
+          // the archive itself cannot be cheaply listed (rclonex), or was
+          // deliberately extracted first, so the extracted tree is checked
+          // instead. Website dumps and torrent collections are skipped
           // after extraction — the extracted data is removed and the
           // archive stays in place (never promoted, never trashed).
           // Anything else continues as a normal extraction.
           let postSkip: "website" | "torrent" | null = null;
           const exStats = createArchiveStats();
-          if (useRclonex && !dryRun) {
+          if ((useRclonex || extractFirst) && !dryRun) {
             setActivity("Inspecting extracted files");
             const listOut = await rc.listPath(tmp, (p, size) =>
               addArchiveEntry(exStats, p, size),
