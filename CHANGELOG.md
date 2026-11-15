@@ -11,7 +11,29 @@ to `main`.
 
 ## [Unreleased]
 
+### Removed
+- **The `dry_run` setting and all `--dry-run` behavior are gone.** The
+  Configuration checkbox, the database default, the flag threaded through
+  `run`/`extract`/`promote`/`trash`/`moveto`/`purge`/`rmdir`/`purgeStaleTemp`
+  (and everything the flag enabled: the boot/start temp sweep in "would
+  purge" mode, the dry-run-aware re-queue rule, the "Dry run" notes) are
+  removed. Every run now performs the real moves — deleting or restoring
+  through the app is likewise no longer subject to a stored dry-run flag.
+
 ### Changed
+- **The Configuration page stays editable while a run is active.**
+  Settings are stored immediately but apply from the **next run**: the
+  running task reads everything it needs once at its start and keeps it for
+  its lifetime, and it pins a **private, mode-0600 snapshot of
+  `rclone_conf`** (created at run start, deleted when the run ends), so an
+  rclone.conf saved mid-run cannot leak into the in-flight task. The saved
+  config is what on-demand rclone calls (e.g. password-archive downloads)
+  and the next run use; the shared working copy is updated as usual on
+  save. **Import** and the destructive maintenance actions (**Clear logs**,
+  **Clear tmp directory**, **Clear everything**) remain blocked mid-run, as
+  do the password-protected Delete/Restore actions. **Clear queues** stays
+  available. The Progress page now shows the running task's own `scan_root`
+  instead of the stored setting while a task is running.
 - **Multiple archives of one family in one directory are no longer each
   pre-inspected.** For rclone-handled formats, inspection of extracted files
   is often faster than `archive list` (except for archives with many small
@@ -29,7 +51,7 @@ to `main`.
   archive families are pre-inspected individually, and grouping is not
   recursive. Alias extensions of one format share a family (`.tgz` =
   `.tar.gz`, `.tbz2` = `.tar.bz2`, …). An empty extracted tree is promoted
-  as usual, dry-run performs no post-extraction listing, and the grouping
+  as usual, and the grouping
   lives in memory only — it never affects the next run. RcloneX behavior is
   unchanged.
 - **The scan listing (`rclone lsf`) now filters at the rclone layer.** The

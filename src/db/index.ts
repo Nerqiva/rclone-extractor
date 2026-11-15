@@ -29,7 +29,6 @@ const defaults: Record<string, string> = {
   min_archive_size: "0",
   sort_by: "path",
   sort_dir: "asc",
-  dry_run: "0",
   trash_subdir: TRASH,
   cancel: "0",
   resume: "1",

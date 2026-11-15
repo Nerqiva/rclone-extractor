@@ -53,18 +53,16 @@ if (recovered > 0) {
 
 // Best-effort cleanup of temp dirs left behind by previous runs (e.g. after
 // a crash). Only app-owned numeric directories inside the configured
-// tmp_dir are purged; anything else is left alone. Honors dry_run.
+// tmp_dir are purged; anything else is left alone.
 const tmpBoot = await loadTmpDirSettings();
 if (tmpBoot.spec) {
   try {
     const rcBoot = await Rclone.fromSettings();
     const res = await rcBoot.purgeStaleTemp(
       tmpRootPath(tmpBoot.scanRoot, tmpBoot.spec),
-      tmpBoot.dryRun,
     );
     if (res.purged.length) {
-      const verb = tmpBoot.dryRun ? "would purge (dry run)" : "purged";
-      console.log(`boot: ${verb} ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`);
+      console.log(`boot: purged ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`);
     }
     if (res.failed.length) {
       console.warn(`boot: could not purge temp dir(s): ${res.failed.join(", ")}`);

@@ -11,7 +11,7 @@ import {
 } from "../engine";
 import { esc, toastTriggerHeaders } from "../ui";
 import { normalizeRcloneConf } from "../rcloneconf";
-import { Rclone, pendingRcloneConfNotice } from "../rclone";
+import { Rclone, pendingRcloneConfNotice, syncConfWorkingCopy } from "../rclone";
 import { parseTmpDir, tmpRootPath, TMP_DIR } from "../tmpdir";
 import { loadTmpDirSettings } from "../tmpsweep";
 import { parseTrashSubdir, isSafeRel, normalizeRel, TRASH } from "../archive";
@@ -120,13 +120,6 @@ const SETTING_KEYS = [
 ];
 
 actions.post("/config", async (c) => {
-  if (engineState.running) {
-    return c.html(
-      await configForm(`<p class="note err">Task is running — stop it first.</p>`),
-      200,
-      RUNNING_GUARD_HEADERS,
-    );
-  }
   const form = await c.req.formData();
 
   const confFile = form.get("rclone_conf_file");
@@ -323,16 +316,20 @@ actions.post("/config", async (c) => {
   if (normalizedConf !== null) {
     await setSetting("rclone_conf", normalizedConf);
     // Keep the working copy in sync right away so a read-only DATA_DIR is
-    // reported (and toasted) on this response, not on the next run.
+    // reported (and toasted) on this response, not on the next run. The
+    // running task (if any) is pinned to its own snapshot; this sync only
+    // affects on-demand rclone calls and the next run.
     try {
-      await Rclone.fromSettings();
+      await syncConfWorkingCopy();
     } catch (e) {
       console.warn("rclone conf sync failed:", String(e));
     }
   }
-  await setSetting("dry_run", form.get("dry_run") !== null ? "1" : "0");
   await setSetting("resume", form.get("resume") !== null ? "1" : "0");
   const confNotice = pendingRcloneConfNotice();
+  const savedNote = engineState.running
+    ? "Saved. Changes apply from the next run (a run in progress is not affected)."
+    : "Saved.";
   if (confNotice) {
     return c.html(
       await configForm(`<p class="note warn-line">${esc(confNotice)}</p>`),
@@ -341,20 +338,13 @@ actions.post("/config", async (c) => {
     );
   }
   return c.html(
-    await configForm(`<p class="note">Saved.</p>`),
+    await configForm(`<p class="note">${esc(savedNote)}</p>`),
     200,
-    toastTriggerHeaders("Settings saved."),
+    toastTriggerHeaders(engineState.running ? "Settings saved — applies from the next run." : "Settings saved."),
   );
 });
 
 actions.post("/config/rclone-clear", async (c) => {
-  if (engineState.running) {
-    return c.html(
-      await configForm(`<p class="note err">Task is running — stop it first.</p>`),
-      200,
-      RUNNING_GUARD_HEADERS,
-    );
-  }
   await setSetting("rclone_conf", "");
   // Never delete the file at RCLONE_CONF_PATH (or its /tmp fallback): it may
   // be the user's mounted rclone.conf. A stored conf is overwritten on the
@@ -367,13 +357,6 @@ actions.post("/config/rclone-clear", async (c) => {
 });
 
 actions.post("/config/rclonex-clear", async (c) => {
-  if (engineState.running) {
-    return c.html(
-      await configForm(`<p class="note err">Task is running — stop it first.</p>`),
-      200,
-      RUNNING_GUARD_HEADERS,
-    );
-  }
   await setSetting("rclonex_archive_password", "");
   await setSetting("rclonex_archive_password_enabled", "0");
   return c.html(
@@ -402,7 +385,7 @@ async function resetSequences(tables: string[]): Promise<void> {
 
 /** Purge app-owned numeric temp run dirs (same rules as the manual purge). */
 async function purgeAppTempDirs(): Promise<
-  | { ok: true; dryRun: boolean; purged: number; failed: number }
+  | { ok: true; purged: number; failed: number }
   | { ok: false }
 > {
   const tmp = await loadTmpDirSettings();
@@ -410,15 +393,13 @@ async function purgeAppTempDirs(): Promise<
   const rc = await Rclone.fromSettings();
   const res = await rc.purgeStaleTemp(
     tmpRootPath(tmp.scanRoot, tmp.spec),
-    tmp.dryRun,
   );
-  return { ok: true, dryRun: tmp.dryRun, purged: res.purged.length, failed: res.failed.length };
+  return { ok: true, purged: res.purged.length, failed: res.failed.length };
 }
 
 function tempPurgeNote(p: Awaited<ReturnType<typeof purgeAppTempDirs>>): string {
   if (!p.ok) return " Temp purge skipped (tmp_dir invalid).";
-  if (p.dryRun) return ` Dry run: would purge ${p.purged} temp dir(s).`;
-  return ` Purged ${p.purged} temp dir(s)${p.failed ? ` (${p.failed} failed)` : ""}.`;
+  return ` Purged ${p.purged} stale temp dir(s)${p.failed ? ` (${p.failed} failed)` : ""}.`;
 }
 
 const RUNNING_GUARD = `<p class="note err">Task is running — stop it first.</p>`;
@@ -471,7 +452,6 @@ async function movePasswordArchive(
   if (!trash) {
     return passwordListResponse(c, "trash_subdir is invalid.", "err");
   }
-  const dryRun = (await getSetting("dry_run", "0")) === "1";
   const ref = { scope: "archive" as const, refId: id, kind: "extract" as const };
   const rc = await Rclone.fromSettings();
   const trashRel = normalizeRel(`${trash}/${rel}`);
@@ -481,12 +461,6 @@ async function movePasswordArchive(
     // The trash copy is gone (removed by hand or by something else), so
     // this row can never be restored. Drop it (and its logs) instead of
     // offering a Restore button that can only fail.
-    if (dryRun) {
-      return passwordListResponse(
-        c,
-        "Dry run: the trash copy is missing; nothing was changed.",
-      );
-    }
     await store.run("DELETE FROM log_lines WHERE scope='archive' AND ref_id = ?", [id]);
     await store.run("DELETE FROM archives WHERE id = ?", [id]);
     return passwordListResponse(
@@ -503,19 +477,13 @@ async function movePasswordArchive(
       "err",
     );
   }
-  const res = await rc.moveToRel(srcRel, destRel, dryRun, ref);
+  const res = await rc.moveToRel(srcRel, destRel, ref);
   if (res.code !== 0) {
     const detail = (res.tail || []).slice(-1)[0] ?? res.stderr.trim().split("\n").pop() ?? "unknown error";
     return passwordListResponse(
       c,
       `${del ? "Move to trash" : "Restore"} failed (exit ${res.code}): ${detail}`,
       "err",
-    );
-  }
-  if (dryRun) {
-    return passwordListResponse(
-      c,
-      del ? "Dry run — archive was not moved." : "Dry run — archive was not restored.",
     );
   }
   if (del) {
@@ -555,7 +523,7 @@ actions.post("/maintenance/queues", async (c) => {
 });
 
 // Shared wipe behind "Clear everything": deletes logs, runs and archives,
-// resets the sequences, and purges stale temp dirs (dry-run aware).
+// resets the sequences, and purges stale temp dirs.
 // Returns the purge note.
 async function wipeEverything(): Promise<string> {
   await store.run("DELETE FROM log_lines");
@@ -601,13 +569,9 @@ actions.post("/maintenance/tmp-purge", async (c) => {
       );
     }
     const none = p.purged === 0 && p.failed === 0;
-    const msg = p.dryRun
-      ? none
-        ? "Dry run: temp directory is tidy"
-        : `Dry run: would purge ${p.purged} stale item(s)`
-      : none
-        ? "Temp directory is tidy"
-        : `Purged ${p.purged} stale item(s)`;
+    const msg = none
+      ? "Temp directory is tidy"
+      : `Purged ${p.purged} stale item(s)`;
     const detail = p.failed ? ` ${p.failed} could not be purged.` : "";
     return c.html(
       `<p class="note${p.failed ? " err" : ""}">${esc(msg)}.${esc(detail)}${confNotice ? ` ${esc(confNotice)}` : ""}</p>`,

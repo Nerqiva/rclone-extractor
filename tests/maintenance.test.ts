@@ -55,14 +55,13 @@ async function insertRun() {
   return store.insertReturningId("INSERT INTO runs(started_at, total) VALUES('t', 0)", []);
 }
 
-test("clear everything wipes history, queue and caches, resets sequence and purges app temp dirs (dry-run)", async () => {
+test("clear everything wipes history, queue and caches, resets sequence and purges app temp dirs", async () => {
   const savedTmpDir = (await getSetting("tmp_dir")) ?? "";
   const tmpRoot = mkdtempSync(join(tmpdir(), "rx-maint-tmp-"));
   mkdirSync(join(tmpRoot, "run_123")); // app-owned run dir
   mkdirSync(join(tmpRoot, "keep-me")); // not app-owned: must survive
   await setSetting("scan_root", mockBase);
   await setSetting("tmp_dir", tmpRoot);
-  await setSetting("dry_run", "1");
   await setSetting("last_run_id", "42");
 
   const id = await insertRun();
@@ -79,7 +78,7 @@ test("clear everything wipes history, queue and caches, resets sequence and purg
     const body = await res.text();
 
     expect(body).toContain("Cleared everything");
-    expect(body).toContain("would purge 1 temp dir(s)");
+    expect(body).toContain("Purged 1 stale temp dir(s)");
     expect(body).toContain("Next run starts from #1");
 
     const runsLeft = await store.get1<{ c: number }>("SELECT COUNT(*) AS c FROM runs");
@@ -103,7 +102,6 @@ test("clear everything wipes history, queue and caches, resets sequence and purg
     await store.run("DELETE FROM runs WHERE id = ?", [newId]);
   } finally {
     await store.run("DELETE FROM archives WHERE path='keep-me.zip'");
-    await setSetting("dry_run", "0");
     await setSetting("tmp_dir", savedTmpDir);
   }
 });

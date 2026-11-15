@@ -1,5 +1,5 @@
 import { writeFileSync, renameSync, chmodSync, mkdirSync, unlinkSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { getSetting } from "./db";
 import {
   isSupported,
@@ -15,6 +15,7 @@ import {
   RCLONE_CONF_FALLBACK_PATH,
   RCLONE_BIN,
   RCLONEX_BIN,
+  DATA_DIR,
 } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
 import { insertLogLines } from "./log";
@@ -419,9 +420,68 @@ function writeConfAtomic(path: string, conf: string): void {
 }
 
 /**
+ * Resolve the effective rclone.conf text: the stored (DB) conf wins, falling
+ * back to the RCLONE_CONF env var. Returns "" when nothing is configured or
+ * the candidates fail validation.
+ */
+export async function resolveConfText(): Promise<string> {
+  const storedConf = (await getSetting("rclone_conf", "")) ?? "";
+  for (const candidate of [storedConf, RCLONE_CONF]) {
+    if (!candidate) continue;
+    const parsed = normalizeRcloneConf(candidate);
+    if (parsed.ok && parsed.text) return parsed.text;
+    if (!parsed.ok) console.warn(`ignoring invalid rclone_conf: ${parsed.error}`);
+  }
+  return "";
+}
+
+/**
+ * Sync the stored rclone.conf to the shared working copy. Returns a
+ * user-facing warning when the fallback path (or a total failure) is used,
+ * else null. No-op (returns null) when nothing is configured.
+ */
+export async function syncConfWorkingCopy(): Promise<string | null> {
+  const conf = await resolveConfText();
+  if (!conf) return null;
+  return syncConfFile(conf);
+}
+
+/**
+ * Write the resolved rclone.conf to a per-run private file (mode 0600) and
+ * return its path, or null when nothing is configured or the write fails.
+ * The file is never swept by pattern: a run deletes its own snapshot when
+ * it ends (see deleteRunConfSnapshot); a hard-crashed run may leave one
+ * behind — delete it manually.
+ */
+export async function writeRunConfSnapshot(runId: number): Promise<string | null> {
+  const conf = await resolveConfText();
+  if (!conf) return null;
+  for (const dir of [DATA_DIR, RCLONE_CONF_FALLBACK_DIR]) {
+    const path = join(dir, `run-conf-${runId}.conf`);
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeConfAtomic(path, conf);
+      return path;
+    } catch (e) {
+      console.warn(`could not write run conf snapshot in ${dir}:`, String(e));
+    }
+  }
+  return null;
+}
+
+/** Remove a per-run rclone.conf snapshot; best effort, never throws. */
+export function deleteRunConfSnapshot(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // stale snapshot after a fresh crash is acceptable; not worth failing a run over
+  }
+}
+
+/**
  * Write the stored rclone.conf working copy, falling back to /tmp/app/data
  * when the primary path fails for any reason. Returns a user-facing warning
- * when the fallback (or a total failure) had to be used, else null.
+ * when the fallback (or a total failure) is used, else null.
  */
 function syncConfFile(conf: string): string | null {
   try {
@@ -469,6 +529,8 @@ export class Rclone {
     private runLog?: Logger,
     /** True when RcloneX is enabled and its formats are eligible for queueing. */
     public rclonexEnabled: boolean = false,
+    /** --config target; defaults to the shared working copy, pass a per-run snapshot to isolate a run. */
+    private confPath: string = effectiveConfPath,
   ) {}
 
   // The --config flag is hard-coded so rclone never falls back to
@@ -477,9 +539,10 @@ export class Rclone {
   // keeps the working copy at the primary path (or the /tmp fallback when
   // the primary path is not writable); otherwise the file at the primary
   // path (e.g. a mounted rclone.conf) is used as-is. A --config in
-  // remote_flags is stripped, not honored.
+  // remote_flags is stripped, not honored. Per-run private snapshots point
+  // at a file created for that run alone.
   private confArgs(): string[] {
-    return ["--config", effectiveConfPath];
+    return ["--config", this.confPath];
   }
 
   /**
@@ -487,10 +550,16 @@ export class Rclone {
    * `opts.rclonex` targets the rclonex binary (Nerqiva/rclonex) with the same
    * flags and --config. The listing filter always reflects the rclonex
    * setting, so archives queued in a mixed run carry format info correctly.
+   *
+   * When `opts.confPath` is set (per-run private snapshot), the instance
+   * points --config at that file and the shared working copy is left
+   * untouched. Otherwise the stored rclone.conf is synced to the shared
+   * working copy first (unchanged behavior; on-demand calls made mid-run
+   * therefore see the newest saved config).
    */
   static async fromSettings(
     runLog?: Logger,
-    opts: { rclonex?: boolean } = {},
+    opts: { rclonex?: boolean; confPath?: string } = {},
   ): Promise<Rclone> {
     const root = (await getSetting("scan_root", "")) ?? "";
     // An empty root joins to absolute local paths; never build one.
@@ -512,19 +581,8 @@ export class Rclone {
       runLog?.warn(warning);
     }
 
-    const storedConf = (await getSetting("rclone_conf", "")) ?? "";
-    let conf = "";
-    for (const candidate of [storedConf, RCLONE_CONF]) {
-      if (!candidate) continue;
-      const parsed = normalizeRcloneConf(candidate);
-      if (parsed.ok && parsed.text) {
-        conf = parsed.text;
-        break;
-      }
-      if (!parsed.ok) console.warn(`ignoring invalid rclone_conf: ${parsed.error}`);
-    }
-
-    if (conf) {
+    const conf = await resolveConfText();
+    if (conf && !opts.confPath) {
       // Write via a temp file + rename so a crash mid-write cannot leave a
       // truncated config, and never leave credentials world-readable. When
       // the primary path under DATA_DIR is not writable for any reason, the
@@ -540,6 +598,7 @@ export class Rclone {
       flags,
       runLog,
       rclonexEnabled,
+      opts.confPath,
     );
   }
 
@@ -662,11 +721,11 @@ export class Rclone {
 
   /**
    * List the contents of an archive with `rclone archive list --files-only`.
-   * Read-only, so no --dry-run is added even when dry-run mode is on; the
-   * whole purpose is to inspect an archive before any extraction happens.
-   * Entries are streamed to `onEntry` (O(1) memory); the caller aggregates
-   * counts. On failure the raw stderr is appended to the archive log.
-   * Never throws for listing failures; spawn failures propagate.
+   * Read-only, so no extra flags are added. The whole purpose is to inspect
+   * an archive before any extraction happens. Entries are streamed to
+   * `onEntry` (O(1) memory); the caller aggregates counts. On failure the
+   * raw stderr is appended to the archive log. Never throws for listing
+   * failures; spawn failures propagate.
    */
   async archiveList(
     rel: string,
@@ -739,9 +798,8 @@ export class Rclone {
    * appended to that archive's log; without a ref the command still goes to
    * the run log via `announce()`. Archive logs never carry app wording.
    */
-  async run(args: string[], dry: boolean, ref?: RcloneRef): Promise<Outcome> {
+  async run(args: string[], ref?: RcloneRef): Promise<Outcome> {
     const full = [...this.confArgs(), ...args, ...this.flags];
-    if (dry) full.push("--dry-run");
     const command = this.announce(full);
 
     const proc = spawnBinary(this.bin, full, {
@@ -776,12 +834,10 @@ export class Rclone {
    */
   private async streamTransfer(
     args: string[],
-    dry: boolean,
     ref: RcloneRef,
     onStats?: (stats: ExtractStats) => void,
   ): Promise<Outcome> {
     const full = [...this.confArgs(), ...args, ...this.flags];
-    if (dry) full.push("--dry-run");
     const command = this.announce(full);
 
     // No `$ command` pre-line: archive logs hold raw binary output only.
@@ -863,7 +919,6 @@ export class Rclone {
   async extract(
     rel: string,
     tmp: string,
-    dry: boolean,
     ref: RcloneRef,
     onStats?: (stats: ExtractStats) => void,
     extraFlags: string[] = [],
@@ -883,13 +938,12 @@ export class Rclone {
       "--log-level",
       "INFO",
     ];
-    return this.streamTransfer(args, dry, ref, onStats);
+    return this.streamTransfer(args, ref, onStats);
   }
 
   async promote(
     rel: string,
     tmp: string,
-    dry: boolean,
     ref: RcloneRef,
     tmpTopSegment: string | null,
     onStats?: (stats: ExtractStats) => void,
@@ -915,21 +969,21 @@ export class Rclone {
       "INFO",
     ];
     if (tmpTopSegment) args.push("--exclude", `/${tmpTopSegment}/**`);
-    return this.streamTransfer(args, dry, ref, onStats);
+    return this.streamTransfer(args, ref, onStats);
   }
 
-  async cleanup(tmp: string, dry: boolean, ref?: RcloneRef): Promise<Outcome> {
-    return this.run(["purge", this.fullPath(tmp)], dry, ref);
+  async cleanup(tmp: string, ref?: RcloneRef): Promise<Outcome> {
+    return this.run(["purge", this.fullPath(tmp)], ref);
   }
 
   /** Remove an empty directory. Non-empty directories fail with code != 0. */
-  async rmdir(path: string, dry: boolean, ref?: RcloneRef): Promise<Outcome> {
-    return this.run(["rmdir", this.fullPath(path)], dry, ref);
+  async rmdir(path: string): Promise<Outcome> {
+    return this.run(["rmdir", this.fullPath(path)]);
   }
 
   /** Recursively delete a tree. */
-  async purge(path: string, dry: boolean, ref?: RcloneRef): Promise<Outcome> {
-    return this.run(["purge", this.fullPath(path)], dry, ref);
+  async purge(path: string, ref?: RcloneRef): Promise<Outcome> {
+    return this.run(["purge", this.fullPath(path)], ref);
   }
 
   /** Top-level directory names of a remote path (no trailing slashes). Missing dir yields []. */
@@ -965,7 +1019,7 @@ export class Rclone {
    * temp root. Anything else (other runs' dirs, user data) is left
    * untouched. Returns what was purged.
    */
-  async purgeStaleTemp(tmpRoot: string, dry: boolean): Promise<SweepResult> {
+  async purgeStaleTemp(tmpRoot: string): Promise<SweepResult> {
     const tops = await this.listTopDirs(tmpRoot);
     const result: SweepResult = { purged: [], skipped: [], failed: [] };
     for (const name of tops) {
@@ -973,7 +1027,7 @@ export class Rclone {
         result.skipped.push(name);
         continue;
       }
-      const res = await this.purge(`${tmpRoot}/${name}`, dry);
+      const res = await this.purge(`${tmpRoot}/${name}`);
       if (res.code === 0) result.purged.push(name);
       else result.failed.push(name);
     }
@@ -983,7 +1037,6 @@ export class Rclone {
   async trash(
     rel: string,
     subdir: string,
-    dry: boolean,
     ref: RcloneRef,
     onStats?: (stats: ExtractStats) => void,
   ): Promise<Outcome> {
@@ -1002,7 +1055,6 @@ export class Rclone {
         "--log-level",
         "INFO",
       ],
-      dry,
       ref,
       onStats,
     );
@@ -1033,12 +1085,11 @@ export class Rclone {
    * the caller can check `existsPath` first to refuse instead. Logs raw
    * binary output to the archive's log.
    */
-  async moveToRel(srcRel: string, dstRel: string, dry: boolean, ref: RcloneRef): Promise<Outcome> {
+  async moveToRel(srcRel: string, dstRel: string, ref: RcloneRef): Promise<Outcome> {
     assertSafeRel(srcRel);
     assertSafeRel(dstRel);
     return this.streamTransfer(
       ["moveto", `${this.root}/${srcRel}`, `${this.root}/${dstRel}`],
-      dry,
       ref,
     );
   }

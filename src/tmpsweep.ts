@@ -7,8 +7,6 @@ import {
 import { TRASH } from "./archive";
 
 export type TmpDirSettings = {
-  /** Effective dry_run flag. */
-  dryRun: boolean;
   /** Configured scan root (unvalidated here; callers check for the empty case). */
   scanRoot: string;
   /** Parsed tmp_dir; null when the configured value is unusable. */
@@ -26,7 +24,6 @@ export type TmpDirSettings = {
 export async function loadTmpDirSettings(
   trashSubdir?: string,
 ): Promise<TmpDirSettings> {
-  const dryRun = (await getSetting("dry_run", "0")) === "1";
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
   const trash =
     trashSubdir ?? ((await getSetting("trash_subdir", TRASH)) ?? TRASH);
@@ -35,5 +32,5 @@ export async function loadTmpDirSettings(
   const spec = raw
     ? parseTmpDir(raw, scanRoot, trash)
     : { kind: "relative" as const, value: TMP_DIR };
-  return { dryRun, scanRoot, spec, raw };
+  return { scanRoot, spec, raw };
 }

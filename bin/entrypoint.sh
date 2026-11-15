@@ -5,6 +5,11 @@
 # under $DATA_DIR/bin are used when present.
 
 BIN_DIR="${DATA_DIR:-/app/data}/bin"
+# Per-run private rclone.conf snapshots (see src/rclone.ts writeRunConfSnapshot)
+# hold the run's credentials; a hard-crashed run leaves one behind. The app
+# deletes its own at run end; nothing can be live in this container yet, so
+# clear them here.
+rm -f "${DATA_DIR:-/app/data}"/run-conf-*.conf
 if ! "$(dirname "$0")/fetch-deps.sh"; then
   echo "bootstrap: refresh failed — continuing with the previous binaries"
 fi

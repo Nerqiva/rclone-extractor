@@ -92,11 +92,11 @@ pages.get("/config", async (c) => {
   </div>
   <div class="card">
     <h2 class="section-title" style="margin-top:0">Maintenance</h2>
-    ${running ? `<p class="muted">Task running — options are disabled.</p>` : ""}
+    ${running ? `<p class="muted">Task running — destructive actions are disabled. The settings form above stays editable; changes apply from the next run.</p>` : ""}
     <div class="btn-row">
       <span class="maint-btn"><button class="btn" hx-post="/maintenance/queues" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear the queue?|Clear queues"><span class="spinner" aria-hidden="true"></span>Clear queues</button>${info("Deletes queued archives (and their logs). A running engine skips the deleted rows; run count and history are kept.", "Clear queues")}</span>
       <span class="maint-btn"><button class="btn" hx-post="/maintenance/logs" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear logs and errors?|Clear logs"${dis}><span class="spinner" aria-hidden="true"></span>Clear logs</button>${info("Wipes log lines and error flags only. Runs and archives are kept.", "Clear logs")}</span>
-      <span class="maint-btn"><button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" data-confirm="Clear the tmp directory?|Clear tmp directory"${dis}><span class="spinner" aria-hidden="true"></span>Clear tmp directory</button>${info("Purges stale app-owned run_* directories (honors dry run).", "Clear tmp directory")}</span>
+      <span class="maint-btn"><button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" data-confirm="Clear the tmp directory?|Clear tmp directory"${dis}><span class="spinner" aria-hidden="true"></span>Clear tmp directory</button>${info("Purges stale app-owned run_* directories.", "Clear tmp directory")}</span>
       <span class="maint-btn"><button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear everything (queue, history, logs, errors, tmp directory)?|Clear everything"${dis}><span class="spinner" aria-hidden="true"></span>Clear everything</button>${info("Queue, history, logs, errors and the tmp directory — next run starts from #1.", "Clear everything")}</span>
     </div>
     <div id="tmp-purge-result"></div>

@@ -158,20 +158,20 @@ export async function configForm(note = ""): Promise<string> {
   const bufferSplit = splitSizeLimit(bufferBytes || 16777216);
   const bufferOff = bufferBytes <= 0;
   const maxSizeTooHigh = maxSizeBytes > 0 && minSizeBytes > 0 && maxSizeBytes < minSizeBytes;
-  // While a task is running every setting on this page is out of reach;
-  // Clear queues (Maintenance) stays usable. The fieldset disables all
-  // nested controls; server-side guards remain as the real enforcement.
+  // The settings form stays editable while a task is running; everything on
+  // it is a database row consumed once at the next run's start (or pinned
+  // into a per-run rclone.conf snapshot). Destructive maintenance buttons
+  // elsewhere on the page keep their disabled state.
   const running = engineState.running;
-  const dis = running ? " disabled" : "";
-  return `<form id="config-form"${running ? ` class="is-disabled"` : ""} hx-post="/config" hx-encoding="multipart/form-data" hx-target="#config-form" hx-swap="outerHTML">
+  return `<form id="config-form" hx-post="/config" hx-encoding="multipart/form-data" hx-target="#config-form" hx-swap="outerHTML">
   ${note}
-  ${running ? `<p class="muted">Task running — options are disabled.</p>` : ""}
+  ${running ? `<p class="muted">Task running — changes apply from the next run. The run in progress is not affected.</p>` : ""}
   <p class="muted">
     Backend: <strong>${esc(backend)}</strong>
     &middot; Encryption: <strong>${enc ? "on" : "off"}</strong>
     <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">APP_PASSWORD ${esc(pwWorks)}</span>
   </p>
-  <fieldset class="bare-fieldset"${dis}>
+  <fieldset class="bare-fieldset">
   ${maxSizeTooHigh ? `<p class="note warn-line">Largest archive is smaller than Smallest archive — every archive is excluded.</p>` : ""}
   ${section(
     "Connection",
@@ -279,7 +279,6 @@ export async function configForm(note = ""): Promise<string> {
   )}
   ${section(
     "Behaviour",
-    toggleRow("dry_run", "Dry run", s.dry_run === "1", "Runs everything with rclone's --dry-run; nothing moves or deletes.") +
     toggleRow("resume", "Resume interrupted runs", s.resume === "1", "Re-queue archives that were mid-extraction when the app stopped.") +
     toggleRow("auto_skip_known", "Auto-skip known dumps", (s.auto_skip_known ?? "1") === "1", "Skip torrent/website dumps that were skipped as such before."),
   )}

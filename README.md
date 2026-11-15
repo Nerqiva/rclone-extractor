@@ -77,6 +77,10 @@ scan  →  extract  →  promote  →  trash
   place). Everything else continues as a normal extraction. The same
   extract-first path also applies to the same-series rest of a group (see
   "Content filters" below).
+- **Configuration is editable mid-run** — the Configuration page stays
+  usable while a task runs; changes apply from the next run (the running
+  task uses a private snapshot of `rclone_conf`), and the Progress page
+  shows the running task's scan root.
 - **Live progress page** — KPI cards, a segmented progress bar, stage text,
   per-run rate/ETA, the active rclone command, done/failed/skipped counters,
   and a slim live bar that follows the in-flight rclone command: real progress
@@ -107,7 +111,7 @@ scan  →  extract  →  promote  →  trash
   encrypted with AES-256-GCM when `SECRET_KEY` is set. The login password is
   read from `APP_PASSWORD` at runtime and is never stored.
 - **Portable backup** — export/import the whole dataset as JSON.
-- **Dry-run mode** and `APP_PASSWORD`-protected single-user login.
+- `APP_PASSWORD`-protected single-user login.
 
 ---
 
@@ -244,7 +248,7 @@ APP_TZ=Asia/Omsk                       # timezone used for every time shown in t
 
 > The remaining settings (`scan_root`, `remote_flags`, `queue_max`,
 > `max_archive_size`, `min_archive_size`, `sort_by`,
-> `sort_dir`, `trash_subdir`, `dry_run`, `resume`) are configured on the
+> `sort_dir`, `trash_subdir`, `resume`) are configured on the
 > **Configuration** page and stored in the database. See the tables below.
 
 ---
@@ -253,6 +257,27 @@ APP_TZ=Asia/Omsk                       # timezone used for every time shown in t
 
 All settings can be set on the **Configuration** page and are stored in the
 database. They can also be seeded from environment variables.
+
+**The Configuration page stays editable while a task is running.** Changes
+are stored immediately but apply from the **next run** — the running task
+is not affected. Specifically:
+
+- Everything the run uses is read once at its start and kept for its whole
+  lifetime (`scan_root`, limits, sort order, `trash_subdir`, `tmp_dir`,
+  `resume`, `auto_skip_known`, all RcloneX settings, `remote_flags`).
+- At its start the run also takes a **private snapshot of `rclone_conf`**
+  (a mode-`0600` copy kept for the duration of the run and deleted when it
+  ends), so an rclone.conf saved mid-run cannot leak into the in-flight
+  task — every command it spawns is pinned to the snapshot.
+- The saved configuration is what **on-demand** rclone calls use (e.g.
+  downloading an archive from the Errors page) and what the **next** run
+  uses — the shared working copy is updated as soon as you save.
+- The Progress page shows the **running task's** scan root, not the stored
+  setting.
+- Still blocked while a task runs: **Import** (it replaces the database),
+  the destructive maintenance actions (**Clear logs**, **Clear tmp
+  directory**, **Clear everything**), and the password-protected
+  archive Delete/Restore actions. **Clear queues** stays available.
 
 ### Environment variables
 
@@ -286,7 +311,6 @@ database. They can also be seeded from environment variables.
 | `rclonex_archive_password_enabled` + `rclonex_archive_password` | RcloneX flag `--archive-password` (default off): password for encrypted RAR/7Z archives (multivolume sets included). The password is stored encrypted at rest; leaving the field blank on save keeps the stored value, and the **Clear** button removes it (disables the flag). |
 | `rclonex_archive_buffer_size` | RcloneX flag `--archive-window-size` (how much of the archive is buffered in memory while rclonex reads random-access formats such as 7Z/ISO). Bytes; `0` keeps rclonex's own default. The Configuration page asks for MB/GB. |
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
-| `dry_run` | When on, rclone runs with `--dry-run`; nothing is moved or deleted. |
 | `trash_subdir` | Folder the processed archive is moved into (default `.Trash`). |
 | `tmp_dir` | Where rclone extracts archives temporarily (default `.Rclone-Extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`killed`. |
@@ -412,8 +436,7 @@ removes stale `run_<digits>` directories inside `<TMPDIR>` — anything else is
 left alone.
 
 `remote_flags` is appended to
-every command; `--dry-run` is added when `dry_run` is on (`archive list` is
-read-only and never gets `--dry-run`). All rclone output streams are stored
+every command. All rclone output streams are stored
 verbatim: the run log carries human-readable annotations plus every command
 the app runs, while each per-archive archive log holds the binary's raw
 output only (no app wording) — except for failures that produce no binary
@@ -445,7 +468,7 @@ under `tmp_dir`) are purged automatically at boot, at the start of every run,
 and at the end of a run; non-empty directories are removed with `rclone
 purge`. Anything else inside `tmp_dir` is never deleted — it is left alone
 and only logged. The Configuration page also has a **Clear tmp directory**
-maintenance action. `dry_run` disables destructive cleanup entirely.
+maintenance action.
 
 The Configuration page's maintenance actions (each asks for confirmation;
 all are disabled while a task is running except **Clear queues**):
@@ -455,8 +478,7 @@ all are disabled while a task is running except **Clear queues**):
   Run count, history and the archive cache are kept.
 - **Clear logs** wipes logs and errors only — log lines and the `/errors`
   failure index (`error_kind`). Runs and archives are kept.
-- **Clear tmp directory** purges stale app-owned `run_<digits>` dirs (honors
-  `dry_run`).
+- **Clear tmp directory** purges stale app-owned `run_<digits>` dirs.
 - **Clear everything** wipes queue, history, logs, errors and the tmp
   directory; next run starts from #1.
 
@@ -543,8 +565,8 @@ promoted, never moved to trash). A group whose first archive **failed**
 inspection (torrent, website, tiny, empty, unreadable/password) keeps
 pre-extraction inspection for all of its archives. Unrelated filenames and
 archives of a different family in the same directory are pre-inspected
-individually. An empty extracted tree is promoted as usual, and dry-run
-performs no post-extraction listing at all. The grouping is per run and per
+individually. An empty extracted tree is promoted as usual. The grouping is
+per run and per
 archive type — it is kept in memory only, and the next run starts from
 scratch.
 
@@ -590,9 +612,9 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
   `trash_subdir` are ignored both while listing and when the run selects
   queued rows, so they are never (re-)processed.
 - A path already marked `done` that appears in
-  the listing again is treated as a new upload and re-queued — except in
-  dry-run mode, where the original archive is never moved and re-queueing would
-  repeat the same work every run. A reappearing path previously classified as
+  the listing again is treated as a new upload and re-queued — the original
+  archive is moved to trash on processing, so a reappearing path is a fresh
+  file. A reappearing path previously classified as
   a torrent or website dump is likewise skipped by default (see
   `auto_skip_known`).
 - **Start** re-queues archives in the `failed` state and clears their
@@ -756,7 +778,6 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   the error kind). Restore assumes the file is still in the trash; if it
   was removed from there (by hand, say), the stale entry is dropped instead
   of failing forever. Deleting/restoring is blocked while a task is running.
-  Moving an archive, or clearing it, honors `dry_run`.
 
 ### Backend adapter
 

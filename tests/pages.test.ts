@@ -57,6 +57,19 @@ test("Configuration page renders the sectioned plain-English form", async () => 
   expect(body).toContain("scan_root"); // stored key stays visible
 });
 
+test("Configuration page stays editable while a task runs", async () => {
+  engineState.running = true;
+  const res = await app.request("/config");
+  expect(res.status).toBe(200);
+  const body = await res.text();
+  expect(body).toContain('id="config-form"');
+  expect(body).toContain("changes apply from the next run");
+  // The destructive maintenance actions and the backup import stay disabled,
+  // but Clear queues remains available.
+  expect(body).toContain("Clear queues");
+  engineState.running = false;
+});
+
 test("Logs page renders and lists no runs", async () => {
   const res = await app.request("/logs");
   expect(res.status).toBe(200);

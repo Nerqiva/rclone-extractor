@@ -108,7 +108,7 @@ export function tmpStemDir(
 }
 
 export type SweepResult = {
-  /** Direct children matching the app layout that were (or, in dry-run, would be) purged. */
+  /** Direct children matching the app layout that were purged. */
   purged: string[];
   /** Non-app-looking entries left untouched. */
   skipped: string[];

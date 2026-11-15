@@ -85,7 +85,6 @@ exit 0
   await setSetting("min_archive_size", "0");
   await setSetting("max_archive_size", "0");
   await setSetting("rclonex", "1");
-  await setSetting("dry_run", "0");
 
   const eng = await import("../src/engine");
   runEngine = eng.runEngine;
@@ -119,18 +118,4 @@ test("website dumps and torrent collections are skipped after extraction; archiv
   expect(log).not.toMatch(/moveto[^\n]*site\.rar/);
   expect(log).not.toMatch(/moveto[^\n]*tor\.rar/);
   expect(log).toMatch(/moveto[^\n]*normal\.rar/);
-}, 10_000);
-
-test("dry-run does not run the post-extraction skip logic", async () => {
-  await db!.store.run("DELETE FROM archives");
-  await setSetting("dry_run", "1");
-  resetLogs();
-  await runEngine();
-  const rows = await db!.store.query<{ path: string; status: string }>(
-    "SELECT path, status FROM archives ORDER BY path",
-  );
-  for (const row of rows) {
-    expect(row.status).toBe("done");
-  }
-  await setSetting("dry_run", "0");
 }, 10_000);

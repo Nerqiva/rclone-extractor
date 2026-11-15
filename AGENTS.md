@@ -85,7 +85,6 @@ you add/remove an endpoint, env var, or setting.**
 - Per-archive logs hold **raw binary output only** — no app wording. App
   diagnostics for webapp failures go through `appendRawLines` as neutral
   one-liners; user-facing toasts carry `HX-Trigger`.
-- `dry_run` is honored by every destructive operation.
 - Skip state is **never persisted** — skips are per-run, in-memory only.
 - The archive file is never deleted outright by the app: "Delete" means
   *move to the trash subdir*. Moves overwrite an existing destination file

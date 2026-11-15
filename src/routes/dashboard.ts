@@ -74,7 +74,13 @@ function etaLabel(processed: number, total: number, elapsedMs: number): string {
 }
 
 async function snapshot(): Promise<Snapshot> {
-  const scanRoot = (await getSetting("scan_root", "")) ?? "";
+  // While a run is active, show the root that run is actually scanning —
+  // the stored setting may have been edited mid-run (it applies next run).
+  const live = (await getSetting("scan_root", "")) ?? "";
+  const scanRoot =
+    engineState.running && engineState.currentScanRoot
+      ? engineState.currentScanRoot
+      : live;
   // Prefer in-memory state while a run exists. Also surface startup errors that
   // happen before a run row can be created (for example a missing scan_root).
   if (engineState.runId > 0 || engineState.stage === "error") {

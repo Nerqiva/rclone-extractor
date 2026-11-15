@@ -212,8 +212,7 @@ test("temp parents are removed (rmdir) after processing", async () => {
   ).toBe(true);
 });
 
-test("done paths are re-queued on a later non-dry run", async () => {
-  await setSetting("dry_run", "0");
+test("done paths are re-queued on a later run", async () => {
   await runEngine();
   expect(engineState.total).toBe(1);
   const row = await db!.store.get1<{ status: string }>(
@@ -222,18 +221,10 @@ test("done paths are re-queued on a later non-dry run", async () => {
   expect(row?.status).toBe("done");
 });
 
-test("dry-run does not re-queue done paths", async () => {
-  await setSetting("dry_run", "1");
-  await runEngine();
-  expect(engineState.total).toBe(0);
-  await setSetting("dry_run", "0");
-});
-
 test("pre-existing queued rows in the trash subdir are not selected", async () => {
   await db!.store.run(
     "INSERT OR REPLACE INTO archives(path, size, status, created_at, updated_at) VALUES('trash/legacy.zip', 1, 'queued', 't', 't')",
   );
-  await setSetting("dry_run", "0");
   await runEngine();
   // Only a/b.zip (done, re-queued) counts; the trash row stays queued and is ignored.
   expect(engineState.total).toBe(1);

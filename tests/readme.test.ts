@@ -53,7 +53,7 @@ function collectSettings(): string[] {
   const block = /const SETTING_KEYS\s*=\s*\[([^\]]+)\]/.exec(actions)?.[1] ?? "";
   const keys = [...block.matchAll(/"(\w+)"/g)].map((m) => m[1]);
   // Settings set individually rather than in the key list.
-  keys.push("dry_run", "resume", "database_url", "rclone_conf");
+  keys.push("resume", "database_url", "rclone_conf");
   return [...new Set(keys)];
 }
 

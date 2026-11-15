@@ -1,6 +1,6 @@
 import { Logger, insertLogLines } from "./log";
 import { store, getSetting, setSetting } from "./db";
-import { Rclone, killActiveProcs, type ExtractStats } from "./rclone";
+import { Rclone, killActiveProcs, writeRunConfSnapshot, deleteRunConfSnapshot, type ExtractStats } from "./rclone";
 import {
   tmpRootPath,
   tmpRunDir,
@@ -88,6 +88,10 @@ export const engineState = {
   // immediately). Set/reset by stopEngine/forceStopEngine and runEngine.
   stopRequested: false,
   forceStop: false,
+  // The scan_root this run started with. Shown on the Progress page while
+  // the run is active (the stored setting may change mid-run and applies
+  // only from the next run).
+  currentScanRoot: "",
   // Temporary, per-run skip flags (never persisted to the database). Each is
   // consumed by the archive/stage in flight and does not carry over to the
   // next archive, stage, or run.
@@ -471,8 +475,10 @@ export async function runEngine(
   engineState.skipInspection = false;
   engineState.skipArchive = false;
   engineState.archiveInFlight = false;
+  engineState.currentScanRoot = "";
 
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
+  engineState.currentScanRoot = scanRoot;
   // Validate tmp_dir up front so misconfiguration fails fast instead of
   // producing a half-extracted archive outside the expected tree.
   const trashRaw = (await getSetting("trash_subdir", TRASH)) ?? TRASH;
@@ -486,6 +492,11 @@ export async function runEngine(
   let logger: Logger | null = null;
   let errorLog: Logger | null = null;
   let errorKind = "engine_error";
+  // Per-run private rclone.conf snapshot, created once the run is underway
+  // (its content is resolved from the stored/env conf at that moment) and
+  // deleted in the finally block. Null when nothing is configured or the
+  // write fails — the run then uses the shared working copy, as before.
+  let runConf: string | null = null;
 
   const fail = (msg: string, detail?: string) => {
     logger?.error(msg, detail);
@@ -581,7 +592,17 @@ export async function runEngine(
     engineState.stage = "listing";
     logger.info(`scan_root=${scanRoot}`);
 
-    const rc = await Rclone.fromSettings(logger);
+    // Isolated rclone.conf for this run: a per-run private snapshot, so
+    // config edits made while this run is active (which sync the shared
+    // working copy for on-demand calls) cannot leak into it. Deleted in the
+    // finally block when the run ends.
+    runConf = await writeRunConfSnapshot(runRowId);
+    if (runConf) {
+      logger.info(`rclone.conf snapshot: this run is pinned to a private copy`);
+    } else {
+      logger.info(`rclone.conf snapshot: none (no stored/env conf) — using the shared working copy`);
+    }
+    const rc = await Rclone.fromSettings(logger, runConf ? { confPath: runConf } : {});
     // Persist every command dispatch so a crash/kill leaves the in-flight
     // command behind for the Progress page. Fire-and-forget: a command must
     // never wait on (or fail because of) this bookkeeping write.
@@ -597,12 +618,11 @@ export async function runEngine(
     const tmpRoot = tmpRootPath(scanRoot, tmpSpec);
     const tmpTop = tmpTopSegment(tmpSpec);
     // tmpSettings is non-null here: an invalid tmp_dir already aborted above.
-    const dryRunNow = tmpSettings?.dryRun ?? false;
     setActivity("Purging stale temp");
     try {
-      const res = await rc.purgeStaleTemp(tmpRoot, dryRunNow);
+      const res = await rc.purgeStaleTemp(tmpRoot);
       if (res.purged.length) {
-        const verb = dryRunNow ? "would purge (dry run)" : "purged";
+        const verb = "purged";
         logger.info(
           `${verb} ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`,
         );
@@ -653,7 +673,6 @@ export async function runEngine(
       );
     }
     const autoSkipKnown = (await getSetting("auto_skip_known", "1")) === "1";
-    const dryRun = (await getSetting("dry_run", "0")) === "1";
     const trashSubdir = trashSubdirValidated;
     const trashDir = normalizeRel(trashSubdir);
     // Fingerprint of every setting that changes what a listing produces or
@@ -665,7 +684,6 @@ export async function runEngine(
       String(maxArchiveSize),
       String(minArchiveSize),
       String(queueMax),
-      dryRun ? "1" : "0",
       trashDir,
       autoSkipKnown ? "1" : "0",
       rclonexEnabled ? "1" : "0",
@@ -754,13 +772,12 @@ export async function runEngine(
       // A done path that is visible again is a new upload (the previous file
       // was moved to trash). Re-queue it. When the user opted out of
       // auto-skipping archives previously classified as torrent/website dumps,
-      // those are re-queued too (for re-inspection). In dry-run neither is
-      // re-queued, or every run would redo the same work.
+      // those are re-queued too (for re-inspection).
       const knownSkip =
         prev.status === "skipped" &&
         (prev.error_kind === "torrent" || prev.error_kind === "website");
       const shouldRequeue =
-        !dryRun && (prev.status === "done" || (!autoSkipKnown && knownSkip));
+        prev.status === "done" || (!autoSkipKnown && knownSkip);
       if (shouldRequeue) {
         await store.run(
           "UPDATE archives SET size=?, status='queued', error_kind=NULL, updated_at=? WHERE path=?",
@@ -888,7 +905,10 @@ export async function runEngine(
       instance.onCommand = persistCommand;
     };
     const rclonexRc = rclonexEnabled
-      ? await Rclone.fromSettings(logger, { rclonex: true })
+      ? await Rclone.fromSettings(
+          logger,
+          runConf ? { rclonex: true, confPath: runConf } : { rclonex: true },
+        )
       : null;
     if (rclonexRc) wireCommand(rclonexRc);
 
@@ -1020,6 +1040,7 @@ export async function runEngine(
         let skipReason: SkipReason | "unreadable" | "password" | null = null;
         if (engineState.skipInspection) {
           engineState.skipInspection = false; // consumed by this archive only
+          extractFirst = false; // skip means no inspection at all, either side
           logger.info(`inspection skipped by user: ${rel}`);
           noteGroupInspection(group, baseName, true);
         } else if (useRclonex || /\.iso$/i.test(baseName)) {
@@ -1088,7 +1109,6 @@ export async function runEngine(
         const ex = await extractor.extract(
           rel,
           tmp,
-          dryRun,
           ref,
           statsTracker(runRowId),
           useRclonex ? rclonexFlags : undefined,
@@ -1111,7 +1131,7 @@ export async function runEngine(
             result = "skipped";
           } else {
             setActivity("Cleaning up");
-            await rc.cleanup(tmp, dryRun, ref);
+            await rc.cleanup(tmp, ref);
             setActivity("");
             throwIfSkipArchive();
             await store.run(
@@ -1135,7 +1155,7 @@ export async function runEngine(
           // Anything else continues as a normal extraction.
           let postSkip: "website" | "torrent" | null = null;
           const exStats = createArchiveStats();
-          if ((useRclonex || extractFirst) && !dryRun) {
+          if (useRclonex || extractFirst) {
             setActivity("Inspecting extracted files");
             const listOut = await rc.listPath(tmp, (p, size) =>
               addArchiveEntry(exStats, p, size),
@@ -1158,7 +1178,7 @@ export async function runEngine(
           }
           if (postSkip) {
             setActivity("Cleaning up");
-            const purged = await rc.purge(archiveTmpDir, dryRun, ref);
+            const purged = await rc.purge(archiveTmpDir, ref);
             setActivity("");
             if (purged.code !== 0) {
               warn(
@@ -1177,12 +1197,12 @@ export async function runEngine(
             result = "skipped";
           } else {
           setActivity("Moving to destination");
-          const promoted = await rc.promote(rel, tmp, dryRun, ref, tmpTop, statsTracker(runRowId));
+          const promoted = await rc.promote(rel, tmp, ref, tmpTop, statsTracker(runRowId));
           setActivity("");
           throwIfSkipArchive();
           if (promoted.code !== 0) {
             setActivity("Cleaning up");
-            await rc.cleanup(tmp, dryRun, ref);
+            await rc.cleanup(tmp, ref);
             setActivity("");
             throwIfSkipArchive();
             await store.run(
@@ -1196,7 +1216,7 @@ export async function runEngine(
             );
           } else {
             setActivity("Cleaning up");
-            const cleaned = await rc.cleanup(tmp, dryRun, ref);
+            const cleaned = await rc.cleanup(tmp, ref);
             setActivity("");
             if (cleaned.code !== 0) {
               warn(
@@ -1209,7 +1229,7 @@ export async function runEngine(
             throwIfSkipArchive();
 
             setActivity("Moving to trash");
-            const trashed = await rc.trash(rel, trashSubdir, dryRun, ref, statsTracker(runRowId));
+            const trashed = await rc.trash(rel, trashSubdir, ref, statsTracker(runRowId));
             setActivity("");
             throwIfSkipArchive();
             if (trashed.code !== 0) {
@@ -1301,7 +1321,7 @@ export async function runEngine(
         // app-owned archive dir.
         if (tmpAttempted) {
           setActivity("Cleaning up");
-          const purged = await rc.purge(archiveTmpDir, dryRun, ref);
+          const purged = await rc.purge(archiveTmpDir, ref);
           setActivity("");
           if (purged.code !== 0) {
             warn(
@@ -1326,10 +1346,10 @@ export async function runEngine(
       !tmpRootNorm.endsWith(":") &&
       !/^[A-Za-z]:[\\/]?$/.test(tmpRootNorm) &&
       runDir === tmpRunDir(tmpRootNorm, runRowId);
-    const runRes = await rc.rmdir(runDir, dryRun);
+    const runRes = await rc.rmdir(runDir);
     if (runRes.code !== 0) {
       if (tmpRootIsSafe) {
-        const purged = await rc.purge(runDir, dryRun);
+        const purged = await rc.purge(runDir);
         if (purged.code === 0) {
           logger.info(`purged ${runDir} (not empty)`);
         } else {
@@ -1340,7 +1360,7 @@ export async function runEngine(
       }
     }
     // The shared temp root itself is only removed when already empty.
-    const rootRes = await rc.rmdir(tmpRootNorm, dryRun);
+    const rootRes = await rc.rmdir(tmpRootNorm);
     if (rootRes.code !== 0) {
       logger.info(`left ${tmpRootNorm} in place (not empty)`);
     }
@@ -1403,6 +1423,11 @@ export async function runEngine(
     // shutdown) the database closes.
     await logger?.flush();
     await errorLog?.flush();
+    if (runConf) {
+      // The run is over; the private rclone.conf snapshot has served its
+      // purpose. Delete it so credentials don't outlive the run.
+      deleteRunConfSnapshot(runConf);
+    }
     engineState.running = false;
     engineState.currentRel = "";
     engineState.currentCommand = "";
