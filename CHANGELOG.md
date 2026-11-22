@@ -12,6 +12,11 @@ to `main`.
 ## [Unreleased]
 
 ### Removed
+- **`remote_flags` are no longer applied to `moveto` commands.** The
+  configured extra flags are still appended to extraction, promotion and
+  archive-download commands, but not to the trash move (`trash`) or the
+  webapp Delete/Restore moves (`moveToRel`). Listing, inspection and cleanup
+  commands remain unaffected.
 - **The `dry_run` setting and all `--dry-run` behavior are gone.** The
   Configuration checkbox, the database default, the flag threaded through
   `run`/`extract`/`promote`/`trash`/`moveto`/`purge`/`rmdir`/`purgeStaleTemp`

@@ -302,7 +302,7 @@ is not affected. Specifically:
 | Setting | Description |
 |---|---|
 | `scan_root` | rclone remote or path to scan, e.g. `s3:bucket/archives` or `/data/in`. |
-| `remote_flags` | Extra flags appended to every rclone command. `--config /app/data/rclone.conf` is passed unconditionally (any `--config` here is ignored; when `/app/data` is not writable the `/tmp/app/data/rclone.conf` fallback is used). |
+| `remote_flags` | Extra flags appended to extraction, promotion and archive-download commands, but **not** to `moveto` commands (trash / Delete / Restore), listing, inspection or cleanup. `--config /app/data/rclone.conf` is passed unconditionally (any `--config` here is ignored; when `/app/data` is not writable the `/tmp/app/data/rclone.conf` fallback is used). |
 | `queue_max` | Maximum archives queued per run (default `500`). |
 | `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
@@ -435,8 +435,9 @@ the app's directories apart from anything else. The maintenance/boot sweep
 removes stale `run_<digits>` directories inside `<TMPDIR>` — anything else is
 left alone.
 
-`remote_flags` is appended to
-every command. All rclone output streams are stored
+`remote_flags` is appended to extraction, promotion and download commands,
+but not to `moveto` commands (trash / Delete / Restore) or to
+listing/inspection/cleanup. All rclone output streams are stored
 verbatim: the run log carries human-readable annotations plus every command
 the app runs, while each per-archive archive log holds the binary's raw
 output only (no app wording) — except for failures that produce no binary

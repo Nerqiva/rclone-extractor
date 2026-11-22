@@ -834,8 +834,11 @@ export class Rclone {
     args: string[],
     ref: RcloneRef,
     onStats?: (stats: ExtractStats) => void,
+    includeRemoteFlags = true,
   ): Promise<Outcome> {
-    const full = [...this.confArgs(), ...args, ...this.flags];
+    const full = includeRemoteFlags
+      ? [...this.confArgs(), ...args, ...this.flags]
+      : [...this.confArgs(), ...args];
     const command = this.announce(full);
 
     // No `$ command` pre-line: archive logs hold raw binary output only.
@@ -1054,6 +1057,7 @@ export class Rclone {
       ],
       ref,
       onStats,
+      false, // moveto must not carry remote_flags
     );
   }
 
@@ -1088,6 +1092,8 @@ export class Rclone {
     return this.streamTransfer(
       ["moveto", `${this.root}/${srcRel}`, `${this.root}/${dstRel}`],
       ref,
+      undefined,
+      false, // moveto must not carry remote_flags
     );
   }
 

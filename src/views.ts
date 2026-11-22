@@ -189,7 +189,7 @@ export async function configForm(note = ""): Promise<string> {
       "Extra rclone flags",
       s.remote_flags || "none",
       `<label class="field"><input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list" aria-label="remote_flags"></label>`,
-      { key: "remote_flags", desc: "Flags for rclone/rclonex transfer and extraction commands only. " },
+      { key: "remote_flags", desc: "Flags for extraction, promotion and downloads only — not for trash/Delete/Restore moves. " },
     ) +
     settingRow(
       "rclone.conf",
