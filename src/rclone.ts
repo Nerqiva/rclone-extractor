@@ -664,7 +664,6 @@ export class Rclone {
       if (Number.isFinite(min) && min > 0) args.push("--min-size", `${min}B`);
       if (Number.isFinite(max) && max > 0) args.push("--max-size", `${max}B`);
     }
-    args.push(...this.flags);
     const command = this.announce(args);
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
@@ -739,7 +738,6 @@ export class Rclone {
       "list",
       `${this.root}/${rel}`,
       "--files-only",
-      ...this.flags,
     ];
     const command = this.announce(args);
 
@@ -799,7 +797,7 @@ export class Rclone {
    * the run log via `announce()`. Archive logs never carry app wording.
    */
   async run(args: string[], ref?: RcloneRef): Promise<Outcome> {
-    const full = [...this.confArgs(), ...args, ...this.flags];
+    const full = [...this.confArgs(), ...args];
     const command = this.announce(full);
 
     const proc = spawnBinary(this.bin, full, {
@@ -995,7 +993,6 @@ export class Rclone {
       "--dirs-only",
       "--format",
       "p",
-      ...this.flags,
     ];
     this.announce(args);
     const proc = spawnBinary(this.bin, args, {
@@ -1066,7 +1063,7 @@ export class Rclone {
    */
   async existsPath(rel: string): Promise<boolean> {
     assertSafeRel(rel);
-    const args = [...this.confArgs(), "lsl", `${this.root}/${rel}`, ...this.flags];
+    const args = [...this.confArgs(), "lsl", `${this.root}/${rel}`];
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       // Never read: an unread pipe fills (64KB) and blocks the child.
@@ -1146,7 +1143,7 @@ export class Rclone {
     rel: string,
   ): Promise<{ size: number; modTime?: string } | null> {
     assertSafeRel(rel);
-    const args = [...this.confArgs(), "lsjson", `${this.root}/${rel}`, ...this.flags];
+    const args = [...this.confArgs(), "lsjson", `${this.root}/${rel}`];
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       // Never read: an unread pipe fills (64KB) and blocks the child.
