@@ -1231,8 +1231,10 @@ export async function runEngine(
             setActivity("Moving to trash");
             const trashed = await rc.trash(rel, trashSubdir, ref, statsTracker(runRowId));
             setActivity("");
-            throwIfSkipArchive();
             if (trashed.code !== 0) {
+              // The move did not complete, so the existing skip unwind still
+              // applies.
+              throwIfSkipArchive();
               await store.run(
                 "UPDATE archives SET status='failed', error_kind='trash', updated_at=? WHERE id=?",
                 [now(), row.id],
@@ -1243,6 +1245,9 @@ export async function runEngine(
                 `$ ${trashed.command}\n${trashed.tail.join("\n")}`.trim(),
               );
             } else {
+              // The file is in trash; a skip cannot put it back. Consume the
+              // flag so the archive finalizes as done instead of re-queued.
+              engineState.skipArchive = false;
               await store.run(
                 "UPDATE archives SET status='done', error_kind=NULL, updated_at=? WHERE id=?",
                 [now(), row.id],
