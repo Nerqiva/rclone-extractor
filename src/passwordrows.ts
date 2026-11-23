@@ -4,12 +4,6 @@ import { formatBytes } from "./format";
 import { relativeTime } from "./errorrows";
 import { engineState } from "./engine";
 
-/**
- * Password-protected archives (Errors page). Password archives are skipped
- * during runs (a warn is logged and the run moves on to the next archive), so
- * they can pile up here; this module renders the rows with their actions
- * (inline log view, download, move to trash / restore).
- */
 
 export interface PasswordRow {
   id: number | string;

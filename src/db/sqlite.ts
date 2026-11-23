@@ -28,7 +28,6 @@ export class SqliteStore implements Store {
     // Wait instead of erroring immediately when another statement holds the
     // write lock (e.g. the engine logging while an HTTP handler writes).
     this.db.exec("PRAGMA busy_timeout=5000;");
-    // Index statements are best-effort; table statements stay strict.
     for (const stmt of splitSchemaStatements(SQLITE_SCHEMA)) {
       try {
         this.db.exec(`${stmt};`);
@@ -92,7 +91,6 @@ export class SqliteStore implements Store {
       try {
         db.exec("ROLLBACK");
       } catch {
-        // already rolled back or connection is broken
       }
       throw e;
     }

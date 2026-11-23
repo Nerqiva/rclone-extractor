@@ -1,9 +1,6 @@
-/* Copy and incremental-refresh helpers for the logs and errors pages.
- * No dependencies, safe to run on every page. */
 (function () {
   "use strict";
 
-  /* Copy/select helpers rely on window.appToast (injected by the page shell). */
   function toast(message, kind) {
     if (typeof window.appToast === "function") window.appToast(message, kind);
   }
@@ -124,7 +121,6 @@
     }
   });
 
-  /* ---- live log viewer ---- */
 
   var viewer = document.getElementById("logViewer");
   if (viewer && viewer.dataset.live === "1") {
@@ -137,7 +133,6 @@
       var nearBottom =
         viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 80;
       var current = viewer.children.length;
-      // Cap at ~1500 entries
       if (current + htmlStrings.length > 1500) {
         var remove = current + htmlStrings.length - 1500;
         for (var i = 0; i < remove && viewer.firstChild; i++) {
@@ -197,7 +192,6 @@
     poll();
   }
 
-  /* ---- live errors cards ---- */
 
   var errorCards = document.getElementById("errorCards");
   if (errorCards && errorCards.dataset.live === "1") {

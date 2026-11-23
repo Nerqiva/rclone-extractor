@@ -15,11 +15,7 @@ import { progressPanel } from "./dashboard";
 
 export const pages = new Hono();
 
-// Render the dashboard inline so the first paint is complete — the lazy
-// load used to show an empty box while the controls popped in first.
 pages.get("/", async (c) => {
-  // Boot-time rclone.conf fallbacks are toasted by the first poll normally;
-  // inline it here or it would never be seen on a fresh page load.
   const confNotice = pendingRcloneConfNotice();
   const noticeScript = confNotice
     ? `<script>window.addEventListener("load",function(){window.appToast&&window.appToast(${JSON.stringify(confNotice).replace(/</g, "\\u003c")},"err");});</script>`
@@ -159,9 +155,6 @@ pages.get("/config", async (c) => {
           if (res.status === 401) {
             throw new Error("your session expired — reload the page and sign in again");
           }
-          // Proxies/CDNs may rewrite the Content-Type of a download response
-          // (or fetch may follow a redirect), so validate the payload instead
-          // of trusting headers.
           var parsed = null;
           try { parsed = JSON.parse(text); } catch (_) { /* not JSON */ }
           var isPayload = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
@@ -245,7 +238,6 @@ pages.get("/logs", async (c) => {
     "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind FROM runs ORDER BY id DESC LIMIT 50",
   );
 
-  // Tab selection.
   const tabParam = c.req.query("tab");
   const tab = tabParam === "errors" ? "errors" : tabParam === "archives" ? "archives" : "main";
   const isArchivesTab = tab === "archives";
@@ -321,8 +313,6 @@ pages.get("/logs", async (c) => {
         <button class="btn small" type="submit">View</button>
       </form>`;
 
-  // Prefer the stored outcome; fall back to the legacy interrupted flag for
-  // rows written before it existed.
   const outcome = resolveOutcome(selected);
   const reason = selected.interrupted_reason ?? "";
   const outcomeTime = selected.finished_at

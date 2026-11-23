@@ -7,10 +7,8 @@ const DASH_RE = /^-{40,}$/;
 export type LogScope = "run" | "archive";
 export type LogKind = "main" | "errors" | "extract";
 
-/** Maximum lines rendered in the log views; both initial paint and polling. */
 export const LOG_TAIL_LIMIT = 300;
 
-/** Maximum lines read for exports and archive-log downloads (50k lines). */
 export const LOG_EXPORT_LIMIT = 50_000;
 
 export interface LogRef {
@@ -44,10 +42,6 @@ export interface RenderedEntry {
 // (each render restarts its local counter), so use one process-wide counter.
 let detailIdSeq = 0;
 
-/**
- * Render raw DB rows into structured HTML log entries.
- * Groups 72-dash blocks into collapsible <details>.
- */
 function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
   const entries: RenderedEntry[] = [];
   let inDetail = false;
@@ -147,12 +141,10 @@ export class Logger {
     this.write(null, DASHES);
   }
 
-  /** Resolves once every write queued so far has landed (or failed). */
   flush(): Promise<void> {
     return this.chain;
   }
 
-  /** Flush every live Logger; call before closing the database on shutdown. */
   static async flushAll(): Promise<void> {
     await Promise.allSettled([...Logger.pending]);
   }
@@ -175,11 +167,6 @@ export class Logger {
   }
 }
 
-/**
- * Last `limit` lines rendered as HTML entries. When `afterId` is > 0 only
- * lines newer than that id are returned, which is what the live log view
- * polls. Rows come back in `id` order; callers cursor on `lastId`.
- */
 export async function tailRendered(
   ref: LogRef,
   limit = 200,
@@ -221,8 +208,6 @@ export async function insertLogLines(
 }
 
 export async function readAll(ref: LogRef): Promise<string[]> {
-  // Bounded so a pathological log cannot exhaust memory; 50k lines is far
-  // beyond any sane archive log and keeps downloads responsive.
   const rows = await store.query<LogRow>(
     "SELECT ts, level, line FROM log_lines WHERE scope=? AND ref_id=? AND kind=? ORDER BY id ASC LIMIT 50000",
     [ref.scope, ref.refId, ref.kind],

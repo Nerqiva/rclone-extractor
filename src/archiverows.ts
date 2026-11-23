@@ -3,12 +3,6 @@ import { esc } from "./ui";
 import { formatBytes } from "./format";
 import { relativeTime } from "./errorrows";
 
-/**
- * Per-run archive log listing (Logs page, "Archives" tab). Every archive a
- * run processed — done, failed, skipped, or still in progress — gets a card
- * with its raw rclone output one tap away. Passwords stay on the Errors
- * tab; nothing here moves files.
- */
 
 export interface ArchiveLogRow {
   id: number | string;
