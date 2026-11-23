@@ -33,12 +33,10 @@ function sessionSignature(id: string): string {
   return hmac(`sess.${id}`, APP_PASSWORD);
 }
 
-/** Stateless CSRF token derived from the session cookie. */
 export function csrfTokenFor(sessionCookie: string): string {
   return hmac(`csrf.${sessionCookie}`, APP_PASSWORD);
 }
 
-/** CSRF token for this request's session cookie, or null when logged out. */
 export function csrfFor(c: any): string | null {
   const sess = getCookie(c, COOKIE);
   return sess ? csrfTokenFor(sess) : null;
@@ -62,7 +60,6 @@ export async function createSession(): Promise<string> {
   return `${id}.${sessionSignature(id)}`;
 }
 
-/** Returns the session id when valid, else null. */
 export async function verifySession(value: string | undefined): Promise<string | null> {
   if (!APP_PASSWORD || !value) return null;
   const idx = value.lastIndexOf(".");
@@ -193,7 +190,6 @@ function loginPage(error?: string, csrf?: string): string {
   );
 }
 
-/** Render the login page with a fresh double-submit nonce + cookie. */
 function loginResponse(
   c: Context,
   error: string | undefined,
@@ -269,9 +265,8 @@ export async function authMiddleware(
   if (path === "/healthz" || path === "/login" || path.startsWith("/public/")) {
     return next();
   }
+  if (!APP_PASSWORD) return next();
   if (await verifySession(getCookie(c, COOKIE))) return next();
-  // htmx/fetch callers get a 401 (so clients can tell "logged out" apart
-  // from "redirected"); browsers keep the friendly redirect to /login.
   const accept = c.req.header("accept") ?? "";
   const isHtmx = c.req.header("hx-request") === "true";
   const wantsJson = accept.includes("application/json") || isHtmx;
@@ -283,19 +278,15 @@ export async function authMiddleware(
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-/** Reject mutating requests whose CSRF token doesn't match the session. */
 export async function csrfMiddleware(
   c: any,
   next: () => Promise<void>,
 ): Promise<void | Response> {
-  if (!MUTATING.has(c.req.method)) return next();
+  if (!MUTATING.has(c.req.method) || !APP_PASSWORD) return next();
   const path = new URL(c.req.url).pathname;
   if (path === "/login") return next();
   const sess = getCookie(c, COOKIE);
   if (!sess) {
-    // authMiddleware should have rejected the request already; if it ever
-    // doesn't (reorder/exemption), fail closed instead of letting a
-    // token-less mutating request through.
     return new Response("Forbidden", { status: 403 });
   }
   const expected = csrfTokenFor(sess);
@@ -306,8 +297,6 @@ export async function csrfMiddleware(
       ct.includes("application/x-www-form-urlencoded") ||
       ct.includes("multipart/form-data")
     ) {
-      // Hono caches the parsed body, so the handler's own formData() call
-      // does not re-parse.
       const form = await c.req.formData().catch(() => null);
       provided = form ? String(form.get("csrf_token") ?? "") : "";
     }
