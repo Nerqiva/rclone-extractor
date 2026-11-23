@@ -10,6 +10,8 @@ import {
   requestSkipArchive,
   performPasswordMove,
   queuePasswordMove,
+  parseConcurrency,
+  MAX_CONCURRENCY,
 } from "../engine";
 import { esc, toastTriggerHeaders } from "../ui";
 import { normalizeRcloneConf } from "../rcloneconf";
@@ -87,10 +89,13 @@ actions.post("/run/stop", async (c) => {
 actions.post("/run/skip", async (c) => {
   const form = await c.req.formData().catch(() => null);
   const target = form ? String(form.get("target") ?? "") : "";
+  const idRaw = form?.get("id");
+  const id = idRaw === null || idRaw === undefined ? undefined : Number(idRaw);
+  const archiveId = Number.isInteger(id) && (id as number) > 0 ? (id as number) : undefined;
   let ok = false;
   if (target === "listing") ok = requestSkipListing();
-  else if (target === "inspection") ok = requestSkipInspection();
-  else if (target === "archive") ok = requestSkipArchive();
+  else if (target === "inspection") ok = requestSkipInspection(archiveId);
+  else if (target === "archive") ok = requestSkipArchive(archiveId);
   if (!ok) {
     return c.html(
       controlsFragment(),
@@ -122,6 +127,7 @@ const SETTING_KEYS = [
   "rmdir_extra_flags",
   "rclone_conf",
   "queue_max",
+  "concurrency",
   "max_archive_size",
   "sort_by",
   "sort_dir",
@@ -257,6 +263,26 @@ actions.post("/config", async (c) => {
       maxArchiveSizeStored = String(maxBytes);
     }
   }
+  // Extraction concurrency is bounded at the boundary; an invalid value is
+  // rejected instead of silently clamped to something the user did not ask for.
+  let concurrencyStored: string | undefined;
+  const concurrencyRaw =
+    form.get("concurrency") === null
+      ? undefined
+      : String(form.get("concurrency") ?? "").trim();
+  if (concurrencyRaw !== undefined) {
+    const parsed = parseConcurrency(concurrencyRaw);
+    if (parsed === null) {
+      return c.html(
+        await configForm(
+          `<p class="note err">concurrency must be a whole number between 1 and ${MAX_CONCURRENCY}.</p>`,
+        ),
+        200,
+        toastTriggerHeaders("concurrency is invalid", "err"),
+      );
+    }
+    concurrencyStored = String(parsed);
+  }
   // RcloneX extraction flags. Passwords are write-only here: leaving the
   // field blank keeps the stored one; clearing happens via the Clear button.
   const passwordRaw = form.get("rclonex_archive_password");
@@ -318,6 +344,7 @@ actions.post("/config", async (c) => {
     if (key === "tmp_dir") continue; // stored normalized below
     if (key === "trash_subdir") continue; // stored normalized below
     if (key === "max_archive_size") continue; // stored normalized below (bytes)
+    if (key === "concurrency") continue; // stored normalized below
     const value = form.get(key);
     if (value !== null) await setSetting(key, String(value));
   }
@@ -328,6 +355,9 @@ actions.post("/config", async (c) => {
   }
   if (minArchiveSizeStored !== undefined) {
     await setSetting("min_archive_size", minArchiveSizeStored);
+  }
+  if (concurrencyStored !== undefined) {
+    await setSetting("concurrency", concurrencyStored);
   }
   await setSetting("rclonex", form.get("rclonex") !== null ? "1" : "0");
   await setSetting(

@@ -168,7 +168,16 @@ logsapi.get("/logs/archives-fragment", async (c) => {
   noStore(c);
   const runId = Number(c.req.query("run"));
   if (!Number.isInteger(runId) || runId <= 0) return c.text("not found", 404);
-  return c.html(renderArchiveLogRows(await readArchiveLogRows(runId)));
+  const live =
+    engineState.running && engineState.runId === runId
+      ? new Map(
+          [...engineState.jobs.values()].map((job) => [
+            job.id,
+            { phase: job.phase, status: job.status, stats: job.stats },
+          ]),
+        )
+      : undefined;
+  return c.html(renderArchiveLogRows(await readArchiveLogRows(runId), live));
 });
 
 logsapi.get("/download/archive/:id", async (c) => {

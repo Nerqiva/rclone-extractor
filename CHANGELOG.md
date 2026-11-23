@@ -11,6 +11,32 @@ to `main`.
 
 ## [Unreleased]
 
+### Added
+- **Archives can be processed concurrently.** A new `concurrency` setting
+  (Configuration → Selection, `1`–`8`, default `1`) runs that many extraction
+  workers in parallel. Listing and queue building remain serial and finish
+  before extraction starts. With the default the behavior is unchanged.
+- **Per-archive progress on the Progress page.** Each in-flight archive gets a
+  card with its phase, transfer bar, byte counts and ETA, plus a summary strip
+  for queued/active/done/failed/skipped and the configured concurrency.
+  Upcoming archives are listed in queue order. The Archives tab shows live
+  phase and transfer bars for in-flight rows.
+- **Targeted skip.** The Skip button on an archive card sends that archive's
+  id, so a skip re-queues only that archive and kills only its processes. The
+  no-id API still targets the active archive for backwards compatibility.
+- `tests/concurrency.test.ts` covers the worker limit, all archives processed,
+  failure isolation, run counters, grouped logs, soft stop, hard stop,
+  targeted skip, the group rule under load, and the multi-archive views.
+
+### Changed
+- **Stop semantics under concurrency.** Stop (soft) lets in-flight archives
+  finish before the run ends; Force stop kills every active process and
+  re-queues every in-flight archive. Run counters are now incremented
+  atomically so parallel finishes cannot lose an update.
+- **Group inspection is serialized.** Archives of the same directory and
+  family keep their queue order: the first is pre-inspected and later related
+  archives depend on its verdict, while different groups run in parallel.
+
 ### Removed
 - **The single `remote_flags` setting is gone.** Extra flags now have one
   field per rclone/rclonex subcommand. Existing values are migrated into the

@@ -482,6 +482,87 @@ textarea {
   border-color: rgba(250, 204, 21, 0.4);
 }
 
+/* Per-archive cards and the upcoming queue share the panel's visual language. */
+.job-section {
+  margin-top: 20px;
+}
+.job-section-title {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.job-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.job-card {
+  margin: 0;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.job-card.is-running {
+  border-color: rgba(111, 155, 255, 0.45);
+}
+.job-card.is-done {
+  border-color: rgba(74, 222, 128, 0.35);
+}
+.job-card.is-error {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+.job-card.is-interrupted {
+  border-color: rgba(250, 204, 21, 0.4);
+}
+.job-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.job-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.queue-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.queue-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.queue-table th,
+.queue-table td {
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+.queue-table th {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.queue-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.queue-order {
+  width: 36px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .run-header {
   display: flex;
   justify-content: space-between;
@@ -1301,6 +1382,15 @@ textarea {
 }
 .toast.err {
   border-left-color: var(--err);
+}
+
+@media (max-width: 719px) {
+  .job-grid {
+    grid-template-columns: 1fr;
+  }
+  .job-card-foot {
+    justify-content: flex-start;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

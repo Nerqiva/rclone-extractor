@@ -10,6 +10,16 @@ import { controlsFragment } from "../views";
 
 export const dashboard = new Hono();
 
+interface JobView {
+  id: number;
+  name: string;
+  path: string;
+  status: string;
+  phase: string;
+  command: string;
+  stats: ExtractStats | null;
+}
+
 interface Snapshot {
   running: boolean;
   runId: number;
@@ -29,6 +39,33 @@ interface Snapshot {
   interruptReason: string;
   outcome: string;
   errorKind: string;
+  concurrency: number;
+  queued: number;
+  active: number;
+  jobs: JobView[];
+  upcoming: { order: number; id: number; path: string }[];
+}
+
+function jobViews(): { jobs: JobView[]; upcoming: { order: number; id: number; path: string }[] } {
+  const jobs: JobView[] = [];
+  const upcoming: { order: number; id: number; path: string }[] = [];
+  for (const job of engineState.jobs.values()) {
+    if (job.status === "queued") {
+      upcoming.push({ order: job.order + 1, id: job.id, path: job.rel });
+      continue;
+    }
+    jobs.push({
+      id: job.id,
+      name: job.rel.slice(job.rel.lastIndexOf("/") + 1),
+      path: job.rel,
+      status: job.status,
+      phase: job.phase,
+      command: job.command,
+      stats: job.stats,
+    });
+  }
+  upcoming.sort((a, b) => a.order - b.order);
+  return { jobs, upcoming };
 }
 
 const STAGE_LABEL: Record<string, string> = {
@@ -106,6 +143,10 @@ async function snapshot(): Promise<Snapshot> {
               ? "finished"
               : "",
       errorKind: engineState.errorKind || "",
+      concurrency: engineState.concurrency,
+      queued: [...engineState.jobs.values()].filter((j) => j.status === "queued").length,
+      active: engineState.activeIds.size,
+      ...jobViews(),
     };
   }
 
@@ -146,6 +187,11 @@ async function snapshot(): Promise<Snapshot> {
       interruptReason: "",
       outcome: "",
       errorKind: "",
+      concurrency: 1,
+      queued: 0,
+      active: 0,
+      jobs: [],
+      upcoming: [],
     };
   }
 
@@ -178,6 +224,11 @@ async function snapshot(): Promise<Snapshot> {
     interruptReason: row.interrupted_reason ?? "",
     outcome,
     errorKind: row.error_kind ?? "",
+    concurrency: 1,
+    queued: 0,
+    active: 0,
+    jobs: [],
+    upcoming: [],
   };
 }
 
@@ -192,6 +243,86 @@ function statCard(
     <span class="stat-label">${esc(label)}</span>
     <strong class="stat-value">${value}</strong>
     <span class="stat-sub">${total > 0 ? `${pct}% of total` : "—"}</span>
+  </div>`;
+}
+
+function jobStatusClass(status: string): string {
+  if (status === "done") return "is-done";
+  if (status === "failed") return "is-error";
+  if (status === "skipped") return "is-interrupted";
+  if (status === "active") return "is-running";
+  return "";
+}
+
+function jobPillClass(status: string): string {
+  if (status === "done") return "ok";
+  if (status === "failed") return "err";
+  if (status === "skipped") return "warn";
+  return "";
+}
+
+function jobBar(job: JobView): string {
+  const st = job.stats;
+  if (!st) {
+    if (job.status !== "active") return "";
+    return `<div class="extract-mini">
+      <div class="extract-mini-head"><span class="extract-mini-label">${esc(job.phase || "Working")}</span></div>
+      <div class="minibar is-indeterminate" role="progressbar" aria-label="${esc(job.name)} — ${esc(job.phase || "working")}"><span></span></div>
+    </div>`;
+  }
+  const pctText = st.percent === null ? "—" : `${Math.round(st.percent)}%`;
+  const width = st.percent === null ? 0 : Math.max(0, Math.min(100, st.percent));
+  const eta = st.etaText ? st.etaText : "—";
+  return `<div class="extract-mini">
+    <div class="extract-mini-head">
+      <span class="extract-mini-label">${esc(job.phase || "Transfer")}</span>
+      <span class="extract-mini-value">${esc(formatBytes(st.bytesDone))} / ${esc(formatBytes(st.bytesTotal))} · ${esc(pctText)} · ${esc(formatRate(st.speedBytesPerSec))} · ETA ${esc(eta)}</span>
+    </div>
+    <div class="minibar" role="progressbar" aria-label="${esc(job.name)} transfer" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(width)}"><span style="width:${width.toFixed(1)}%"></span></div>
+  </div>`;
+}
+
+function jobCards(jobs: JobView[]): string {
+  if (jobs.length === 0) return "";
+  const cards = jobs
+    .map((job) => {
+      const label = job.phase || stageLabel(job.status);
+      const skip =
+        job.status === "active"
+          ? `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive","id":"${job.id}"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>`
+          : "";
+      return `<article class="card job-card ${jobStatusClass(job.status)}">
+        <div class="job-card-head">
+          <span class="status-badge ${jobStatusClass(job.status)}"><span class="dot"></span>${esc(label)}</span>
+          <span class="pill ${jobPillClass(job.status)}">${esc(job.status)}</span>
+        </div>
+        <div class="error-name" title="${esc(job.path)}">${esc(job.name)}</div>
+        <div class="error-path muted">${esc(job.path)}</div>
+        ${jobBar(job)}
+        ${skip ? `<div class="job-card-foot">${skip}</div>` : ""}
+      </article>`;
+    })
+    .join("");
+  return `<div class="job-section">
+    <h3 class="job-section-title">Archives in flight</h3>
+    <div class="job-grid">${cards}</div>
+  </div>`;
+}
+
+function upcomingTable(rows: { order: number; id: number; path: string }[]): string {
+  if (rows.length === 0) return "";
+  const body = rows
+    .map(
+      (r) =>
+        `<tr><td class="queue-order">${r.order}</td><td title="${esc(r.path)}">${esc(r.path)}</td></tr>`,
+    )
+    .join("");
+  return `<div class="job-section">
+    <h3 class="job-section-title">Upcoming archives <span class="muted">(${rows.length})</span></h3>
+    <div class="queue-scroll"><table class="queue-table">
+      <thead><tr><th scope="col">#</th><th scope="col">Archive</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>
   </div>`;
 }
 
@@ -234,8 +365,8 @@ export async function progressPanel(): Promise<string> {
   const stopNote =
     s.running && engineState.stopRequested
       ? engineState.forceStop
-        ? `<p class="warn-line">Stopping immediately — the in-flight archive was aborted.</p>`
-        : `<p class="warn-line">Stop requested — the current archive will finish, then the task stops. Click <strong>Force stop</strong> to stop immediately.</p>`
+        ? `<p class="warn-line">Stopping immediately — all in-flight archives were aborted.</p>`
+        : `<p class="warn-line">Stop requested — in-flight archives finish first, then the task stops. Click <strong>Force stop</strong> to stop immediately.</p>`
       : "";
   const reason = s.interruptReason;
   const timeSuffix = s.finishedAt
@@ -312,11 +443,16 @@ export async function progressPanel(): Promise<string> {
     </div>
 
     <div class="stat-grid">
+      ${statCard("Queued", s.queued, s.total, "remain")}
+      ${statCard("Active", s.active, s.total, "ok")}
+      ${statCard("Concurrency", s.concurrency, 0, "")}
       ${statCard("Done", s.done, s.total, "ok")}
       ${statCard("Failed", s.failed, s.total, "err")}
       ${statCard("Skipped", s.skipped, s.total, "warn")}
-      ${statCard("Remaining", remaining, s.total, "remain")}
     </div>
+
+    ${jobCards(s.jobs)}
+    ${upcomingTable(s.upcoming)}
 
     <dl class="detail-grid">
       <div>

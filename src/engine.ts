@@ -38,6 +38,25 @@ import {
 // fresh each run — never persisted.
 type GroupState = { ref: string | null; open: boolean };
 
+export type JobStatus = "queued" | "active" | "done" | "failed" | "skipped";
+
+/** Live state for one archive in the current run. Never persisted. */
+export interface JobState {
+  id: number;
+  rel: string;
+  baseName: string;
+  order: number;
+  status: JobStatus;
+  phase: string;
+  command: string;
+  stats: ExtractStats | null;
+  skipArchive: boolean;
+  skipInspection: boolean;
+  groupKey: string | null;
+  startedAt: string;
+  finishedAt: string;
+}
+
 /** Directory part of a relative archive path ("" for scan-root archives). */
 function dirOfRel(rel: string): string {
   const i = rel.lastIndexOf("/");
@@ -119,6 +138,12 @@ export const engineState = {
   // at the next per-archive boundary, discarded on hard stop or app error.
   // Per-run and in-memory only — never persisted.
   deferredPasswordMoves: [] as DeferredPasswordMove[],
+  // One entry per queued archive, in queue order. The single source of truth
+  // for live per-job progress; the scalar fields above mirror the primary
+  // active job for older consumers.
+  jobs: new Map<number, JobState>(),
+  activeIds: new Set<number>(),
+  concurrency: 1,
 };
 
 /**
@@ -280,11 +305,10 @@ export function forceStopEngine(): void {
 
 /**
  * Stage/archive skips. Temporary and in-memory only — never persisted to the
- * database — and consumed by the one archive/stage in flight at most once.
- * Each request kills the in-flight binary (listing/archive list/extract) so
- * the engine proceeds without waiting for it to finish. Skip requests that
- * match nothing in flight are rejected so the UI can say so instead of
- * silently dropping the click.
+ * database — and consumed by the target archive at most once. Each request
+ * kills only that job's binary (listing is serial and uses the global kill).
+ * An omitted id targets the first active job, which keeps the original
+ * single-archive API and its callers working unchanged.
  */
 export function requestSkipListing(): boolean {
   // Allowed for the whole listing stage. If the request lands before the
@@ -300,30 +324,34 @@ export function requestSkipListing(): boolean {
   return true;
 }
 
-export function requestSkipInspection(): boolean {
-  if (
-    !engineState.running ||
-    engineState.stage !== "extracting" ||
-    engineState.activity !== "Inspecting archive" ||
-    !engineState.archiveInFlight
-  ) {
-    return false;
+function activeJobForSkip(id?: number): JobState | undefined {
+  if (id !== undefined) {
+    const job = engineState.jobs.get(id);
+    return job?.status === "active" ? job : undefined;
   }
+  for (const job of engineState.jobs.values()) {
+    if (job.status === "active") return job;
+  }
+  return undefined;
+}
+
+export function requestSkipInspection(id?: number): boolean {
+  if (!engineState.running || engineState.stage !== "extracting") return false;
+  const job = activeJobForSkip(id);
+  if (!job || job.phase !== "Inspecting archive") return false;
+  job.skipInspection = true;
   engineState.skipInspection = true;
-  killActiveProcs();
+  killActiveProcs(job.id);
   return true;
 }
 
-export function requestSkipArchive(): boolean {
-  if (
-    !engineState.running ||
-    engineState.stage !== "extracting" ||
-    !engineState.archiveInFlight
-  ) {
-    return false;
-  }
+export function requestSkipArchive(id?: number): boolean {
+  if (!engineState.running || engineState.stage !== "extracting") return false;
+  const job = activeJobForSkip(id);
+  if (!job) return false;
+  job.skipArchive = true;
   engineState.skipArchive = true;
-  killActiveProcs();
+  killActiveProcs(job.id);
   return true;
 }
 
@@ -339,8 +367,8 @@ class ArchiveSkipRequested extends Error {
   }
 }
 
-function throwIfSkipArchive(): void {
-  if (engineState.skipArchive || engineState.forceStop) {
+function throwIfSkipArchive(job: JobState): void {
+  if (job.skipArchive || engineState.forceStop) {
     throw new ArchiveSkipRequested();
   }
 }
@@ -349,10 +377,27 @@ function now(): string {
   return new Date().toISOString();
 }
 
-/** Set the in-flight command label shown by the UI; clears transfer stats. */
-function setActivity(label: string): void {
-  engineState.activity = label;
-  engineState.commandStats = null;
+/** Point the legacy single-archive fields at the first active job. */
+function refreshPrimaryMirror(): void {
+  const job = activeJobForSkip();
+  engineState.currentRel = job?.rel ?? "";
+  engineState.currentCommand = job?.command ?? "";
+  engineState.activity = job?.phase ?? "";
+  engineState.commandStats = job?.stats ?? null;
+  engineState.archiveInFlight = engineState.activeIds.size > 0;
+}
+
+/** Set a job's phase; the scalar fields mirror it only when it is primary. */
+function setActivity(label: string, job?: JobState | null): void {
+  if (job) {
+    job.phase = label;
+    job.stats = null;
+  }
+  const primary = activeJobForSkip();
+  if (!job || !primary || primary === job) {
+    engineState.activity = label;
+    engineState.commandStats = null;
+  }
 }
 
 // Narrow match for "the archive needs a password": rclonex's encryptionHint,
@@ -366,6 +411,22 @@ function clampQueueMax(raw: string | undefined): number {
   const n = Math.floor(Number(raw ?? "500"));
   if (!Number.isFinite(n) || n <= 0) return 500;
   return Math.min(n, 100_000);
+}
+
+/** Upper bound on simultaneous extraction workers; shared by form and engine. */
+export const MAX_CONCURRENCY = 8;
+
+/** Strict parse for the config form: null means "reject, do not silently clamp". */
+export function parseConcurrency(raw: string): number | null {
+  const text = raw.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  if (!Number.isSafeInteger(n) || n < 1 || n > MAX_CONCURRENCY) return null;
+  return n;
+}
+
+function clampConcurrency(raw: string | undefined): number {
+  return parseConcurrency(raw ?? "1") ?? 1;
 }
 
 // Archive sizes are stored as bytes ("0" = no limit). Invalid values are
@@ -406,11 +467,11 @@ async function touchRun(runId: number): Promise<void> {
   }
 }
 
-/** Shared onStats closure for transfers: updates the live panel and the
- * run's heartbeat (a 4-hour extract must not look dead to a peer). */
-function statsTracker(runId: number) {
+/** Per-job onStats closure: updates that job's bar and the run heartbeat. */
+function statsTracker(runId: number, job: JobState) {
   return (stats: ExtractStats) => {
-    engineState.commandStats = stats;
+    job.stats = stats;
+    if (activeJobForSkip() === job) engineState.commandStats = stats;
     void touchRun(runId);
   };
 }
@@ -638,6 +699,9 @@ export async function runEngine(): Promise<void> {
   engineState.archiveInFlight = false;
   engineState.deferredPasswordMoves = [];
   engineState.currentScanRoot = "";
+  engineState.jobs = new Map();
+  engineState.activeIds = new Set();
+  engineState.concurrency = 1;
 
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
   engineState.currentScanRoot = scanRoot;
@@ -780,8 +844,9 @@ export async function runEngine(): Promise<void> {
     // Persist every command dispatch so a crash/kill leaves the in-flight
     // command behind for the Progress page. Fire-and-forget: a command must
     // never wait on (or fail because of) this bookkeeping write.
-    const persistCommand = (command: string) => {
-      engineState.currentCommand = command;
+    const persistCommand = (command: string, job?: JobState) => {
+      if (job) job.command = command;
+      if (!job || activeJobForSkip() === job) engineState.currentCommand = command;
       void store
         .run("UPDATE runs SET last_command=? WHERE id=?", [command, runRowId])
         .catch(() => {});
@@ -1052,47 +1117,109 @@ export async function runEngine(): Promise<void> {
     engineState.stage = "extracting";
     setActivity("");
 
-    // One runner per binary; rclonex is only created when enabled. Both share
-    // the --config working copy and remote flags. The dashboard "Active
-    // command" shows commands from either binary.
-    const wireCommand = (instance: Rclone) => {
-      instance.onCommand = persistCommand;
+    // Per-worker runners. Each points at this run's private conf snapshot;
+    // a worker binds its runner to the job in flight so a targeted skip kills
+    // only that job's processes.
+    const makeRunners = async () => {
+      const rc = await Rclone.fromSettings(logger, runConf ? { confPath: runConf } : {});
+      const rx = rclonexEnabled
+        ? await Rclone.fromSettings(
+            logger,
+            runConf ? { rclonex: true, confPath: runConf } : { rclonex: true },
+          )
+        : null;
+      return { rc, rx };
     };
-    const rclonexRc = rclonexEnabled
-      ? await Rclone.fromSettings(
-          logger,
-          runConf ? { rclonex: true, confPath: runConf } : { rclonex: true },
-        )
-      : null;
-    if (rclonexRc) wireCommand(rclonexRc);
 
-    // One entry per (directory, archive family) with more than one archive
-    // in this run. Discarded when the run ends; the next run starts from
-    // scratch.
+    engineState.concurrency = clampConcurrency(await getSetting("concurrency", "1"));
+    logger.info(`concurrency=${engineState.concurrency}`);
+
+    // One entry per (directory, archive family) in this run, shared by every
+    // job of the group so the anchor's verdict decides the rest of the series.
     const groupStates = new Map<string, GroupState>();
 
-    for (const row of rows) {
-      // A pending skip click between archives has no archive in flight:
-      // discard it rather than leaking onto the next archive. Mid-archive
-      // skips are consumed by that archive's guard and cleared in the catch.
-      engineState.skipArchive = false;
-      engineState.skipInspection = false;
-      if (await cancelRequestedCached()) {
-        logger.info("cancel requested, stopping");
-        engineState.stage = "interrupted";
-        break;
+    // Ordered jobs and their group predecessor. A job waits for its
+    // predecessor to finish: different groups run in parallel, but the
+    // first-in-queue archive of a group always stays the anchor.
+    const predecessors = new Map<number, number | null>();
+    const lastByGroup = new Map<string, number>();
+    rows.forEach((row, order) => {
+      const baseName = row.path.slice(row.path.lastIndexOf("/") + 1);
+      const family = archiveFamily(baseName);
+      const groupKey = family === null ? null : `${dirOfRel(row.path)}|${family}`;
+      let predecessor: number | null = null;
+      if (groupKey !== null) {
+        predecessor = lastByGroup.get(groupKey) ?? null;
+        lastByGroup.set(groupKey, row.id);
       }
-      // Clear-queues maintenance may have deleted this row while the run
-      // was in flight; skip it instead of processing a stale entry.
-      const current = await store.get1<{ status: string }>(
-        "SELECT status FROM archives WHERE id=?",
-        [row.id],
-      );
-      if (!current || current.status !== "queued") {
-        logger.info(`skipping ${row.path} (queue cleared)`);
-        continue;
-      }
+      predecessors.set(row.id, predecessor);
+      engineState.jobs.set(row.id, {
+        id: row.id,
+        rel: row.path,
+        baseName,
+        order,
+        status: "queued",
+        phase: "",
+        command: "",
+        stats: null,
+        skipArchive: false,
+        skipInspection: false,
+        groupKey,
+        startedAt: "",
+        finishedAt: "",
+      });
+    });
 
+    const isTerminal = (s: JobStatus) =>
+      s === "done" || s === "failed" || s === "skipped";
+
+    const claimNext = (): JobState | undefined => {
+      for (const job of engineState.jobs.values()) {
+        if (job.status !== "queued") continue;
+        const pred = predecessors.get(job.id) ?? null;
+        if (pred !== null && !isTerminal(engineState.jobs.get(pred)?.status ?? "queued")) {
+          continue;
+        }
+        // Claim atomically: the worker awaits a DB read right after this, so
+        // the status must change now or another worker takes the same job.
+        job.status = "active";
+        job.startedAt = now();
+        return job;
+      }
+      return undefined;
+    };
+
+    // Atomic increments: parallel finishes cannot lose an update.
+    const recordOutcome = async (
+      job: JobState,
+      result: "done" | "failed" | "skipped",
+    ) => {
+      job.status = result;
+      job.finishedAt = now();
+      if (result === "done") engineState.done++;
+      else if (result === "skipped") engineState.skipped++;
+      else engineState.failed++;
+      const column = result === "done" ? "done" : result === "skipped" ? "skipped" : "failed";
+      await store.run(`UPDATE runs SET ${column}=${column}+1 WHERE id=?`, [runRowId]);
+    };
+
+    // A single-flight drain: parallel job boundaries must not apply a queued
+    // password move twice.
+    let drainChain: Promise<void> = Promise.resolve();
+    const drainOnce = (): Promise<void> => {
+      drainChain = drainChain.then(() => drainDeferredPasswordMoves()).catch(() => {});
+      return drainChain;
+    };
+
+    const processArchive = async (
+      job: JobState,
+      rc: Rclone,
+      rclonexRc: Rclone | null,
+    ) => {
+      const row = { id: job.id, path: job.rel, size: 0 };
+
+      // Skip flags are set on this job by targeted requests and cleared
+      // when the worker claims it.
       const rel = row.path;
       // Defense in depth: rows enqueued by older versions could hold paths
       // that are unsafe to pass to rclone. Fail them instead of executing.
@@ -1109,19 +1236,12 @@ export async function runEngine(): Promise<void> {
           [`unsafe archive path rejected by app: ${JSON.stringify(rel)}`],
         ).catch(() => {});
         warn(`skipped unsafe stored path: ${JSON.stringify(rel)}`);
-        engineState.failed++;
-        await store.run("UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?", [
-          engineState.done,
-          engineState.failed,
-          engineState.skipped,
-          runRowId,
-        ]);
-        continue;
+        await recordOutcome(job, "failed");
+        return;
       }
-      engineState.currentRel = rel;
-      engineState.commandStats = null;
-      engineState.activity = "";
-      engineState.archiveInFlight = true;
+      job.phase = "";
+      job.stats = null;
+      engineState.activeIds.add(job.id);
       // Persist before the first binary starts so a crash/kill still leaves
       // "which archive was in flight" behind for the Progress page.
       void store
@@ -1192,8 +1312,8 @@ export async function runEngine(): Promise<void> {
         const stats = createArchiveStats();
         let inspectionDetail: string | null = null;
         let skipReason: SkipReason | "unreadable" | "password" | null = null;
-        if (engineState.skipInspection) {
-          engineState.skipInspection = false; // consumed by this archive only
+        if (job.skipInspection) {
+          job.skipInspection = false; // consumed by this archive only
           extractFirst = false; // skip means no inspection at all, either side
           logger.info(`inspection skipped by user: ${rel}`);
           noteGroupInspection(group, baseName, true);
@@ -1209,19 +1329,19 @@ export async function runEngine(): Promise<void> {
           // Inspection always goes through the rclone binary: upstream's
           // `archive list` reads RAR/7Z fine, rclonex does not extend it and
           // would only add a full-stream re-read.
-          setActivity("Inspecting archive");
+          setActivity("Inspecting archive", job);
           const listOut = await rc.archiveList(rel, ref, (entry) => {
             addArchiveEntry(stats, entry.path, entry.size);
             void touchRun(runRowId);
           });
           // Skip-archive takes precedence over the inspection outcome:
           // re-queue the archive instead of classifying/extracting it.
-          throwIfSkipArchive();
-          setActivity("");
-          if (engineState.skipInspection) {
+          throwIfSkipArchive(job);
+          setActivity("", job);
+          if (job.skipInspection) {
             // The user asked to skip while the listing was in flight; treat
             // the inspection as passed for this archive only.
-            engineState.skipInspection = false;
+            job.skipInspection = false;
             logger.info(`inspection skipped by user: ${rel}`);
           } else {
             const listFailed =
@@ -1259,16 +1379,16 @@ export async function runEngine(): Promise<void> {
           result = "skipped";
         } else {
         tmpAttempted = true;
-        setActivity("Extracting");
+        setActivity("Extracting", job);
         const ex = await extractor.extract(
           rel,
           tmp,
           ref,
-          statsTracker(runRowId),
+          statsTracker(runRowId, job),
           useRclonex ? rclonexFlags : undefined,
         );
-        setActivity("");
-        throwIfSkipArchive();
+        setActivity("", job);
+        throwIfSkipArchive(job);
 
         if (ex.code !== 0) {
           const all = `${ex.tail.join("\n")}\n${ex.stderr}`;
@@ -1284,10 +1404,10 @@ export async function runEngine(): Promise<void> {
             warn(`skipped (password): ${rel} [$ ${ex.command}]`);
             result = "skipped";
           } else {
-            setActivity("Cleaning up");
+            setActivity("Cleaning up", job);
             await rc.cleanup(tmp, ref);
-            setActivity("");
-            throwIfSkipArchive();
+            setActivity("", job);
+            throwIfSkipArchive(job);
             await store.run(
               "UPDATE archives SET status='failed', error_kind='extract', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -1310,12 +1430,12 @@ export async function runEngine(): Promise<void> {
           let postSkip: "website" | "torrent" | null = null;
           const exStats = createArchiveStats();
           if (useRclonex || extractFirst) {
-            setActivity("Inspecting extracted files");
+            setActivity("Inspecting extracted files", job);
             const listOut = await rc.listPath(tmp, (p, size) =>
               addArchiveEntry(exStats, p, size),
             );
-            setActivity("");
-            throwIfSkipArchive();
+            setActivity("", job);
+            throwIfSkipArchive(job);
             // A listing that failed partway through streamed partial data;
             // classification of a partial tree would purge it wrongly.
             const listFailed = Boolean(listOut.streamError) || listOut.code !== 0;
@@ -1331,9 +1451,9 @@ export async function runEngine(): Promise<void> {
             }
           }
           if (postSkip) {
-            setActivity("Cleaning up");
+            setActivity("Cleaning up", job);
             const purged = await rc.purge(archiveTmpDir, ref);
-            setActivity("");
+            setActivity("", job);
             if (purged.code !== 0) {
               warn(
                 `temp purge failed: ${archiveTmpDir} [$ ${purged.command}] ${purged.stderr.trim() || "unknown error"}`,
@@ -1350,15 +1470,15 @@ export async function runEngine(): Promise<void> {
             warn(`skipped (${postSkip}): ${rel} [extracted tree]`);
             result = "skipped";
           } else {
-          setActivity("Moving to destination");
-          const promoted = await rc.promote(rel, tmp, ref, tmpTop, statsTracker(runRowId));
-          setActivity("");
-          throwIfSkipArchive();
+          setActivity("Moving to destination", job);
+          const promoted = await rc.promote(rel, tmp, ref, tmpTop, statsTracker(runRowId, job));
+          setActivity("", job);
+          throwIfSkipArchive(job);
           if (promoted.code !== 0) {
-            setActivity("Cleaning up");
+            setActivity("Cleaning up", job);
             await rc.cleanup(tmp, ref);
-            setActivity("");
-            throwIfSkipArchive();
+            setActivity("", job);
+            throwIfSkipArchive(job);
             await store.run(
               "UPDATE archives SET status='failed', error_kind='promote', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -1369,9 +1489,9 @@ export async function runEngine(): Promise<void> {
               `$ ${promoted.command}\n${promoted.tail.join("\n")}`.trim(),
             );
           } else {
-            setActivity("Cleaning up");
+            setActivity("Cleaning up", job);
             const cleaned = await rc.cleanup(tmp, ref);
-            setActivity("");
+            setActivity("", job);
             if (cleaned.code !== 0) {
               warn(
                 `cleanup failed: ${rel} [$ ${cleaned.command}] ${cleaned.stderr.trim()}`,
@@ -1380,15 +1500,15 @@ export async function runEngine(): Promise<void> {
             // A skip asked while the cleanup ran must not move the archive to
             // trash — without this guard the archive was extracted, promoted
             // and trashed, then re-queued anyway.
-            throwIfSkipArchive();
+            throwIfSkipArchive(job);
 
-            setActivity("Moving to trash");
-            const trashed = await rc.trash(rel, trashSubdir, ref, statsTracker(runRowId));
-            setActivity("");
+            setActivity("Moving to trash", job);
+            const trashed = await rc.trash(rel, trashSubdir, ref, statsTracker(runRowId, job));
+            setActivity("", job);
             if (trashed.code !== 0) {
               // The move did not complete, so the existing skip unwind still
               // applies.
-              throwIfSkipArchive();
+              throwIfSkipArchive(job);
               await store.run(
                 "UPDATE archives SET status='failed', error_kind='trash', updated_at=? WHERE id=?",
                 [now(), row.id],
@@ -1401,7 +1521,7 @@ export async function runEngine(): Promise<void> {
             } else {
               // The file is in trash; a skip cannot put it back. Consume the
               // flag so the archive finalizes as done instead of re-queued.
-              engineState.skipArchive = false;
+              job.skipArchive = false;
               await store.run(
                 "UPDATE archives SET status='done', error_kind=NULL, updated_at=? WHERE id=?",
                 [now(), row.id],
@@ -1419,7 +1539,7 @@ export async function runEngine(): Promise<void> {
           // User skip or hard stop: put the archive back in the queue (like a
           // force-stop) and count it as skipped for this run. Done and skipped
           // rows are never resurrected.
-          engineState.skipArchive = false; // consumed by this archive
+          job.skipArchive = false; // consumed by this archive
           await store.run(
             "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=? AND status NOT IN ('done','skipped')",
             [now(), row.id],
@@ -1444,7 +1564,7 @@ export async function runEngine(): Promise<void> {
         fail(`archive error: ${rel}`, String(e));
         }
       } finally {
-        engineState.archiveInFlight = false;
+        engineState.activeIds.delete(job.id);
         if (engineState.forceStop) {
           // Hard stop while the archive was mid-flight: put it back in the
           // queue instead of counting it as done/failed/skipped, so it is
@@ -1457,31 +1577,25 @@ export async function runEngine(): Promise<void> {
             [now(), row.id],
           );
             await markRunTouch(Number(row.id), runRowId);
-          engineState.currentCommand = "";
-          engineState.commandStats = null;
-          engineState.activity = "";
+          job.status = "queued";
+          job.command = "";
+          job.stats = null;
+          job.phase = "";
         } else {
-          if (result === "done") engineState.done++;
-          else if (result === "skipped") engineState.skipped++;
-          else engineState.failed++;
-          engineState.currentCommand = "";
-          engineState.commandStats = null;
-          engineState.activity = "";
-          await store.run("UPDATE runs SET done=?, failed=?, skipped=? WHERE id=?", [
-            engineState.done,
-            engineState.failed,
-            engineState.skipped,
-            runRowId,
-          ]);
+          job.status = "queued";
+          job.command = "";
+          job.stats = null;
+          job.phase = "";
+          await recordOutcome(job, result);
         }
         // Best effort: remove the per-archive temp dir with whatever is
         // left in it. `rmdir` refuses non-empty dirs, which would leak
         // partial extractions — purge instead. Only ever called on the
         // app-owned archive dir.
         if (tmpAttempted) {
-          setActivity("Cleaning up");
+          setActivity("Cleaning up", job);
           const purged = await rc.purge(archiveTmpDir, ref);
-          setActivity("");
+          setActivity("", job);
           if (purged.code !== 0) {
             warn(
               `temp purge failed: ${archiveTmpDir} [$ ${purged.command}] ${purged.stderr.trim() || "unknown error"}`,
@@ -1489,10 +1603,51 @@ export async function runEngine(): Promise<void> {
           }
         }
       }
-      // Per-archive boundary: the row above is committed, so a move accepted
-      // while it ran can safely be applied before the next archive starts.
-      await drainDeferredPasswordMoves();
-    }
+    };
+
+    const workers = Array.from({ length: engineState.concurrency }, async () => {
+      const { rc, rx } = await makeRunners();
+      while (true) {
+        if (
+          engineState.stopRequested ||
+          engineState.forceStop ||
+          (await cancelRequestedCached())
+        ) {
+          break;
+        }
+        const job = claimNext();
+        if (!job) break;
+        // Clear-queues maintenance may have removed this row while the run was
+        // in flight. Treat it as terminal so its group successors unblock.
+        const current = await store.get1<{ status: string }>(
+          "SELECT status FROM archives WHERE id=?",
+          [job.id],
+        );
+        if (!current || current.status !== "queued") {
+          logger.info(`skipping ${job.rel} (queue cleared)`);
+          job.status = "skipped";
+          continue;
+        }
+        job.phase = "";
+        job.stats = null;
+        engineState.activeIds.add(job.id);
+        rc.setProcOwner(job.id);
+        rx?.setProcOwner(job.id);
+        rc.onCommand = (command) => persistCommand(command, job);
+        if (rx) rx.onCommand = (command) => persistCommand(command, job);
+        refreshPrimaryMirror();
+        try {
+          await processArchive(job, rc, rx);
+        } finally {
+          engineState.activeIds.delete(job.id);
+          rc.setProcOwner(null);
+          rx?.setProcOwner(null);
+          refreshPrimaryMirror();
+          await drainOnce();
+        }
+      }
+    });
+    await Promise.all(workers);
 
     // Best effort: remove the now-possibly-empty run-level temp dir. If it
     // still holds extracted data (e.g. an archive was force-stopped

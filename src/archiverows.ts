@@ -2,6 +2,13 @@ import { store } from "./db";
 import { esc } from "./ui";
 import { formatBytes } from "./format";
 import { relativeTime } from "./errorrows";
+import type { ExtractStats } from "./rclone";
+
+export interface LiveArchiveState {
+  phase: string;
+  status: string;
+  stats: ExtractStats | null;
+}
 
 
 export interface ArchiveLogRow {
@@ -29,7 +36,10 @@ const PILL: Record<string, [string, string]> = {
   queued: ["", "queued"],
 };
 
-export function renderArchiveLogRows(rows: ArchiveLogRow[]): string {
+export function renderArchiveLogRows(
+  rows: ArchiveLogRow[],
+  jobs?: Map<number, LiveArchiveState>,
+): string {
   if (rows.length === 0) {
     return `<div class="empty-state"><p>No archives processed yet.</p></div>`;
   }
@@ -42,12 +52,27 @@ export function renderArchiveLogRows(rows: ArchiveLogRow[]): string {
       const pill = r.error_kind
         ? `<span class="pill ${pillCls || "err"}">${esc(r.error_kind)}</span>`
         : `<span class="pill ${pillCls}">${esc(basePill)}</span>`;
+      const live = jobs?.get(id);
+      const phase =
+        live && live.status === "active" && live.phase
+          ? `<span class="status-badge is-running"><span class="dot"></span>${esc(live.phase)}</span>`
+          : "";
+      const st = live?.stats;
+      const bar = st
+        ? (() => {
+            const pct = st.percent === null ? 0 : Math.max(0, Math.min(100, st.percent));
+            return `<div class="minibar" role="progressbar" aria-label="${esc(name)} transfer" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}"><span style="width:${pct.toFixed(1)}%"></span></div>`;
+          })()
+        : live?.status === "active"
+          ? `<div class="minibar is-indeterminate" role="progressbar" aria-label="${esc(name)} — ${esc(live.phase || "working")}"><span></span></div>`
+          : "";
       return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
-          ${pill}
+          ${phase}${pill}
         </div>
         <div class="error-path muted">${esc(r.path)}</div>
+        ${bar}
         <div class="error-card-foot">
           <span class="muted" title="${esc(r.updated_at)}">${esc(relativeTime(r.updated_at))} · ${esc(formatBytes(Number(r.size)))}</span>
           <span class="error-actions">

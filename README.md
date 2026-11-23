@@ -248,7 +248,7 @@ APP_TZ=Asia/Omsk                       # timezone used for every time shown in t
 ```
 
 > The remaining settings (`scan_root`, the per-command `*_extra_flags` fields,
-> `queue_max`, `max_archive_size`, `min_archive_size`, `sort_by`,
+> `queue_max`, `concurrency`, `max_archive_size`, `min_archive_size`, `sort_by`,
 > `sort_dir`, `trash_subdir`, `resume`) are configured on the
 > **Configuration** page and stored in the database. See the tables below.
 
@@ -264,7 +264,7 @@ are stored immediately but apply from the **next run** — the running task
 is not affected. Specifically:
 
 - Everything the run uses is read once at its start and kept for its whole
-  lifetime (`scan_root`, limits, sort order, `trash_subdir`, `tmp_dir`,
+  lifetime (`scan_root`, limits, sort order, `concurrency`, `trash_subdir`, `tmp_dir`,
   `resume`, `auto_skip_known`, all RcloneX settings, and every
   `*_extra_flags` field).
 - At its start the run also takes a **private snapshot of `rclone_conf`**
@@ -281,6 +281,27 @@ is not affected. Specifically:
   directory**, **Clear everything**). Password-protected **Delete/Restore**
   are accepted: they are queued and executed when the current archive
   finishes, with all checks repeated then. **Clear queues** stays available.
+
+### Concurrent archives
+
+The scan and queue building are always serial and finish before extraction
+starts. The `concurrency` setting (1–8, default `1`) then decides how many
+extraction workers run at once. Each worker takes one archive, runs the whole
+inspect → extract → promote → trash pipeline, then takes the next. With the
+default of `1` the behavior is unchanged; raising it processes different
+archives in parallel.
+
+Archives in the same directory and archive family are serialized: the first
+one in queue order is pre-inspected, and only related later archives of that
+group use the post-extraction inspection path. This keeps the inspection
+verdict deterministic while unrelated groups run in parallel.
+
+The Progress page shows one card per in-flight archive with its own phase,
+transfer bar, byte counts and ETA, plus a summary strip with queued, active,
+done, failed, skipped and configured concurrency. Upcoming archives are listed
+in queue order. The **Skip archive** button on a card targets only that
+archive. **Stop** lets in-flight archives finish; **Force stop** kills all
+active processes and re-queues every in-flight archive.
 
 ### Environment variables
 
@@ -317,6 +338,7 @@ is not affected. Specifically:
 | `purge_extra_flags` | Extra flags for `rclone purge` (temp cleanup). |
 | `rmdir_extra_flags` | Extra flags for `rclone rmdir` (empty-directory cleanup). |
 | `queue_max` | Maximum archives queued per run (default `500`). |
+| `concurrency` | Number of archives processed at the same time, `1`–`8` (default `1`). The scan and queue are still built serially; raising this runs that many extraction workers in parallel. Takes effect from the next run. |
 | `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `rclonex` | **Enable RcloneX** (default off). When on, archives whose format rclone cannot handle — RAR/RAR5, multivolume RAR (`x.partN.rar` / `x.r00…`), 7Z, split/multivolume 7Z (`x.7z.NNN`), and ISO9660 — are queued and extracted with rclonex, including multivolume sets (only the first volume is queued: `part1.rar` / `.7z.001` / plain `.rar`). Everything else stays on rclone's native `archive extract`. When off, these formats are not queued at all. |

@@ -1,4 +1,4 @@
-import { engineState } from "./engine";
+import { engineState, MAX_CONCURRENCY } from "./engine";
 import { store, allSettings } from "./db";
 import { esc, info } from "./ui";
 import { formatBytes } from "./format";
@@ -21,7 +21,7 @@ export function controlsFragment(): string {
   }
   if (engineState.forceStop) {
     return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
-    <span class="controls-note warn-line stop-note">Stopping immediately — the current archive was aborted…</span>
+    <span class="controls-note warn-line stop-note">Stopping immediately — in-flight archives were aborted…</span>
     <button class="btn danger solid is-loading btn-stop" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
   </div>`;
   }
@@ -55,14 +55,18 @@ export function controlsFragment(): string {
   const skipCluster = skips.length
     ? `<span class="skip-cluster" aria-label="Skip controls">\n    ${skips.join("\n    ")}\n    </span>`
     : "";
+  const workers =
+    engineState.concurrency > 1
+      ? `<span class="pill">${engineState.activeIds.size}/${engineState.concurrency} workers</span> `
+      : "";
   const note = engineState.stopRequested
-    ? `<span class="controls-note warn-line stop-note">Stop requested — finishing the current archive…</span>`
-    : `<span class="controls-note muted">run in progress…</span>`;
+    ? `<span class="controls-note warn-line stop-note">Stop requested — finishing in-flight archives…</span>`
+    : `<span class="controls-note muted">${workers}run in progress…</span>`;
   return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
     ${note}
     ${skipCluster}
     <button class="btn danger btn-stop" data-modal-open="stop-modal">Stop</button>${info(
-      "Soft stop: the current archive finishes, then the run stops. Hard stop: the current archive is aborted immediately.",
+      "Soft stop: in-flight archives finish, then the run stops. Hard stop: all in-flight archives are aborted immediately.",
       "Stop",
     )}
   </div>`;
@@ -202,6 +206,15 @@ export async function configForm(note = ""): Promise<string> {
       s.queue_max ?? "500",
       `<label class="field"><input type="number" name="queue_max" min="1" value="${esc(s.queue_max ?? "500")}" aria-label="queue_max"></label>`,
       { key: "queue_max", desc: "Maximum number of archives queued per run." },
+    ) +
+    settingRow(
+      "Concurrency",
+      s.concurrency ?? "1",
+      `<label class="field"><input type="number" name="concurrency" min="1" max="${MAX_CONCURRENCY}" value="${esc(s.concurrency ?? "1")}" aria-label="concurrency"></label>`,
+      {
+        key: "concurrency",
+        desc: `Archives processed at the same time (1–${MAX_CONCURRENCY}). The scan and queue stay serial. Applies from the next run.`,
+      },
     ) +
     settingRow(
       "Smallest archive",

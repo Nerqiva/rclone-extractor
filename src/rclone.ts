@@ -91,18 +91,30 @@ function spawnBinary(
     env?: Record<string, string | undefined>;
     cwd?: string;
     track?: "download";
+    /** Archive job id whose binary this is; lets a skip kill only its processes. */
+    owner?: number;
   },
 ) {
   try {
-    const { track, ...spawnOptions } = options;
+    const { track, owner, ...spawnOptions } = options;
     const proc = Bun.spawn([bin, ...args], {
       ...spawnOptions,
       env: { ...minimalEnv(), ...(options.env ?? {}) },
     });
     const tracked = track === "download" ? downloadProcs : activeProcs;
     tracked.add(proc);
+    if (owner !== undefined) {
+      let owned = procsByOwner.get(owner);
+      if (!owned) procsByOwner.set(owner, (owned = new Set()));
+      owned.add(proc);
+    }
     void proc.exited.finally(() => {
       tracked.delete(proc);
+      if (owner !== undefined) {
+        const owned = procsByOwner.get(owner);
+        owned?.delete(proc);
+        if (owned?.size === 0) procsByOwner.delete(owner);
+      }
     });
     return proc;
   } catch (e) {
@@ -209,10 +221,16 @@ const SENSITIVE_FLAG = /(pass|secret|token|credential|api[-_]?key|access[-_]?key
 
 const activeProcs = new Set<Bun.Subprocess>();
 const downloadProcs = new Set<Bun.Subprocess>();
+const procsByOwner = new Map<number, Set<Bun.Subprocess>>();
 
-/** SIGKILL every rclone process this module currently has in flight. */
-export function killActiveProcs(): void {
-  for (const proc of activeProcs) {
+/**
+ * SIGKILL rclone processes in flight. With an owner, only that archive job's
+ * processes; without one, every process (hard stop and shutdown).
+ */
+export function killActiveProcs(owner?: number): void {
+  const procs = owner === undefined ? activeProcs : procsByOwner.get(owner);
+  if (!procs) return;
+  for (const proc of procs) {
     try {
       proc.kill("SIGKILL");
     } catch {
@@ -498,7 +516,13 @@ export class Rclone {
     /** --config target; defaults to the shared working copy, pass a per-run snapshot to isolate a run. */
     private confPath: string = effectiveConfPath,
     public binaryKind: "rclone" | "rclonex" = "rclone",
+    private procOwner: number | null = null,
   ) {}
+
+  /** Bind all commands from this runner to one archive job for targeted kills. */
+  setProcOwner(owner: number | null): void {
+    this.procOwner = owner;
+  }
 
   // The --config flag is hard-coded so rclone never falls back to
   // ~/.config/rclone/rclone.conf (which errors with "didn't find section in
@@ -634,6 +658,7 @@ export class Rclone {
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       stderr: "pipe",
+      owner: this.procOwner ?? undefined,
     });
 
     const stderrPromise = new Response(proc.stderr).text();
@@ -712,6 +737,7 @@ export class Rclone {
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       stderr: "pipe",
+      owner: this.procOwner ?? undefined,
     });
     const stderrPromise = new Response(proc.stderr).text();
     const decoder = new TextDecoder();
@@ -770,6 +796,7 @@ export class Rclone {
     const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
       stderr: "pipe",
+      owner: this.procOwner ?? undefined,
     });
     const [out, err, code] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -810,6 +837,7 @@ export class Rclone {
     const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
       stderr: "pipe",
+      owner: this.procOwner ?? undefined,
     });
     // Output is streamed to the archive log in bounded batches instead of
     // buffered whole; only the tail is kept for the returned Outcome.

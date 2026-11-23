@@ -285,6 +285,15 @@ pages.get("/logs", async (c) => {
   const archiveRows = isArchivesTab
     ? await readArchiveLogRows(Number(selected.id))
     : [];
+  const liveArchiveJobs =
+    isArchivesTab && isLive
+      ? new Map(
+          [...engineState.jobs.values()].map((job) => [
+            job.id,
+            { phase: job.phase, status: job.status, stats: job.stats },
+          ]),
+        )
+      : undefined;
   const hasLog = lastId > 0;
   const showLog = isLive || hasLog;
 
@@ -374,7 +383,7 @@ pages.get("/logs", async (c) => {
       ? ` hx-get="/logs/archives-fragment?run=${selected.id}" hx-trigger="every 2s" hx-swap="innerHTML"`
       : "";
   const logBlock = isArchivesTab
-    ? `<div id="ar-list"${pollAttr}>${renderArchiveLogRows(archiveRows ?? [])}</div>`
+    ? `<div id="ar-list"${pollAttr}>${renderArchiveLogRows(archiveRows ?? [], liveArchiveJobs)}</div>`
     : showLog
       ? `<div class="log-viewer" id="logViewer" data-run="${selected.id}" data-kind="${kind}" data-live="${
           isLive ? "1" : "0"

@@ -107,3 +107,11 @@ test("extracting an archive shows only Skip archive", () => {
   expect(html).not.toContain("Skip inspection");
   expect(html).not.toContain("Skip listing");
 });
+
+test("running with concurrency > 1 shows the active-worker count", () => {
+  engineState.running = true;
+  engineState.concurrency = 4;
+  engineState.activeIds = new Set([1, 2]);
+  const html = controlsFragment();
+  expect(html).toContain("2/4 workers");
+});
