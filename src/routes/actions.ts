@@ -8,16 +8,17 @@ import {
   requestSkipListing,
   requestSkipInspection,
   requestSkipArchive,
+  performPasswordMove,
+  queuePasswordMove,
 } from "../engine";
 import { esc, toastTriggerHeaders } from "../ui";
 import { normalizeRcloneConf } from "../rcloneconf";
 import { Rclone, pendingRcloneConfNotice, syncConfWorkingCopy } from "../rclone";
 import { parseTmpDir, tmpRootPath, TMP_DIR } from "../tmpdir";
 import { loadTmpDirSettings } from "../tmpsweep";
-import { parseTrashSubdir, isSafeRel, normalizeRel, TRASH } from "../archive";
+import { parseTrashSubdir, TRASH } from "../archive";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
 import { controlsFragment, configForm } from "../views";
-import { isArchiveDownloading } from "../downloads";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
@@ -39,8 +40,6 @@ export const actions = new Hono();
 
 actions.post("/run/start", async (c) => {
   if (!engineState.running) {
-    const form = await c.req.formData().catch(() => null);
-    const reuseScan = form?.get("reuse_scan") === "1";
     await store.run(
       "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE status='failed'",
       [new Date().toISOString()],
@@ -55,7 +54,7 @@ actions.post("/run/start", async (c) => {
     }
     const confNotice = pendingRcloneConfNotice();
     // runEngine never rejects (it handles errors internally); log defensively.
-    void runEngine({ reuseScan }).catch((e) => console.error("engine crashed:", String(e)));
+    void runEngine().catch((e) => console.error("engine crashed:", String(e)));
     if (confNotice) return c.html(controlsFragment(), 200, toastTriggerHeaders(confNotice, "err"));
     return c.html(controlsFragment(), 200, toastTriggerHeaders("Task started."));
   }
@@ -414,90 +413,38 @@ async function passwordListResponse(c: Context, toast: string, toastKind: "ok" |
 // moved into the trash subdir (never deleted outright), and can be restored
 // afterwards: back into the queue, error_kind cleared, so the next run
 // retries it. Both moves refuse to overwrite anything already in place.
+// While a run is active the move is queued and applied at the next archive
+// boundary; performPasswordMove re-runs every check when it finally executes.
 async function movePasswordArchive(
   c: Context,
   direction: "delete" | "restore",
 ): Promise<Response> {
-  const del = direction === "delete";
-  if (engineState.running) {
-    return passwordListResponse(c, "Stop the task first.", "err");
-  }
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) {
     return passwordListResponse(c, "Not found.", "err");
   }
-  const row = await store.get1<{ path: string; status: string; error_kind: string | null }>(
-    "SELECT path, status, error_kind FROM archives WHERE id = ?",
-    [id],
+  if (engineState.running) {
+    if (!queuePasswordMove(direction, id)) {
+      return passwordListResponse(c, "A move for this archive is already queued.", "err");
+    }
+    return passwordListResponse(
+      c,
+      direction === "delete"
+        ? "Queued — will move to trash when the current archive finishes."
+        : "Queued — will restore when the current archive finishes.",
+    );
+  }
+  const result = await performPasswordMove(direction, id);
+  if (result.kind === "rejected") {
+    return passwordListResponse(c, result.message, result.level);
+  }
+  if (result.kind === "dropped") {
+    return passwordListResponse(c, "The file is no longer in the trash; the entry was removed.");
+  }
+  return passwordListResponse(
+    c,
+    result.direction === "delete" ? "Moved to trash." : "Restored — queued for the next run.",
   );
-  if (!row || row.error_kind !== "password") {
-    return passwordListResponse(c, "Not a password-protected archive.", "err");
-  }
-  if (del ? row.status === "deleted" : row.status !== "deleted") {
-    return passwordListResponse(c, del ? "Already in trash." : "Archive is not in trash.");
-  }
-  const rel = String(row.path);
-  if (!isSafeRel(rel)) {
-    return passwordListResponse(c, "Stored path is unsafe; refusing to move it.", "err");
-  }
-  // Never move a file that is streaming to a browser right now.
-  if (isArchiveDownloading(id)) {
-    return passwordListResponse(
-      c,
-      "A download of this archive is in progress; wait for it to finish.",
-      "err",
-    );
-  }
-  const trash = parseTrashSubdir((await getSetting("trash_subdir", TRASH)) ?? TRASH);
-  if (!trash) {
-    return passwordListResponse(c, "trash_subdir is invalid.", "err");
-  }
-  const ref = { scope: "archive" as const, refId: id, kind: "extract" as const };
-  const rc = await Rclone.fromSettings();
-  const trashRel = normalizeRel(`${trash}/${rel}`);
-  const srcRel = del ? rel : trashRel;
-  const destRel = del ? trashRel : rel;
-  if (!del && !(await rc.existsPath(srcRel))) {
-    // The trash copy is gone (removed by hand or by something else), so
-    // this row can never be restored. Drop it (and its logs) instead of
-    // offering a Restore button that can only fail.
-    await store.run("DELETE FROM log_lines WHERE scope='archive' AND ref_id = ?", [id]);
-    await store.run("DELETE FROM archives WHERE id = ?", [id]);
-    return passwordListResponse(
-      c,
-      "The file is no longer in the trash; the entry was removed.",
-    );
-  }
-  if (await rc.existsPath(destRel)) {
-    return passwordListResponse(
-      c,
-      del
-        ? `The trash already contains ${destRel} — remove it before deleting.`
-        : `A file now exists at ${destRel} — remove it before restoring.`,
-      "err",
-    );
-  }
-  const res = await rc.moveToRel(srcRel, destRel, ref);
-  if (res.code !== 0) {
-    const detail = (res.tail || []).slice(-1)[0] ?? res.stderr.trim().split("\n").pop() ?? "unknown error";
-    return passwordListResponse(
-      c,
-      `${del ? "Move to trash" : "Restore"} failed (exit ${res.code}): ${detail}`,
-      "err",
-    );
-  }
-  if (del) {
-    await store.run("UPDATE archives SET status='deleted', updated_at=? WHERE id=?", [
-      new Date().toISOString(),
-      id,
-    ]);
-    return passwordListResponse(c, "Moved to trash.");
-  }
-  await store.run(
-    "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=?",
-    [new Date().toISOString(), id],
-  );
-  return passwordListResponse(c, "Restored — queued for the next run.");
 }
 
 actions.post("/archives/:id/delete", (c) => movePasswordArchive(c, "delete"));

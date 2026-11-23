@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { Logger, insertLogLines } from "./log";
-import { store, getSetting, setSetting } from "./db";
+import { store, getSetting, setSetting, allSettings } from "./db";
 import { Rclone, killActiveProcs, writeRunConfSnapshot, deleteRunConfSnapshot, type ExtractStats } from "./rclone";
 import {
   tmpRootPath,
@@ -9,6 +10,7 @@ import {
   tmpTopSegment,
 } from "./tmpdir";
 import { loadTmpDirSettings } from "./tmpsweep";
+import { isArchiveDownloading } from "./downloads";
 import {
   isTrashPath,
   normalizeRel,
@@ -54,6 +56,15 @@ function noteGroupInspection(
   group.ref = baseName;
   group.open = passed;
 }
+
+/** A password-archive move accepted while a run is active. */
+export type PasswordMoveDirection = "delete" | "restore";
+export type DeferredPasswordMove = { id: number; direction: PasswordMoveDirection };
+
+export type PasswordMoveResult =
+  | { kind: "moved"; direction: PasswordMoveDirection }
+  | { kind: "dropped" }
+  | { kind: "rejected"; message: string; level: "ok" | "err" };
 
 export const engineState = {
   running: false,
@@ -102,7 +113,146 @@ export const engineState = {
   // persisted, cleared in the per-archive finally). Lets skip requests tell
   // "between archives" apart from "an archive is in flight".
   archiveInFlight: false,
+  // Password-archive Delete/Restore accepted while a run is active. Applied
+  // at the next per-archive boundary, discarded on hard stop or app error.
+  // Per-run and in-memory only — never persisted.
+  deferredPasswordMoves: [] as DeferredPasswordMove[],
 };
+
+/**
+ * Validate and perform one password-archive move. Shared by the route and the
+ * in-run drain: every check runs at call time, so a deferred move sees current
+ * state. No app wording goes to the archive's raw log; callers own the toast
+ * and the run-level diagnostic.
+ */
+export async function performPasswordMove(
+  direction: PasswordMoveDirection,
+  id: number,
+): Promise<PasswordMoveResult> {
+  const del = direction === "delete";
+  if (!Number.isInteger(id) || id <= 0) {
+    return { kind: "rejected", message: "Not found.", level: "err" };
+  }
+  const row = await store.get1<{ path: string; status: string; error_kind: string | null }>(
+    "SELECT path, status, error_kind FROM archives WHERE id = ?",
+    [id],
+  );
+  if (!row || row.error_kind !== "password") {
+    return { kind: "rejected", message: "Not a password-protected archive.", level: "err" };
+  }
+  if (del ? row.status === "deleted" : row.status !== "deleted") {
+    return {
+      kind: "rejected",
+      message: del ? "Already in trash." : "Archive is not in trash.",
+      level: "ok",
+    };
+  }
+  const rel = String(row.path);
+  if (!isSafeRel(rel)) {
+    return {
+      kind: "rejected",
+      message: "Stored path is unsafe; refusing to move it.",
+      level: "err",
+    };
+  }
+  if (isArchiveDownloading(id)) {
+    return {
+      kind: "rejected",
+      message: "A download of this archive is in progress; wait for it to finish.",
+      level: "err",
+    };
+  }
+  const trash = parseTrashSubdir((await getSetting("trash_subdir", TRASH)) ?? TRASH);
+  if (!trash) {
+    return { kind: "rejected", message: "trash_subdir is invalid.", level: "err" };
+  }
+  const ref = { scope: "archive" as const, refId: id, kind: "extract" as const };
+  const rc = await Rclone.fromSettings();
+  const trashRel = normalizeRel(`${trash}/${rel}`);
+  const srcRel = del ? rel : trashRel;
+  const destRel = del ? trashRel : rel;
+  if (!del && !(await rc.existsPath(srcRel))) {
+    // The trash copy is gone; the row can never be restored. Drop it instead
+    // of leaving a Restore button that can only fail.
+    await store.run("DELETE FROM log_lines WHERE scope='archive' AND ref_id = ?", [id]);
+    await store.run("DELETE FROM archives WHERE id = ?", [id]);
+    return { kind: "dropped" };
+  }
+  if (await rc.existsPath(destRel)) {
+    return {
+      kind: "rejected",
+      message: del
+        ? `The trash already contains ${destRel} — remove it before deleting.`
+        : `A file now exists at ${destRel} — remove it before restoring.`,
+      level: "err",
+    };
+  }
+  const res = await rc.moveToRel(srcRel, destRel, ref);
+  if (res.code !== 0) {
+    const detail =
+      (res.tail || []).slice(-1)[0] ?? res.stderr.trim().split("\n").pop() ?? "unknown error";
+    return {
+      kind: "rejected",
+      message: `${del ? "Move to trash" : "Restore"} failed (exit ${res.code}): ${detail}`,
+      level: "err",
+    };
+  }
+  if (del) {
+    await store.run("UPDATE archives SET status='deleted', updated_at=? WHERE id=?", [
+      new Date().toISOString(),
+      id,
+    ]);
+  } else {
+    await store.run(
+      "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=?",
+      [new Date().toISOString(), id],
+    );
+  }
+  return { kind: "moved", direction };
+}
+
+/** Queue a move while a run is active. At most one pending move per archive. */
+export function queuePasswordMove(direction: PasswordMoveDirection, id: number): boolean {
+  if (engineState.deferredPasswordMoves.some((m) => m.id === id)) return false;
+  engineState.deferredPasswordMoves.push({ id, direction });
+  return true;
+}
+
+/** Drop every pending move and leave a short note in the run log. */
+export function discardDeferredPasswordMoves(reason: string): number {
+  const n = engineState.deferredPasswordMoves.length;
+  if (n === 0) return 0;
+  engineState.deferredPasswordMoves = [];
+  void insertLogLines(
+    { scope: "run", refId: engineState.runId, kind: "main" },
+    [`discarded ${n} queued password move(s) (${reason})`],
+  ).catch(() => {});
+  return n;
+}
+
+/** Apply all pending password moves. Safe to call at every archive boundary. */
+export async function drainDeferredPasswordMoves(): Promise<void> {
+  if (engineState.forceStop) return; // a hard stop discards the queue instead
+  const pending = engineState.deferredPasswordMoves;
+  if (pending.length === 0) return;
+  engineState.deferredPasswordMoves = [];
+  for (const item of pending) {
+    try {
+      const result = await performPasswordMove(item.direction, item.id);
+      if (result.kind === "rejected") {
+        await insertLogLines(
+          { scope: "run", refId: engineState.runId, kind: "errors" },
+          [`queued password move id=${item.id} (${item.direction}) rejected: ${result.message}`],
+        ).catch(() => {});
+      }
+    } catch (e) {
+      await insertLogLines(
+        { scope: "run", refId: engineState.runId, kind: "errors" },
+        [`queued password move id=${item.id} (${item.direction}) failed: ${String(e)}`],
+      ).catch(() => {});
+    }
+  }
+}
 
 function requestCancel(): void {
   engineState.stopRequested = true;
@@ -122,6 +272,7 @@ export function forceStopEngine(): void {
   if (!engineState.running) return;
   requestCancel();
   engineState.forceStop = true;
+  discardDeferredPasswordMoves("hard stop");
   killActiveProcs();
 }
 
@@ -450,9 +601,22 @@ export async function recoverStale(
   return n;
 }
 
-export async function runEngine(
-  opts: { reuseScan?: boolean } = {},
-): Promise<void> {
+const INTERNAL_SETTINGS = new Set([
+  "scan_cache_key",
+  "scan_cache_state",
+  "last_run_id",
+  "cancel",
+]);
+
+export function configFingerprint(settings: Record<string, string>): string {
+  const pairs = Object.keys(settings)
+    .filter((key) => !INTERNAL_SETTINGS.has(key))
+    .sort()
+    .map((key) => `${key}=${settings[key]}`);
+  return createHash("sha256").update(pairs.join("\n")).digest("hex");
+}
+
+export async function runEngine(): Promise<void> {
   if (engineState.running) return;
   engineState.running = true;
   engineState.lastError = "";
@@ -475,6 +639,7 @@ export async function runEngine(
   engineState.skipInspection = false;
   engineState.skipArchive = false;
   engineState.archiveInFlight = false;
+  engineState.deferredPasswordMoves = [];
   engineState.currentScanRoot = "";
 
   const scanRoot = (await getSetting("scan_root", "")) ?? "";
@@ -499,8 +664,12 @@ export async function runEngine(
   let runConf: string | null = null;
 
   const fail = (msg: string, detail?: string) => {
-    logger?.error(msg, detail);
-    errorLog?.error(msg, detail);
+    const command = engineState.currentCommand;
+    const body = detail && command && !detail.includes(command)
+      ? `$ ${command}\n${detail}`
+      : detail ?? (command ? `$ ${command}` : undefined);
+    logger?.error(msg, body);
+    errorLog?.error(msg, body);
   };
   const warn = (msg: string) => {
     logger?.warn(msg);
@@ -511,6 +680,7 @@ export async function runEngine(
   // outcome='error' and a short error code, and leave log lines behind, so
   // they never masquerade as a finish or a host kill.
   const abortWithError = async (code: string, msg: string) => {
+    discardDeferredPasswordMoves(code);
     errorKind = code;
     engineState.errorKind = code;
     engineState.stage = "error";
@@ -675,33 +845,13 @@ export async function runEngine(
     const autoSkipKnown = (await getSetting("auto_skip_known", "1")) === "1";
     const trashSubdir = trashSubdirValidated;
     const trashDir = normalizeRel(trashSubdir);
-    // Fingerprint of every setting that changes what a listing produces or
-    // how paths get inserted during one. The cached-scan marker is only
-    // reused when the current fingerprint matches exactly, so changing any
-    // of these forces a fresh scan instead of silently reusing stale cache.
-    const scanFingerprint = [
-      scanRoot,
-      String(maxArchiveSize),
-      String(minArchiveSize),
-      String(queueMax),
-      trashDir,
-      autoSkipKnown ? "1" : "0",
-      rclonexEnabled ? "1" : "0",
-    ].join("|");
-    // Validate cached scan results for the "Reuse Previous Scan Results"
-    // option: a complete marker with a matching fingerprint only, plus the
-    // regular queue guards below. Anything stale/incomplete/mismatched falls
-    // back to a fresh scan.
+    const fingerprint = configFingerprint(await allSettings());
     const cacheKey = (await getSetting("scan_cache_key", "")) ?? "";
     const cacheState =
       (await getSetting("scan_cache_state", "incomplete")) ?? "";
-    const reuseRequested = opts.reuseScan === true;
-    const reuseScan =
-      reuseRequested && cacheState === "complete" && cacheKey === scanFingerprint;
-    if (reuseRequested && !reuseScan) {
-      logger.info(
-        "reuse-scan requested but no valid cached scan for these settings; scanning fresh",
-      );
+    const reuseScan = cacheState === "complete" && cacheKey === fingerprint;
+    if (!reuseScan && cacheState === "complete") {
+      logger.info("no valid cached scan for these settings; scanning fresh");
     }
     const existing = new Map(
       (
@@ -857,7 +1007,7 @@ export async function runEngine(
         // The listing ran to completion; cache it for "Reuse Previous Scan
         // Results". The archive table is never rewritten or corrupted by
         // this, only the marker settings are stored.
-        await setSetting("scan_cache_key", scanFingerprint);
+        await setSetting("scan_cache_key", fingerprint);
         await setSetting("scan_cache_state", "complete");
       }
       if (listed.stderr.trim()) {
@@ -1335,6 +1485,9 @@ export async function runEngine(
           }
         }
       }
+      // Per-archive boundary: the row above is committed, so a move accepted
+      // while it ran can safely be applied before the next archive starts.
+      await drainDeferredPasswordMoves();
     }
 
     // Best effort: remove the now-possibly-empty run-level temp dir. If it
@@ -1370,6 +1523,10 @@ export async function runEngine(
       logger.info(`left ${tmpRootNorm} in place (not empty)`);
     }
     setActivity("");
+
+    // A move accepted after the last per-archive drain (or with no archives
+    // at all) would otherwise be lost when this run finalizes.
+    await drainDeferredPasswordMoves();
 
     // A stop requested while the last archive was being processed never gets
     // another loop iteration to notice it, so decide here. A user-stopped run

@@ -2,6 +2,7 @@ import { store } from "./db";
 import { esc } from "./ui";
 import { formatBytes } from "./format";
 import { relativeTime } from "./errorrows";
+import { engineState } from "./engine";
 
 /**
  * Password-protected archives (Errors page). Password archives are skipped
@@ -34,13 +35,17 @@ export function renderPasswordList(rows: PasswordRow[]): string {
       const id = Number(r.id);
       const name = r.path.split("/").pop() || r.path;
       const inTrash = r.status === "deleted";
-      const pill = inTrash
-        ? `<span class="pill">in trash</span>`
-        : `<span class="pill warn">password</span>`;
+      const pending = engineState.deferredPasswordMoves.some((m) => m.id === id);
+      const pill = pending
+        ? `<span class="pill warn">pending</span>`
+        : inTrash
+          ? `<span class="pill">in trash</span>`
+          : `<span class="pill warn">password</span>`;
       const idAttr = encodeURIComponent(String(id));
+      const disabled = pending ? " disabled" : "";
       const action = inTrash
-        ? `<button class="btn small" hx-post="/archives/${idAttr}/restore" hx-target="#pw-list" hx-swap="outerHTML">Restore</button>`
-        : `<button class="btn small danger" hx-post="/archives/${idAttr}/delete" hx-target="#pw-list" hx-swap="outerHTML" data-confirm="Move this archive to the trash folder?|Delete">Delete</button>`;
+        ? `<button class="btn small"${disabled} hx-post="/archives/${idAttr}/restore" hx-target="#pw-list" hx-swap="outerHTML">Restore</button>`
+        : `<button class="btn small danger"${disabled} hx-post="/archives/${idAttr}/delete" hx-target="#pw-list" hx-swap="outerHTML" data-confirm="Move this archive to the trash folder?|Delete">Delete</button>`;
       return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
