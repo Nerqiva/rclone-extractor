@@ -90,10 +90,10 @@ scan  →  extract  →  promote  →  trash
 - **Skip controls** — skip the listing stage, the current archive's
   inspection, or the current archive entirely. Skips are temporary, this run
   only, and never persist; a skipped archive stays queued for the next run.
-- **Reuse Previous Scan Results** — an opt-in, non-sticky checkbox on the
-  Progress page that reuses the cached archive list from the last completed
-  scan of the same `scan_root` instead of rescanning the remote (falls back
-  to a fresh scan when the cache is unusable).
+- **Automatic scan reuse** — the cached archive list from the last completed
+  scan is reused when the configuration is unchanged, instead of rescanning
+  the remote. Any configuration change or incomplete cache falls back to a
+  fresh scan.
 - **Mobile-friendly logs** — the log and error views are selectable text with
   Copy all / Copy selection / Select all / Download controls.
 - **Continue previous task** — resumable runs. If the app crashes or is
@@ -133,7 +133,8 @@ Every rclone invocation gets `--config /app/data/rclone.conf` baked in. Mount
 your `rclone.conf` there (or store one in the app / `RCLONE_CONF` env, which
 is written to that path before each run; if the path is not writable for any
 reason the working copy is kept at `/tmp/app/data/rclone.conf` instead, with a
-warning and a toast). `remote_flags` never needs a `--config`.
+warning and a toast). The per-command extra-flag settings never need a
+`--config`; one placed there is ignored.
 
 Open <http://localhost:8080> and sign in with `APP_PASSWORD`.
 
@@ -246,8 +247,8 @@ PORT=8080                              # listen port
 APP_TZ=Asia/Omsk                       # timezone used for every time shown in the UI (DB and backups stay UTC)
 ```
 
-> The remaining settings (`scan_root`, `remote_flags`, `queue_max`,
-> `max_archive_size`, `min_archive_size`, `sort_by`,
+> The remaining settings (`scan_root`, the per-command `*_extra_flags` fields,
+> `queue_max`, `max_archive_size`, `min_archive_size`, `sort_by`,
 > `sort_dir`, `trash_subdir`, `resume`) are configured on the
 > **Configuration** page and stored in the database. See the tables below.
 
@@ -264,7 +265,8 @@ is not affected. Specifically:
 
 - Everything the run uses is read once at its start and kept for its whole
   lifetime (`scan_root`, limits, sort order, `trash_subdir`, `tmp_dir`,
-  `resume`, `auto_skip_known`, all RcloneX settings, `remote_flags`).
+  `resume`, `auto_skip_known`, all RcloneX settings, and every
+  `*_extra_flags` field).
 - At its start the run also takes a **private snapshot of `rclone_conf`**
   (a mode-`0600` copy kept for the duration of the run and deleted when it
   ends), so an rclone.conf saved mid-run cannot leak into the in-flight
@@ -274,16 +276,17 @@ is not affected. Specifically:
   uses — the shared working copy is updated as soon as you save.
 - The Progress page shows the **running task's** scan root, not the stored
   setting.
-- Still blocked while a task runs: **Import** (it replaces the database),
+- Still blocked while a task runs: **Import** (it replaces the database) and
   the destructive maintenance actions (**Clear logs**, **Clear tmp
-  directory**, **Clear everything**), and the password-protected
-  archive Delete/Restore actions. **Clear queues** stays available.
+  directory**, **Clear everything**). Password-protected **Delete/Restore**
+  are accepted: they are queued and executed when the current archive
+  finishes, with all checks repeated then. **Clear queues** stays available.
 
 ### Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `APP_PASSWORD` | *(empty)* | Login password. Required for login; never stored in the database. When empty, login is disabled. |
+| `APP_PASSWORD` | *(empty)* | Login password. Required for login; never stored in the database. When empty, login is disabled and all pages and actions are open without a session, so only use this on a trusted network. |
 | `SECRET_KEY` | *(empty)* | Passphrase for encrypting stored secrets. **Omit to disable encryption.** |
 | `RCLONE_CONF` | *(empty)* | Base64-encoded `rclone.conf`, used as a fallback when the stored `rclone_conf` setting is empty. Generate with `base64 -w0 rclone.conf`. |
 | `RCLONE_BIN` | `rclone` | Path to the rclone binary. Set this to a full path if your host does not have rclone on `PATH`, or if you must install the build that matches your CPU (arm64 vs amd64). |
@@ -443,11 +446,11 @@ a relative path is resolved under `<ROOT>`, while `remote:path/to/dir` or
 two archives with the same filename cannot collide and the sweeper can tell
 the app's directories apart from anything else. The maintenance/boot sweep
 removes stale `run_<digits>` directories inside `<TMPDIR>` — anything else is
-left alone.
+left alone, including directories owned by a live instance on shared
+Postgres.
 
-`remote_flags` is appended to extraction, promotion and download commands,
-but not to `moveto` commands (trash / Delete / Restore) or to
-listing/inspection/cleanup. All rclone output streams are stored
+Each `*_extra_flags` field is appended only to its own subcommand. Nothing
+leaks into another command, and `--config` is always ignored. All rclone output streams are stored
 verbatim: the run log carries human-readable annotations plus every command
 the app runs, while each per-archive archive log holds the binary's raw
 output only (no app wording) — except for failures that produce no binary
@@ -532,9 +535,9 @@ Enable it with **Enable RcloneX** on the Configuration page.
 - **Flags**: `--archive-password` (encrypted at rest, blank field on save
   keeps the stored value, **Clear** removes it) and `--archive-window-size`
   (bytes; `0` disables caching) are exposed as Configuration checkboxes, all
-  **off by default**. `--archive-*` flags placed in `remote_flags` are passed
-  to rclonex only — they are stripped (with a warning) for the rclone
-  binary, where they would make every command fail.
+  **off by default**. Use `rclonex_extract_extra_flags` for other `--archive-*`
+  flags; they reach rclonex only and never the rclone binary, where they would
+  make every command fail.
 - **Docker**: at every container start the entrypoint refreshes both
   **rclone** and **rclonex** to the latest release into `/app/data/bin`
   (checksum-verified: rclone against the signed `SHA256SUMS` on
@@ -657,13 +660,12 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
   later runs, or the queue order. A skip asked while nothing matching is in
   flight is refused with a toast instead of being silently dropped.
   Skipping an archive never moves it to the trash folder.
-- **Reuse Previous Scan Results** is an opt-in checkbox on the **Start** row
-  (unchecked by default). When ticked, the run does not rescan the remote; it
-  rebuilds the queue from the archives already stored in the database, reusing
-  the last **completed** scan of the same `scan_root`. If the cached scan is
-  missing, incomplete, or for a different root, the app falls back to a fresh
-  scan automatically. The checkbox is not remembered — every run starts
-  unchecked, and the cached data itself is never modified or deleted.
+- **Cached scan results are reused automatically.** When the last scan
+  completed and the configuration has not changed since, the run rebuilds the
+  queue from the archives already stored in the database instead of
+  rescanning the remote. Any configuration change, incomplete cache, or
+  missing cache falls back to a fresh scan. The cached data itself is never
+  modified or deleted.
 - All action buttons share the same feedback: a spinner and disabled state
   while the request is in flight, then a toast (via the `HX-Trigger` response
   header) reporting the outcome.
@@ -766,9 +768,11 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   deployments too.
 - The **Errors** page lists archives with `error_kind` set (except
   password-protected archives, see below) and has a **Copy all** button for a
-  tab-separated summary. Each row's **Copy** / **Download** button fetches
-  that archive's log, which stores the raw rclone output of the failing
-  command — nothing written by the app is added to it.
+  tab-separated summary. Each card shows the last native error lines from
+  that archive's log, with app-written diagnostics filtered out. The row's
+  **Copy** / **Download** button fetches the full archive log, which stores
+  the raw rclone output of the failing command. The run error log also records
+  the redacted command that failed.
 - The **Password-protected** section on the Errors page lists every archive
   that reached a run but needs a password (a warning is logged and the run moves
   to the next archive; they are never extracted without one). Each row shows
@@ -782,13 +786,16 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   which moves the file to the configured trash folder after a confirmation
   (never outright deletion, and never over anything already in the trash).
   One archive-file download can stream at a time — app-wide; while one is
-  in flight the other **Download** buttons are greyed out and tapping one
-  shows a toast. The same file can't be deleted (or restored) while it is
-  streaming. A deleted archive shows up on the same tab with an **in trash**
-  pill and a **Restore** button that moves it back into the queue (clearing
-  the error kind). Restore assumes the file is still in the trash; if it
-  was removed from there (by hand, say), the stale entry is dropped instead
-  of failing forever. Deleting/restoring is blocked while a task is running.
+  in flight the other **Download** buttons are greyed out and a second request
+  is refused with a 409. Skip and stop no longer kill an in-flight download.
+  The same file can't be deleted (or restored) while it is streaming. A
+  deleted archive shows up on the same tab with an **in trash** pill and a
+  **Restore** button that moves it back into the queue (clearing the error
+  kind). Restore assumes the file is still in the trash; if it was removed
+  from there (by hand, say), the stale entry is dropped instead of failing
+  forever. Delete/Restore can be requested while a task is running: the move
+  is queued in memory, shown as **pending**, and executed when the current
+  archive finishes. A restart discards the queue.
 
 ### Backend adapter
 

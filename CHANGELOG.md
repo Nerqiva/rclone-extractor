@@ -12,11 +12,11 @@ to `main`.
 ## [Unreleased]
 
 ### Removed
-- **`remote_flags` are no longer applied to `moveto` commands.** The
-  configured extra flags are still appended to extraction, promotion and
-  archive-download commands, but not to the trash move (`trash`) or the
-  webapp Delete/Restore moves (`moveToRel`). Listing, inspection and cleanup
-  commands remain unaffected.
+- **The single `remote_flags` setting is gone.** Extra flags now have one
+  field per rclone/rclonex subcommand. Existing values are migrated into the
+  extraction, promotion and download fields only, so no flag leaks into
+  `moveto`, listing, inspection or cleanup commands. Old portable backups are
+  migrated on import.
 - **The `dry_run` setting and all `--dry-run` behavior are gone.** The
   Configuration checkbox, the database default, the flag threaded through
   `run`/`extract`/`promote`/`trash`/`moveto`/`purge`/`rmdir`/`purgeStaleTemp`
@@ -24,8 +24,19 @@ to `main`.
   purge" mode, the dry-run-aware re-queue rule, the "Dry run" notes) are
   removed. Every run now performs the real moves — deleting or restoring
   through the app is likewise no longer subject to a stored dry-run flag.
+- **The "Reuse Previous Scan Results" checkbox is gone.** Cached scan results
+  are now reused automatically when the stored configuration is unchanged
+  since the completed scan; any configuration change or incomplete cache
+  falls back to a fresh scan.
 
 ### Changed
+- **Error cards show the raw binary error.** Each card on the Errors page now
+  includes the last native rclone/rclonex lines from that archive's log.
+  App-written diagnostics are filtered out, so the message is native output
+  only. The full log is still available through Copy and Download.
+- **Error logs include the failing command.** A failed command is now recorded
+  with its redacted `$ <binary> ...` line in the run error log, including
+  spawn failures that produce no binary output. Secrets stay masked.
 - **The Configuration page stays editable while a run is active.**
   Settings are stored immediately but apply from the **next run**: the
   running task reads everything it needs once at its start and keeps it for
@@ -35,10 +46,12 @@ to `main`.
   config is what on-demand rclone calls (e.g. password-archive downloads)
   and the next run use; the shared working copy is updated as usual on
   save. **Import** and the destructive maintenance actions (**Clear logs**,
-  **Clear tmp directory**, **Clear everything**) remain blocked mid-run, as
-  do the password-protected Delete/Restore actions. **Clear queues** stays
-  available. The Progress page now shows the running task's own `scan_root`
-  instead of the stored setting while a task is running.
+  **Clear tmp directory**, **Clear everything**) remain blocked mid-run.
+  Password-protected **Delete/Restore** are now accepted mid-run: they are
+  queued in memory and executed at the next per-archive boundary, with all
+  checks repeated before the move. A queue is lost if the process restarts.
+  **Clear queues** stays available. The Progress page now shows the running
+  task's own `scan_root` instead of the stored setting while a task is running.
 - **Multiple archives of one family in one directory are no longer each
   pre-inspected.** For rclone-handled formats, inspection of extracted files
   is often faster than `archive list` (except for archives with many small
@@ -88,6 +101,14 @@ to `main`.
   promote/trash moves have no such pre-check and will overwrite.
 
 ### Added
+- **Eleven per-subcommand extra-flag settings** on the Configuration page:
+  `lsf`, `archive list`, rclone and rclonex `archive extract`, `move`,
+  `moveto`, `cat`, `lsl`, `lsjson`, `purge`, and `rmdir`. Each field reaches
+  only its own command. Flag names are checked against the installed binary's
+  help output when saved, so an invalid flag is rejected before a run starts;
+  a missing or unreadable binary warns and still allows the save. Stored and
+  imported values are checked again at run start and reported as one clear
+  `invalid_extra_flags` error.
 - **Runtime refresh of rclone and rclonex at container start** — at every
   boot the entrypoint fetches the latest release of **both** binaries into
   `/app/data/bin` (checksum-verified: rclone against the signed
@@ -194,6 +215,22 @@ to `main`.
   no trash). Anything else continues as a normal extraction.
 - `tests/postexinspect.test.ts` — covers the post-extraction website/torrent
   skip path (including "archive kept in place") and dry-run behavior.
+
+### Fixed
+- **Boot and shutdown recovery now settle archives already moved to trash.**
+  A crash after the trash move but before the done update no longer leaves an
+  archive queued at a path that only exists in trash, which used to fail it
+  forever.
+- **A skip or hard stop during the final trash move no longer requeues an
+  archive that is already in trash.** A completed move finalizes as done.
+- **Concurrent archive downloads are refused by the server.** The one-at-a-time
+  rule was only enforced by greyed-out buttons; a second request now gets a
+  409. Skip and stop no longer kill an in-flight archive download.
+- **An empty `APP_PASSWORD` now really disables login.** The documented mode
+  no longer rejects every mutating request with a CSRF 403.
+- **The temp sweep leaves live peers' directories alone.** A second instance
+  on shared Postgres no longer purges the extraction directories of a running
+  instance during a rolling deploy.
 
 ### Changed
 - **Info tooltips are now brief one-line tips** (was: multi-sentence
