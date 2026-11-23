@@ -3,7 +3,7 @@ export const TMP_DIR = ".Rclone-Extractor-tmp";
 /** Prefix for app-owned run directories directly inside TMP_DIR. */
 export const TMP_RUN_PREFIX = "run_";
 /** Matches app-owned run directories inside TMP_DIR; everything else is left alone. */
-export const TMP_RUN_DIR_RE = /^run_\d+$/;
+export const TMP_RUN_DIR_RE = /^run_(\d+)$/;
 
 export type TmpDirSpec =
   | { kind: "relative"; value: string } // resolved against the scan root

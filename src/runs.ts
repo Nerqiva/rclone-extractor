@@ -1,8 +1,17 @@
-/**
- * Resolve the effective outcome for a runs row. Rows written before the
- * `outcome` column existed have it NULL; those fall back to the legacy
- * `interrupted` flag, then to `finished` when the run has an end time.
- */
+import { store } from "./db";
+
+export const STALE_MS = 10 * 60 * 1000;
+
+export async function liveRunIds(): Promise<Set<number>> {
+  const cutoff = new Date(Date.now() - STALE_MS).toISOString();
+  const rows = await store.query<{ id: number | string }>(
+    "SELECT id FROM runs WHERE finished_at IS NULL AND COALESCE(last_touch_at, started_at) >= ?",
+    [cutoff],
+  );
+  return new Set(rows.map((r) => Number(r.id)));
+}
+
+
 export function resolveOutcome(row: {
   outcome: string | null;
   interrupted: number | null;

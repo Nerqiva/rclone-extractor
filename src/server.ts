@@ -3,6 +3,7 @@ import { serveStatic } from "hono/bun";
 import { APP_PASSWORD, BIND, PORT } from "./config";
 import { initDb, store, getSetting } from "./db";
 import { recoverStale } from "./engine";
+import { liveRunIds } from "./runs";
 import { checkRclone, checkRclonex, Rclone, killActiveProcs } from "./rclone";
 import { tmpRootPath } from "./tmpdir";
 import { loadTmpDirSettings } from "./tmpsweep";
@@ -27,9 +28,6 @@ if (rcloneHealth.ok) {
   console.warn(`rclone not runnable: ${rcloneHealth.detail}`);
 }
 
-// When RcloneX extraction is enabled, probe its binary at boot too so a
-// missing/wrong-arch build surfaces here instead of as per-archive spawn
-// failures. RAR/7Z/ISO extraction fails without it.
 if ((await getSetting("rclonex", "0")) === "1") {
   const rclonexHealth = await checkRclonex();
   if (rclonexHealth.ok) {
@@ -51,15 +49,13 @@ if (recovered > 0) {
   );
 }
 
-// Best-effort cleanup of temp dirs left behind by previous runs (e.g. after
-// a crash). Only app-owned numeric directories inside the configured
-// tmp_dir are purged; anything else is left alone.
 const tmpBoot = await loadTmpDirSettings();
 if (tmpBoot.spec) {
   try {
     const rcBoot = await Rclone.fromSettings();
     const res = await rcBoot.purgeStaleTemp(
       tmpRootPath(tmpBoot.scanRoot, tmpBoot.spec),
+      await liveRunIds(),
     );
     if (res.purged.length) {
       console.log(`boot: purged ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`);
@@ -76,26 +72,17 @@ if (tmpBoot.spec) {
 
 const app = new Hono();
 
-// Render (and every PaaS) stops the instance with SIGTERM. Close the database
-// pool so the remote Postgres releases our connection slots immediately
-// instead of holding them until TCP keepalive times out.
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`received ${signal}; closing database connections`);
-  // Kill in-flight rclone/rclonex children first: orphaned extracts kept
-  // moving files after the parent exited (double-move on the next boot).
   killActiveProcs();
   try {
     await Logger.flushAll();
   } catch (e) {
     console.warn(`error flushing logs: ${String(e)}`);
   }
-  // Mark any in-flight run killed with the actual cause and time, instead
-  // of leaving it for the next boot to discover. Signal-driven
-  // (deploy/restart) is how most "unintentional" kills happen;
-  // a hard kill still falls back to the boot-time recovery below.
   try {
     const resume = (await getSetting("resume", "1")) === "1";
     const recovered = await recoverStale(
@@ -124,11 +111,6 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 
 app.get("/healthz", (c) => c.text("ok"));
 
-// HTML is live run state, never cacheable — the browser must not serve a
-// stale progress page on Back/Forward. /public/* assets carry a ?v=VERSION
-// buster from asset(), but browsers apply heuristic caching: force
-// revalidation so a replaced file is picked up immediately (304s keep it
-// cheap). The log download already marks itself no-store.
 app.use("*", async (c, next) => {
   await next();
   c.header(
@@ -166,8 +148,6 @@ console.log(`rclone-extractor listening on http://${BIND}:${PORT} (db=${store.ba
 export default {
   port: PORT,
   hostname: BIND,
-  // Expose the socket IP to handlers (login throttling) without trusting
-  // spoofable proxy headers unless TRUST_PROXY=1 is set.
   fetch: (req: Request, server?: { requestIP?: (r: Request) => { address: string } | null }) =>
     app.fetch(req, { ip: server?.requestIP?.(req)?.address }),
 };

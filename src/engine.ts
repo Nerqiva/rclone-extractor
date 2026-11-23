@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { liveRunIds, STALE_MS } from "./runs";
 import { Logger, insertLogLines } from "./log";
 import { store, getSetting, setSetting, allSettings } from "./db";
 import { Rclone, killActiveProcs, writeRunConfSnapshot, deleteRunConfSnapshot, type ExtractStats } from "./rclone";
@@ -501,11 +502,6 @@ async function settleTrashMovedArchives(ids: number[]): Promise<number> {
   return settled;
 }
 
-// A run row with no finish time is only treated as crashed (and reclaimed)
-// once its heartbeat is this old. Anything fresher belongs to a live peer
-// process and is left completely alone.
-const STALE_MS = 10 * 60 * 1000;
-
 // One delayed re-check at most: a crash seconds before a replica boots must
 // still be reclaimed once it goes quiet for STALE_MS, instead of sitting in
 // 'extracting' forever (boot/start recovery only runs at those moments).
@@ -798,7 +794,7 @@ export async function runEngine(): Promise<void> {
     // tmpSettings is non-null here: an invalid tmp_dir already aborted above.
     setActivity("Purging stale temp");
     try {
-      const res = await rc.purgeStaleTemp(tmpRoot);
+      const res = await rc.purgeStaleTemp(tmpRoot, await liveRunIds());
       if (res.purged.length) {
         const verb = "purged";
         logger.info(
