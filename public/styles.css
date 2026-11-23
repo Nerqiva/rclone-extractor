@@ -65,7 +65,6 @@ a:hover {
   outline-offset: 2px;
 }
 
-/* ---- rail ---- */
 .rail {
   width: 216px;
   flex: 0 0 216px;
@@ -241,7 +240,6 @@ body.rail-open .rail-toggle span:nth-child(3) {
 
 
 
-/* ---- content ---- */
 .content {
   flex: 1;
   width: 100%;
@@ -271,7 +269,6 @@ body.rail-open .rail-toggle span:nth-child(3) {
   color: var(--muted);
 }
 
-/* ---- cards ---- */
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -286,7 +283,6 @@ body.rail-open .rail-toggle span:nth-child(3) {
   border-radius: 8px;
 }
 
-/* ---- forms ---- */
 .field {
   display: flex;
   flex-direction: column;
@@ -337,7 +333,6 @@ textarea {
   width: 9em;
 }
 
-/* ---- buttons ---- */
 .btn {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -445,7 +440,6 @@ textarea {
   border-color: rgba(248, 113, 113, 0.45);
 }
 
-/* ---- pills ---- */
 .pill {
   display: inline-block;
   border-radius: 999px;
@@ -468,7 +462,6 @@ textarea {
   border-color: rgba(250, 204, 21, 0.4);
 }
 
-/* ---- progress panel ---- */
 .progress-panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -795,7 +788,6 @@ textarea {
   margin: 8px 0 0;
 }
 
-/* ---- logs ---- */
 .log-toolbar {
   display: flex;
   justify-content: space-between;
@@ -869,7 +861,6 @@ textarea {
   border-color: var(--border);
   background: var(--panel);
 }
-/* ---- log viewer ---- */
 .log-viewer {
   background: #161c29;
   border: 1px solid var(--border);
@@ -965,7 +956,6 @@ textarea {
   color: var(--muted);
 }
 
-/* Session summary strip */
 .session-summary {
   display: flex;
   align-items: center;
@@ -983,14 +973,12 @@ textarea {
   font-size: 11px;
 }
 
-/* Log actions toolbar */
 .log-actions-right {
   display: flex;
   gap: 8px;
   margin-left: auto;
 }
 
-/* ---- error cards ---- */
 .error-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
@@ -1023,6 +1011,18 @@ textarea {
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+.error-message {
+  margin: 2px 0;
+  padding: 8px;
+  max-height: 140px;
+  overflow: auto;
+  background: var(--panel-alt, rgba(0, 0, 0, 0.2));
+  border-radius: 4px;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .error-card-foot {
   display: flex;
   align-items: center;
@@ -1044,7 +1044,6 @@ textarea {
   color: var(--err);
 }
 
-/* ---- edit-in-place settings ---- */
 .setting {
   border-top: 1px solid var(--border);
   padding: 10px 0;
@@ -1137,7 +1136,6 @@ textarea {
   min-width: 72px;
 }
 
-/* ---- superscript info indicator + tooltip ---- */
 .info-tip {
   position: relative;
   display: inline-flex;
@@ -1271,7 +1269,6 @@ textarea {
   }
 }
 
-/* ---- toasts ---- */
 .toast-region {
   position: fixed;
   right: 16px;
@@ -1424,7 +1421,6 @@ textarea {
 }
 
 
-/* ---- modals ---- */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1459,7 +1455,6 @@ textarea {
   flex-wrap: wrap;
 }
 
-/* ---- indeterminate minibar (rclone commands with no byte progress) ---- */
 .minibar.is-indeterminate span {
   width: 34%;
   background: linear-gradient(
@@ -1481,7 +1476,6 @@ textarea {
   }
 }
 
-/* ---- disabled / greyed-out state ---- */
 .is-disabled {
   opacity: 0.45;
 }
@@ -1496,7 +1490,6 @@ button[disabled] {
   min-width: 0;
 }
 
-/* ---- controls dock (bottom of the progress page) ---- */
 .controls-dock {
   display: flex;
   justify-content: flex-end;
@@ -1517,13 +1510,11 @@ button[disabled] {
   font-size: 13px;
 }
 
-/* ---- password-protected archives (errors page) ---- */
 .pw-log {
   margin: 0 14px 14px;
   max-height: 320px;
 }
 
-/* Info buttons as layout-neutral label siblings (config checkbox rows). */
 .check-inline {
   display: contents;
 }

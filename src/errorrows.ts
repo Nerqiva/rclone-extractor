@@ -5,7 +5,10 @@ export interface ErrorRow {
   path: string;
   error_kind: string;
   updated_at: string;
+  message: string;
 }
+
+const APP_LINE = /^(?:\$|skipped \(|killed:|recovered:|archive error:|listing failed|command failed with exit|post-extraction listing failed)/;
 
 const KIND_CLASS: Record<string, string> = {
   password: "warn",
@@ -48,6 +51,7 @@ export function renderErrorCards(rows: ErrorRow[]): string {
           <span class="pill ${cls}">${esc(r.error_kind)}</span>
         </div>
         <div class="error-path muted">${esc(r.path)}</div>
+        ${r.message ? `<pre class="error-message">${esc(r.message)}</pre>` : ""}
         <div class="error-card-foot">
           <span class="muted" title="${esc(r.updated_at)}">${esc(relativeTime(r.updated_at))}</span>
           <span class="error-actions">
@@ -65,9 +69,25 @@ export function renderErrorCards(rows: ErrorRow[]): string {
 export async function readErrorRows(
   store: { query: <T>(sql: string, params?: unknown[]) => Promise<T[]> },
 ): Promise<ErrorRow[]> {
-  // Password-protected archives have their own tab on the Logs page; keep the
-  // Errors page for real failures only.
-  return store.query<ErrorRow>(
+  const rows = await store.query<Omit<ErrorRow, "message">>(
     "SELECT id, path, error_kind, updated_at FROM archives WHERE error_kind IS NOT NULL AND error_kind <> 'password' ORDER BY updated_at DESC LIMIT 500",
   );
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => Number(r.id));
+  const placeholders = ids.map(() => "?").join(", ");
+  const lines = await store.query<{ ref_id: number; line: string }>(
+    `SELECT ref_id, line FROM log_lines WHERE scope='archive' AND kind='extract' AND ref_id IN (${placeholders}) ORDER BY id DESC LIMIT ?`,
+    [...ids, ids.length * 20],
+  );
+  const byId = new Map<number, string[]>();
+  for (const entry of lines) {
+    if (APP_LINE.test(entry.line)) continue;
+    const kept = byId.get(Number(entry.ref_id)) ?? [];
+    if (kept.length < 8) kept.push(entry.line);
+    byId.set(Number(entry.ref_id), kept);
+  }
+  return rows.map((r) => ({
+    ...r,
+    message: (byId.get(Number(r.id)) ?? []).reverse().join("\n"),
+  }));
 }
