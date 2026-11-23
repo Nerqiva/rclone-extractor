@@ -298,8 +298,8 @@ async function cancelRequestedCached(): Promise<boolean> {
  * A crash between trash() succeeding and the done-UPDATE leaves the row in
  * 'extracting' although the files are already in the trash; re-queueing
  * would fail it forever. When the trash copy exists, finalize as done.
- * Only call in a context where rclone calls are acceptable — never from the
- * signal handler.
+ * Rclone failures are tolerated: an unreachable remote falls back to a plain
+ * re-queue.
  */
 /**
  * Archives whose trash copy exists were fully processed — the crash happened

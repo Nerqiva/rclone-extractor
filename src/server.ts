@@ -42,7 +42,7 @@ if ((await getSetting("rclonex", "0")) === "1") {
 }
 
 const resume = (await getSetting("resume", "1")) === "1";
-const recovered = await recoverStale(resume);
+const recovered = await recoverStale(resume, undefined, undefined, true);
 if (recovered > 0) {
   console.log(
     resume
@@ -101,6 +101,8 @@ async function shutdown(signal: string): Promise<void> {
     const recovered = await recoverStale(
       resume,
       `received ${signal} (deploy or restart)`,
+      undefined,
+      true,
     );
     if (recovered > 0) {
       console.log(
