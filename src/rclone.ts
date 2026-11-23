@@ -713,8 +713,9 @@ export class Rclone {
    * List the contents of an archive with `rclone archive list --files-only`.
    * Read-only, so no extra flags are added. The whole purpose is to inspect
    * an archive before any extraction happens. Entries are streamed to
-   * `onEntry` (O(1) memory); the caller aggregates counts. On failure the
-   * raw stderr is appended to the archive log. Never throws for listing
+   * `onEntry` (O(1) memory); the caller aggregates counts. On failure both
+   * streams are appended verbatim to the archive log: rclone/rclonex can write
+   * the native error to stdout as well as stderr. Never throws for listing
    * failures; spawn failures propagate.
    */
   async archiveList(
@@ -743,11 +744,20 @@ export class Rclone {
     const decoder = new TextDecoder();
     let buffer = "";
     let streamError: string | undefined;
+    const stdoutLines: string[] = [];
 
     const consume = (line: string): void => {
-      const parsed = parseArchiveListLine(line.replace(/\r$/, ""));
-      if (!parsed) return;
-      onEntry(parsed);
+      const clean = line.replace(/\r$/, "");
+      const parsed = parseArchiveListLine(clean);
+      if (parsed) {
+        onEntry(parsed);
+        return;
+      }
+      // A failed listing can print its native error between (or instead of)
+      // entries. Keep only non-entry lines, bounded, so a large archive does
+      // not turn this streaming reader into an O(entries) buffer.
+      stdoutLines.push(clean);
+      if (stdoutLines.length > 300) stdoutLines.shift();
     };
 
     try {
@@ -772,16 +782,25 @@ export class Rclone {
     const stderr = await stderrPromise;
     const code = await proc.exited;
 
-    // Raw binary output only — except that a failure with no output at all
-    // still gets one diagnostic line so the error row's Copy/Download never
-    // comes up empty (404).
-    if (streamError || code !== 0) {
-      let raw = [stderr.trim(), streamError ?? ""].filter(Boolean).join("\n");
-      if (!raw) raw = `listing failed (exit ${code})`;
-      await insertLogLines(ref, raw.split("\n"));
+    const nativeStderr = stderr.trim();
+    const nativeOutput = [...stdoutLines, nativeStderr].filter(Boolean).join("\n");
+    const failed = Boolean(streamError) || code !== 0;
+    if (failed) {
+      // Raw binary output only — except a completely silent failure, where a
+      // neutral one-liner keeps Copy/Download from being an empty 404.
+      const raw = [nativeOutput, streamError ?? ""].filter(Boolean).join("\n");
+      await insertLogLines(ref, (raw || `listing failed (exit ${code})`).split("\n"));
     }
 
-    return { code, tail: [], stderr, command, streamError };
+    // The caller uses stderr to classify password failures; binary errors may
+    // arrive on either stream, so expose both when the listing failed.
+    return {
+      code,
+      tail: [],
+      stderr: failed ? nativeOutput : nativeStderr,
+      command,
+      streamError,
+    };
   }
 
   /**

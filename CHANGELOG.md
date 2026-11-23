@@ -37,6 +37,15 @@ to `main`.
   family keep their queue order: the first is pre-inspected and later related
   archives depend on its verdict, while different groups run in parallel.
 
+### Fixed
+- **Per-archive logs keep native binary errors.** `rclone archive list` can
+  print its error on stdout as well as stderr. Only stderr was being saved to
+  the archive log, so a failed inspection showed the app's `skipped (...)`
+  line instead of the binary's real error, and password errors on stdout were
+  misclassified as `unreadable`. Both streams are now stored verbatim and used
+  for classification, and the synthetic `skipped (...)` lines are no longer
+  written to per-archive logs. `tests/native-log.test.ts` covers this.
+
 ### Removed
 - **The single `remote_flags` setting is gone.** Extra flags now have one
   field per rclone/rclonex subcommand. Existing values are migrated into the

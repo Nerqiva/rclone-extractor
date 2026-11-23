@@ -1369,12 +1369,8 @@ export async function runEngine(): Promise<void> {
             [skipReason, now(), row.id],
           );
           await markRunTouch(Number(row.id), runRowId);
-          // Webapp-made diagnosis (no binary output is produced for skip
-          // classifications); store it so Copy/Download on the error row is
-          // not an empty 404.
-          await insertLogLines(ref, [`skipped (${skipReason}): ${detail}`]).catch(
-            () => {},
-          );
+          // The classification is a run-level diagnostic: per-archive logs
+          // hold only what the binary actually printed.
           warn(`skipped (${skipReason}): ${rel} [${detail}]`);
           result = "skipped";
         } else {
@@ -1398,9 +1394,6 @@ export async function runEngine(): Promise<void> {
               [now(), row.id],
             );
             await markRunTouch(Number(row.id), runRowId);
-            await insertLogLines(ref, [
-              `skipped (password): extraction failed (exit ${ex.code})`,
-            ]).catch(() => {});
             warn(`skipped (password): ${rel} [$ ${ex.command}]`);
             result = "skipped";
           } else {
@@ -1464,9 +1457,6 @@ export async function runEngine(): Promise<void> {
               [postSkip, now(), row.id],
             );
             await markRunTouch(Number(row.id), runRowId);
-            await insertLogLines(ref, [
-              `skipped (${postSkip}): extracted tree [${describeArchiveStats(exStats)}]`,
-            ]).catch(() => {});
             warn(`skipped (${postSkip}): ${rel} [extracted tree]`);
             result = "skipped";
           } else {
