@@ -14,9 +14,7 @@ interface Snapshot {
   running: boolean;
   runId: number;
   stage: string;
-  /** Archive in flight (live) or the last one processed (not running). */
   lastArchive: string;
-  /** Command in flight (live) or the last one dispatched (not running). */
   lastCommand: string;
   total: number;
   done: number;
@@ -28,11 +26,8 @@ interface Snapshot {
   scanRoot: string;
   commandStats: ExtractStats | null;
   activity: string;
-  /** Why the run was closed abnormally ("" for normal runs). */
   interruptReason: string;
-  /** '' while running/legacy, else finished|interrupted|killed|error. */
   outcome: string;
-  /** App-error code; set for outcome === "error" and for interrupted/killed. */
   errorKind: string;
 }
 
@@ -74,15 +69,11 @@ function etaLabel(processed: number, total: number, elapsedMs: number): string {
 }
 
 async function snapshot(): Promise<Snapshot> {
-  // While a run is active, show the root that run is actually scanning —
-  // the stored setting may have been edited mid-run (it applies next run).
-  const live = (await getSetting("scan_root", "")) ?? "";
-  const scanRoot =
+  const liveRoot =
     engineState.running && engineState.currentScanRoot
       ? engineState.currentScanRoot
-      : live;
-  // Prefer in-memory state while a run exists. Also surface startup errors that
-  // happen before a run row can be created (for example a missing scan_root).
+      : null;
+  const scanRoot = liveRoot ?? ((await getSetting("scan_root", "")) ?? "");
   if (engineState.runId > 0 || engineState.stage === "error") {
     return {
       running: engineState.running,
@@ -231,13 +222,9 @@ export async function progressPanel(): Promise<string> {
     Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : 0;
   const elapsed = formatDuration(elapsedMs);
   const cls = stateClass(s.stage, s.running);
-  // While a command is in flight the badge names the command, not the
-  // coarse stage ("Extracting" / "Moving to trash" / ...).
   const label = s.activity || stageLabel(s.stage);
   const archive = s.lastArchive || "—";
   const command = s.lastCommand || "—";
-  // While a run is live the slots track it; otherwise they show what the
-  // last (interrupted) run was doing when it stopped.
   const archiveLabel = s.running ? "Current archive" : "Last archive";
   const commandLabel = s.running ? "Active command" : "Last command";
   const mutedNote =
@@ -254,8 +241,6 @@ export async function progressPanel(): Promise<string> {
   const timeSuffix = s.finishedAt
     ? ` · ${esc(fmtDisplayTime(s.finishedAt, true))}`
     : "";
-  // A code that merely repeats the outcome ("killed (killed)") adds nothing;
-  // only interrupted/error codes carry extra meaning.
   const code = s.errorKind && s.errorKind !== s.outcome ? ` (${esc(s.errorKind)})` : "";
   const outcomeNote =
     s.outcome === "interrupted"
@@ -265,9 +250,6 @@ export async function progressPanel(): Promise<string> {
         : s.outcome === "error"
           ? `<p class="warn-line">Error — ${esc(s.errorKind || "engine_error")}${reason ? `: ${esc(reason)}` : ""}${timeSuffix}. See the Logs page (Errors tab) for details.</p>`
           : "";
-  // One thin bar slot shared by every in-flight rclone command; transfer
-  // commands (extract/move/moveto) show their live byte progress, everything
-  // else shows an indeterminate sweep.
   const commandBlock = s.activity
     ? (() => {
         const st = s.commandStats;
@@ -367,8 +349,6 @@ export async function progressPanel(): Promise<string> {
 }
 
 dashboard.get("/dashboard/fragment", async (c) => {
-  // Boot-time rclone.conf fallbacks set a notice that only HTTP responses
-  // can toast; surface it here (polled every second on the Progress page).
   const confNotice = pendingRcloneConfNotice();
   return c.html(
     await progressPanel(),
