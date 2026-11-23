@@ -7,6 +7,7 @@ let db:
   | typeof import("../src/db")
   | null = null;
 let runEngine: typeof import("../src/engine").runEngine;
+let configFingerprint: typeof import("../src/engine").configFingerprint;
 let setSetting: typeof import("../src/db").setSetting;
 let lsfMarker: string;
 
@@ -62,25 +63,19 @@ exit 0
   await setSetting("min_archive_size", "0");
   await setSetting("max_archive_size", "0");
 
-  // Cached results from a "previous completed scan of this root". The
-  // fingerprint covers scan_root, size limits, queue size, trash,
-  // auto_skip_known and the rclonex flag — the same shape the engine computes.
   await db!.store.run(
     "INSERT INTO archives(path, size, status, created_at, updated_at) VALUES('cached.zip', 100000, 'queued', 't', 't')",
   );
-  await setSetting(
-    "scan_cache_key",
-    [scanRoot, "0", "0", "500", ".Trash", "1", "0"].join("|"),
-  );
-  await setSetting("scan_cache_state", "complete");
-
   const eng = await import("../src/engine");
   runEngine = eng.runEngine;
+  configFingerprint = eng.configFingerprint;
+  await setSetting("scan_cache_key", configFingerprint(await db!.allSettings()));
+  await setSetting("scan_cache_state", "complete");
 });
 
 test("a valid cache skips the remote listing entirely", async () => {
   resetMarker();
-  await runEngine({ reuseScan: true });
+  await runEngine();
   expect(marker()).toBe(false);
   const row = await db!.store.get1<{ status: string }>(
     "SELECT status FROM archives WHERE path='cached.zip'",
@@ -97,7 +92,7 @@ test("a valid cache skips the remote listing entirely", async () => {
 test("an incomplete cache falls back to a fresh scan", async () => {
   resetMarker();
   await setSetting("scan_cache_state", "incomplete");
-  await runEngine({ reuseScan: true });
+  await runEngine();
   expect(marker()).toBe(true);
   const row = await db!.store.get1<{ status: string }>(
     "SELECT status FROM archives WHERE path='rescan.zip'",
@@ -111,14 +106,15 @@ test("a cache fingerprinted for different settings falls back to a fresh scan", 
   resetMarker();
   await setSetting("scan_cache_state", "complete");
   await setSetting("scan_cache_key", "s3:elsewhere|0|0|500|0|trash|1");
-  await runEngine({ reuseScan: true });
+  await runEngine();
   expect(marker()).toBe(true);
 });
 
-test("reuse without the option does nothing", async () => {
+test("changing a configuration setting forces a fresh scan", async () => {
   resetMarker();
   await setSetting("scan_cache_state", "complete");
-  await setSetting("scan_cache_key", "anything|0|0|500|0|trash|1");
+  await setSetting("scan_cache_key", configFingerprint(await db!.allSettings()));
+  await setSetting("queue_max", "123");
   await runEngine();
   expect(marker()).toBe(true);
 });

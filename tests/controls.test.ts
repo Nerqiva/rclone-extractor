@@ -48,11 +48,11 @@ test("force stop shows a disabled stopping state that polls itself", () => {
   expect(html).toContain("every 1s");
 });
 
-test("idle shows the reuse checkbox unchecked and a Start button", () => {
+test("idle shows only a Start button", () => {
   const html = controlsFragment();
-  expect(html).toContain('name="reuse_scan" value="1"');
-  expect(html).toContain("Reuse previous scan results");
-  expect(html).not.toContain('name="reuse_scan" value="1" checked');
+  expect(html).not.toContain('name="reuse_scan"');
+  expect(html).not.toContain("Reuse previous scan results");
+  expect(html).toContain("Start");
   expect(html).not.toContain("Skip listing");
 });
 

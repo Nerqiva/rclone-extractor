@@ -1,4 +1,4 @@
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect, beforeAll, beforeEach } from "bun:test";
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,6 +83,11 @@ exit 0
   readAll = (await import("../src/log")).readAll;
 
   await runEngine();
+});
+
+beforeEach(async () => {
+  await setSetting("scan_cache_key", "");
+  await setSetting("scan_cache_state", "incomplete");
 });
 
 test("engine processes archives", async () => {

@@ -276,6 +276,8 @@ test("group state is per run and does not leak across runs", async () => {
   // grouping rule must be recomputed, so the first archive of the series is
   // pre-inspected again instead of "already handled" being remembered.
   resetLogs();
+  await setSetting("scan_cache_state", "incomplete");
+  await setSetting("scan_cache_key", "");
   await runEngine();
   expect(countOccurrences(readLog(), "archive list")).toBe(1);
 }, 15_000);

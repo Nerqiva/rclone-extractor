@@ -1,8 +1,3 @@
-/**
- * UI fragment builders shared across the route modules: the run-control
- * dock (Progress page) and the Configuration form. Kept out of the route
- * modules so routes never import each other for markup.
- */
 import { engineState } from "./engine";
 import { store, allSettings } from "./db";
 import { esc, info } from "./ui";
@@ -14,15 +9,10 @@ import { TRASH } from "./archive";
 import { EXTRA_FLAG_FIELDS } from "./extraflags";
 
 export function controlsFragment(): string {
-  // Idle state: Start form. Reuse-scan and Start are visually grouped.
   const running = engineState.running;
   if (!running) {
     return `<div id="controls" class="controls-idle">
     <form class="controls-start" hx-post="/run/start" hx-target="#controls" hx-swap="outerHTML">
-      <div class="check"><label class="check-inline"><input type="checkbox" name="reuse_scan" value="1"> Reuse previous scan results</label>${info(
-        "Reuse the cached scan; fresh scan if stale. Not remembered.",
-        "reuse_scan",
-      )}</div>
       <div class="btn-row">
         <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Start</button>
       </div>
@@ -35,7 +25,6 @@ export function controlsFragment(): string {
     <button class="btn danger solid is-loading btn-stop" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
   </div>`;
   }
-  // The Stop button opens the shared stop modal (Soft stop / Hard stop).
   const stage = engineState.stage;
   const activity = engineState.activity;
   const skips: string[] = [];
@@ -103,7 +92,6 @@ function settingRow(
   </div>`;
 }
 
-/** Checkbox row styled like the other settings (no Edit toggle; saved with the form). */
 function toggleRow(
   name: string,
   label: string,
@@ -117,13 +105,11 @@ function section(title: string, body: string): string {
   return `<section class="card config-section"><h2 class="section-title" style="margin-top:0">${esc(title)}</h2>${body}</section>`;
 }
 
-/** Format a stored size limit in bytes for the collapsed row label. */
 function formatSizeLimit(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "no limit";
   return formatBytes(bytes);
 }
 
-/** Split a stored size limit (bytes) into an editable value + unit. */
 function splitSizeLimit(bytes: number): { value: string; unit: "MB" | "GB" } {
   if (bytes >= 1024 ** 3 && bytes % 1024 ** 3 === 0) {
     return { value: String(bytes / 1024 ** 3), unit: "GB" };
