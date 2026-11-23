@@ -152,3 +152,41 @@ test("an untagged archive with no live peer is reclaimed", async () => {
   expect(n).toBe(1);
   expect((await store.get1<{ status: string }>("SELECT status FROM archives WHERE path='untagged.zip'"))?.status).toBe("queued");
 });
+
+test("boot recovery settles an archive already in trash before requeueing it", async () => {
+  writeFileSync(`${markDir}/stuck`, "");
+  const runId = await insertRun(oldIso(), oldIso());
+  await insertExtracting("stuck.zip", runId);
+  const child = Bun.spawn(["bun", "src/server.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, PORT: String(21000 + (process.pid % 20000)) },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  void new Response(child.stdout).text();
+  void new Response(child.stderr).text();
+  try {
+    let status = "";
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      try {
+        status =
+          (await store.get1<{ status: string }>(
+            "SELECT status FROM archives WHERE path='stuck.zip'",
+          ))?.status ?? "";
+      } catch {
+        // SQLite lock while the child writes; retry.
+      }
+      if (status === "done") break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(status).toBe("done");
+    const run = await store.get1<{ outcome: string }>(
+      "SELECT outcome FROM runs WHERE id = ?",
+      [runId],
+    );
+    expect(run?.outcome).toBe("killed");
+  } finally {
+    child.kill(9);
+  }
+});
