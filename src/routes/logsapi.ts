@@ -7,7 +7,7 @@ import { readArchiveLogRows, renderArchiveLogRows } from "../archiverows";
 import { Rclone } from "../rclone";
 import { isSafeRel, parseTrashSubdir, normalizeRel, TRASH } from "../archive";
 import {
-  registerDownload,
+  tryRegisterDownload,
   activeDownloadCount,
 } from "../downloads";
 
@@ -99,7 +99,6 @@ logsapi.get("/download/run/:id", async (c) => {
   });
 });
 
-/** Clamp an optional `limit` query param to [1, LOG_EXPORT_LIMIT]. */
 function limitParam(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -165,7 +164,6 @@ logsapi.get("/logs/archive/:id/fragment", async (c) => {
   return c.html(`${tail}${entries.map((e) => e.html).join("")}`);
 });
 
-/** Cards for the Archives tab (Logs page) of one run. */
 logsapi.get("/logs/archives-fragment", async (c) => {
   noStore(c);
   const runId = Number(c.req.query("run"));
@@ -219,7 +217,6 @@ function parseRange(
   return { start, end: Math.min(end, size - 1) };
 }
 
-/** How many archive-file downloads are streaming right now (concurrency 1). */
 logsapi.get("/download/archive-file/active", (c) => {
   noStore(c);
   return c.json({ active: activeDownloadCount() });
@@ -301,7 +298,10 @@ logsapi.get("/download/archive-file/:id", async (c) => {
   const offset = window ? window.start : 0;
   const count = window ? window.end - window.start + 1 : 0;
 
-  const unregister = registerDownload(id);
+  const unregister = tryRegisterDownload(id);
+  if (!unregister) {
+    return c.text("Another archive download is already in flight", 409);
+  }
   let killedByClient = false;
   // Bun keeps an explicit Content-Length only for plain (in-memory) bodies —
   // a pipe-backed stream through Hono is re-framed as chunked. Buffer
@@ -354,9 +354,6 @@ logsapi.get("/download/archive-file/:id", async (c) => {
     }
     const sizeWanted = window ? count : (total ?? 0);
     if (total !== null && sizeWanted <= MAX_BUFFERED) {
-      // Only the buffered path ships a truthful Content-Length; a streamed
-      // body may not match the stat (the remote can change size mid-flight),
-      // so advertise chunked instead.
       headers["Content-Length"] = String(sizeWanted);
       const bytes = await buffer(stdout);
       return new Response(new Uint8Array(bytes), { status: window ? 206 : 200, headers });

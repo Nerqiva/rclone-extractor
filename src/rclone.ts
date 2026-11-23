@@ -90,16 +90,19 @@ function spawnBinary(
     stdin?: "pipe" | "inherit" | "ignore";
     env?: Record<string, string | undefined>;
     cwd?: string;
+    track?: "download";
   },
 ) {
   try {
+    const { track, ...spawnOptions } = options;
     const proc = Bun.spawn([bin, ...args], {
-      ...options,
+      ...spawnOptions,
       env: { ...minimalEnv(), ...(options.env ?? {}) },
     });
-    activeProcs.add(proc);
+    const tracked = track === "download" ? downloadProcs : activeProcs;
+    tracked.add(proc);
     void proc.exited.finally(() => {
-      activeProcs.delete(proc);
+      tracked.delete(proc);
     });
     return proc;
   } catch (e) {
@@ -204,9 +207,8 @@ function quoteArg(arg: string): string {
 
 const SENSITIVE_FLAG = /(pass|secret|token|credential|api[-_]?key|access[-_]?key)/i;
 
-// Every rclone process spawned by this module, tracked so a hard stop can
-// kill whatever is currently running (extract/listing/archive list).
 const activeProcs = new Set<Bun.Subprocess>();
+const downloadProcs = new Set<Bun.Subprocess>();
 
 /** SIGKILL every rclone process this module currently has in flight. */
 export function killActiveProcs(): void {
@@ -986,11 +988,19 @@ export class Rclone {
    * temp root. Anything else (other runs' dirs, user data) is left
    * untouched. Returns what was purged.
    */
-  async purgeStaleTemp(tmpRoot: string): Promise<SweepResult> {
+  async purgeStaleTemp(
+    tmpRoot: string,
+    keepRunIds: Set<number> = new Set(),
+  ): Promise<SweepResult> {
     const tops = await this.listTopDirs(tmpRoot);
     const result: SweepResult = { purged: [], skipped: [], failed: [] };
     for (const name of tops) {
-      if (!TMP_RUN_DIR_RE.test(name)) {
+      const match = TMP_RUN_DIR_RE.exec(name);
+      if (!match) {
+        result.skipped.push(name);
+        continue;
+      }
+      if (keepRunIds.has(Number(match[1]))) {
         result.skipped.push(name);
         continue;
       }
@@ -1096,6 +1106,7 @@ export class Rclone {
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       stderr: "pipe",
+      track: "download",
     });
     return {
       stdout: proc.stdout as unknown as ReadableStream,

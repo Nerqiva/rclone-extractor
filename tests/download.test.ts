@@ -30,6 +30,7 @@ case "$1" in
     ;;
   cat)
     shift
+    if [ -f "${mockDir}/slow" ]; then sleep 1; fi
     offset=0; count=9999999
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -73,6 +74,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   rmSync(join(mockDir, "stat_fail"), { force: true });
+  rmSync(join(mockDir, "slow"), { force: true });
   engineState.running = false;
 });
 
@@ -184,6 +186,24 @@ test("active-download endpoint reports the in-flight count", async () => {
   const body = await res.json();
   expect(typeof body.active).toBe("number");
   expect(body.active).toBeGreaterThanOrEqual(0);
+});
+
+test("a second concurrent archive download is refused", async () => {
+  writeFileSync(join(mockDir, "slow"), "");
+  const id = await insertArchive("concurrent.bin");
+  const first = pages.request(`/download/archive-file/${id}`);
+  let active = 0;
+  for (let i = 0; i < 50; i++) {
+    const status = await (await pages.request("/download/archive-file/active")).json();
+    active = status.active;
+    if (active > 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  expect(active).toBe(1);
+  const second = await pages.request(`/download/archive-file/${id}`);
+  expect(second.status).toBe(409);
+  expect(await second.text()).toContain("already in flight");
+  await first;
 });
 
 test("delete is refused while that archive streams a download", async () => {
