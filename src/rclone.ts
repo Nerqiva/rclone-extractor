@@ -18,6 +18,7 @@ import {
   DATA_DIR,
 } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
+import { EXTRA_FLAG_FIELDS, extraFlagKey, parseExtraFlags } from "./extraflags";
 import { insertLogLines } from "./log";
 import type { Logger } from "./log";
 
@@ -345,44 +346,6 @@ async function probe(
   }
 }
 
-function stripConfFlags(flags: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < flags.length; i++) {
-    const f = flags[i];
-    if (f === "--config") {
-      i++; // drop the value too
-      continue;
-    }
-    if (f.startsWith("--config=")) continue;
-    out.push(f);
-  }
-  return out;
-}
-
-/**
- * rclonex-only flags never belong on the plain rclone binary: any
- * `--archive-*` flag makes every rclone command fail with "unknown flag".
- * Drop the flag (and its value when it is not the next flag) from
- * remote_flags for the rclone runner; the rclonex runner keeps them.
- */
-function stripRclonexFlags(flags: string[]): { flags: string[]; dropped: string[] } {
-  const out: string[] = [];
-  const dropped: string[] = [];
-  for (let i = 0; i < flags.length; i++) {
-    const f = flags[i];
-    if (/^--archive-/i.test(f)) {
-      dropped.push(f);
-      if (!f.includes("=") && i + 1 < flags.length && !flags[i + 1].startsWith("-")) {
-        dropped.push(flags[i + 1]); // drop the flag's value too
-        i++;
-      }
-      continue;
-    }
-    out.push(f);
-  }
-  return { flags: out, dropped };
-}
-
 // The --config path is chosen lazily: the primary working copy lives under
 // DATA_DIR (/app/data by default); when that path is not writable for any
 // reason (read-only mount, EACCES, EROFS, full disk, ...) the working copy
@@ -525,12 +488,14 @@ export class Rclone {
   constructor(
     public bin: string,
     public root: string,
-    public flags: string[],
+    /** Extra flag arguments by settings key, shared by every command reader. */
+    private extra: Record<string, string[]>,
     private runLog?: Logger,
     /** True when RcloneX is enabled and its formats are eligible for queueing. */
     public rclonexEnabled: boolean = false,
     /** --config target; defaults to the shared working copy, pass a per-run snapshot to isolate a run. */
     private confPath: string = effectiveConfPath,
+    public binaryKind: "rclone" | "rclonex" = "rclone",
   ) {}
 
   // The --config flag is hard-coded so rclone never falls back to
@@ -539,7 +504,7 @@ export class Rclone {
   // keeps the working copy at the primary path (or the /tmp fallback when
   // the primary path is not writable); otherwise the file at the primary
   // path (e.g. a mounted rclone.conf) is used as-is. A --config in
-  // remote_flags is stripped, not honored. Per-run private snapshots point
+  // an extra-flags field is stripped, not honored. Per-run private snapshots point
   // at a file created for that run alone.
   private confArgs(): string[] {
     return ["--config", this.confPath];
@@ -547,8 +512,8 @@ export class Rclone {
 
   /**
    * Build an Rclone runner. By default it targets the rclone binary;
-   * `opts.rclonex` targets the rclonex binary (Nerqiva/rclonex) with the same
-   * flags and --config. The listing filter always reflects the rclonex
+   * `opts.rclonex` targets the rclonex binary (Nerqiva/rclonex) with its own
+   * extra-flags field and --config. The listing filter always reflects the rclonex
    * setting, so archives queued in a mixed run carry format info correctly.
    *
    * When `opts.confPath` is set (per-run private snapshot), the instance
@@ -566,20 +531,11 @@ export class Rclone {
     if (!root.trim()) {
       throw new Error("scan_root is not configured");
     }
-    const flagsRaw = (await getSetting("remote_flags", "")) ?? "";
-    const flagsRawList = stripConfFlags(
-      flagsRaw.split(/\s+/).filter((f) => f.length > 0),
-    );
-    const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
-    const stripped = opts.rclonex
-      ? { flags: flagsRawList, dropped: [] as string[] }
-      : stripRclonexFlags(flagsRawList);
-    const flags = stripped.flags;
-    if (stripped.dropped.length) {
-      const warning = `remote_flags contained rclonex-only flags; ignored for rclone: ${stripped.dropped.join(" ")}`;
-      console.warn(warning);
-      runLog?.warn(warning);
+    const extra: Record<string, string[]> = {};
+    for (const field of EXTRA_FLAG_FIELDS) {
+      extra[field.key] = parseExtraFlags((await getSetting(field.key, "")) ?? "");
     }
+    const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
 
     const conf = await resolveConfText();
     if (conf && !opts.confPath) {
@@ -595,11 +551,18 @@ export class Rclone {
     return new Rclone(
       opts.rclonex ? RCLONEX_BIN : RCLONE_BIN,
       root,
-      flags,
+      extra,
       runLog,
       rclonexEnabled,
       opts.confPath,
+      opts.rclonex ? "rclonex" : "rclone",
     );
+  }
+
+  /** Arguments for this runner's own command group, never another command's. */
+  private extraArgs(command: string): string[] {
+    const key = extraFlagKey(this.binaryKind, command);
+    return key ? this.extra[key] ?? [] : [];
   }
 
   private announce(args: string[]): string {
@@ -643,6 +606,7 @@ export class Rclone {
     const args = [
       ...this.confArgs(),
       "lsf",
+      ...this.extraArgs("lsf"),
       this.fullPath(path),
       "--recursive",
       "--files-only",
@@ -736,6 +700,7 @@ export class Rclone {
       ...this.confArgs(),
       "archive",
       "list",
+      ...this.extraArgs("archive list"),
       `${this.root}/${rel}`,
       "--files-only",
     ];
@@ -796,8 +761,8 @@ export class Rclone {
    * appended to that archive's log; without a ref the command still goes to
    * the run log via `announce()`. Archive logs never carry app wording.
    */
-  async run(args: string[], ref?: RcloneRef): Promise<Outcome> {
-    const full = [...this.confArgs(), ...args];
+  async run(args: string[], ref?: RcloneRef, extra: string[] = []): Promise<Outcome> {
+    const full = [...this.confArgs(), ...args, ...extra];
     const command = this.announce(full);
 
     const proc = spawnBinary(this.bin, full, {
@@ -834,11 +799,9 @@ export class Rclone {
     args: string[],
     ref: RcloneRef,
     onStats?: (stats: ExtractStats) => void,
-    includeRemoteFlags = true,
+    extra: string[] = [],
   ): Promise<Outcome> {
-    const full = includeRemoteFlags
-      ? [...this.confArgs(), ...args, ...this.flags]
-      : [...this.confArgs(), ...args];
+    const full = [...this.confArgs(), ...args, ...extra];
     const command = this.announce(full);
 
     // No `$ command` pre-line: archive logs hold raw binary output only.
@@ -939,7 +902,10 @@ export class Rclone {
       "--log-level",
       "INFO",
     ];
-    return this.streamTransfer(args, ref, onStats);
+    return this.streamTransfer(args, ref, onStats, [
+      ...this.extraArgs("archive extract"),
+      ...extraFlags,
+    ]);
   }
 
   async promote(
@@ -970,21 +936,21 @@ export class Rclone {
       "INFO",
     ];
     if (tmpTopSegment) args.push("--exclude", `/${tmpTopSegment}/**`);
-    return this.streamTransfer(args, ref, onStats);
+    return this.streamTransfer(args, ref, onStats, this.extraArgs("move"));
   }
 
   async cleanup(tmp: string, ref?: RcloneRef): Promise<Outcome> {
-    return this.run(["purge", this.fullPath(tmp)], ref);
+    return this.run(["purge", this.fullPath(tmp)], ref, this.extraArgs("purge"));
   }
 
   /** Remove an empty directory. Non-empty directories fail with code != 0. */
   async rmdir(path: string): Promise<Outcome> {
-    return this.run(["rmdir", this.fullPath(path)]);
+    return this.run(["rmdir", this.fullPath(path)], undefined, this.extraArgs("rmdir"));
   }
 
   /** Recursively delete a tree. */
   async purge(path: string, ref?: RcloneRef): Promise<Outcome> {
-    return this.run(["purge", this.fullPath(path)], ref);
+    return this.run(["purge", this.fullPath(path)], ref, this.extraArgs("purge"));
   }
 
   /** Top-level directory names of a remote path (no trailing slashes). Missing dir yields []. */
@@ -992,6 +958,7 @@ export class Rclone {
     const args = [
       ...this.confArgs(),
       "lsf",
+      ...this.extraArgs("lsf"),
       this.fullPath(path),
       "--dirs-only",
       "--format",
@@ -1057,7 +1024,7 @@ export class Rclone {
       ],
       ref,
       onStats,
-      false, // moveto must not carry remote_flags
+      this.extraArgs("moveto"),
     );
   }
 
@@ -1067,7 +1034,12 @@ export class Rclone {
    */
   async existsPath(rel: string): Promise<boolean> {
     assertSafeRel(rel);
-    const args = [...this.confArgs(), "lsl", `${this.root}/${rel}`];
+    const args = [
+      ...this.confArgs(),
+      "lsl",
+      ...this.extraArgs("lsl"),
+      `${this.root}/${rel}`,
+    ];
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       // Never read: an unread pipe fills (64KB) and blocks the child.
@@ -1093,7 +1065,7 @@ export class Rclone {
       ["moveto", `${this.root}/${srcRel}`, `${this.root}/${dstRel}`],
       ref,
       undefined,
-      false, // moveto must not carry remote_flags
+      this.extraArgs("moveto"),
     );
   }
 
@@ -1119,7 +1091,7 @@ export class Rclone {
     if (range) {
       args.push("--offset", String(range.offset), "--count", String(range.count));
     }
-    args.push(...this.flags);
+    args.push(...this.extraArgs("cat"));
     const command = this.announce(args);
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
@@ -1149,7 +1121,12 @@ export class Rclone {
     rel: string,
   ): Promise<{ size: number; modTime?: string } | null> {
     assertSafeRel(rel);
-    const args = [...this.confArgs(), "lsjson", `${this.root}/${rel}`];
+    const args = [
+      ...this.confArgs(),
+      "lsjson",
+      ...this.extraArgs("lsjson"),
+      `${this.root}/${rel}`,
+    ];
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       // Never read: an unread pipe fills (64KB) and blocks the child.

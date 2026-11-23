@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Logger, insertLogLines } from "./log";
 import { store, getSetting, setSetting, allSettings } from "./db";
 import { Rclone, killActiveProcs, writeRunConfSnapshot, deleteRunConfSnapshot, type ExtractStats } from "./rclone";
+import { validateStoredExtraFlags } from "./extraflags";
 import {
   tmpRootPath,
   tmpRunDir,
@@ -742,6 +743,13 @@ export async function runEngine(): Promise<void> {
       "invalid_tmp_dir",
       `tmp_dir is invalid: ${tmpSettings?.raw ?? "?"}`,
     );
+    return;
+  }
+  // Backstop for flags that bypassed the config form (old backup, DB edit):
+  // fail once with the setting name instead of failing every archive.
+  const flagProblems = await validateStoredExtraFlags(await allSettings());
+  if (flagProblems.length) {
+    await abortWithError("invalid_extra_flags", flagProblems.join("; "));
     return;
   }
 

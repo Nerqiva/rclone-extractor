@@ -37,7 +37,7 @@ exit 0
 
   const probe = `
 import { Rclone } from "./src/rclone";
-const rc = new Rclone("rclone", ${JSON.stringify(tmpAbs)}, []);
+const rc = new Rclone("rclone", ${JSON.stringify(tmpAbs)}, {});
 const res = await rc.purgeStaleTemp(${JSON.stringify(tmpAbs)});
 const purged = require("node:fs").readFileSync(${JSON.stringify(marker)}, "utf8");
 console.log("PROBE " + JSON.stringify({ res, purged }));

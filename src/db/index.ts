@@ -1,4 +1,5 @@
 import { DATABASE_URL } from "../config";
+import { EXTRA_FLAG_FIELDS } from "../extraflags";
 import { encrypt, decrypt, isEncrypted, encryptionEnabled } from "../crypto";
 import { TRASH } from "../archive";
 import { SqliteStore } from "./sqlite";
@@ -23,7 +24,7 @@ export const store: Store = DATABASE_URL
 
 const defaults: Record<string, string> = {
   scan_root: "",
-  remote_flags: "",
+  ...Object.fromEntries(EXTRA_FLAG_FIELDS.map((f) => [f.key, ""])),
   queue_max: "500",
   max_archive_size: "0",
   min_archive_size: "0",
@@ -80,6 +81,7 @@ async function initDbOnce(): Promise<void> {
   await migrateDropSessionsCreatedAt();
   await migrateRclonexArchiveBufferSize();
   await migrateArchivesLastRun();
+  await migrateRemoteFlags();
 
   const seen = new Set<string>();
   const existing = await store.query<{ key: string; value: string }>(
@@ -346,6 +348,36 @@ async function migrateRclonexArchiveBufferSize(): Promise<void> {
       "DELETE FROM settings WHERE key IN ('rclonex_window_size_enabled', 'rclonex_window_size')",
     );
   }
+}
+
+/**
+ * Move the legacy single remote_flags value into the three commands that used
+ * it (extract, promote, downloads). Runs before defaults are inserted so an
+ * empty default cannot hide the legacy value. Copy-if-empty keeps a value a
+ * user already set; the legacy key is removed on every path. Idempotent.
+ */
+async function migrateRemoteFlags(): Promise<void> {
+  const legacy = await store.get1<{ value: string }>(
+    "SELECT value FROM settings WHERE key = ?",
+    ["remote_flags"],
+  );
+  if (!legacy) return;
+  if (legacy.value) {
+    for (const field of EXTRA_FLAG_FIELDS.filter((f) => f.fromLegacyRemoteFlags)) {
+      const existing = await store.get1<{ value: string }>(
+        "SELECT value FROM settings WHERE key = ?",
+        [field.key],
+      );
+      if (existing && existing.value) continue;
+      await store.run(
+        "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+        [field.key, legacy.value],
+      );
+      console.log(`migrated: ${field.key} from remote_flags`);
+    }
+  }
+  await store.run("DELETE FROM settings WHERE key = ?", ["remote_flags"]);
+  console.log("migrated: removed legacy remote_flags setting");
 }
 
 async function migratePlaintextSecrets(): Promise<void> {

@@ -11,6 +11,7 @@ import { encryptionEnabled } from "./crypto";
 import { APP_PASSWORD, RCLONE_CONF } from "./config";
 import { TMP_DIR } from "./tmpdir";
 import { TRASH } from "./archive";
+import { EXTRA_FLAG_FIELDS } from "./extraflags";
 
 export function controlsFragment(): string {
   // Idle state: Start form. Reuse-scan and Start are visually grouped.
@@ -186,12 +187,6 @@ export async function configForm(note = ""): Promise<string> {
       },
     ) +
     settingRow(
-      "Extra rclone flags",
-      s.remote_flags || "none",
-      `<label class="field"><input type="text" name="remote_flags" value="${esc(s.remote_flags ?? "")}" placeholder="--fast-list" aria-label="remote_flags"></label>`,
-      { key: "remote_flags", desc: "Flags for extraction, promotion and downloads only — not for trash/Delete/Restore moves. " },
-    ) +
-    settingRow(
       "rclone.conf",
       confLabel,
       `<label class="field"><input type="file" name="rclone_conf_file" accept=".conf,text/plain" aria-label="rclone.conf"></label>
@@ -202,6 +197,17 @@ export async function configForm(note = ""): Promise<string> {
         desc: "Stored config, written before each run. Used when RCLONE_CONF is not set.",
       },
     ),
+  )}
+  ${section(
+    "Extra flags",
+    EXTRA_FLAG_FIELDS.map((field) =>
+      settingRow(
+        field.label,
+        s[field.key] || "none",
+        `<label class="field"><input type="text" name="${esc(field.key)}" value="${esc(s[field.key] ?? "")}" placeholder="--flag value" aria-label="${esc(field.key)}"></label>`,
+        { key: field.key, desc: field.desc },
+      ),
+    ).join(""),
   )}
   ${section(
     "Selection",

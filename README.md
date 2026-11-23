@@ -302,7 +302,17 @@ is not affected. Specifically:
 | Setting | Description |
 |---|---|
 | `scan_root` | rclone remote or path to scan, e.g. `s3:bucket/archives` or `/data/in`. |
-| `remote_flags` | Extra flags appended to extraction, promotion and archive-download commands, but **not** to `moveto` commands (trash / Delete / Restore), listing, inspection or cleanup. `--config /app/data/rclone.conf` is passed unconditionally (any `--config` here is ignored; when `/app/data` is not writable the `/tmp/app/data/rclone.conf` fallback is used). |
+| `lsf_extra_flags` | Extra flags for `rclone lsf` (scan listing and temp-dir listing). |
+| `archive_list_extra_flags` | Extra flags for `rclone archive list` (pre-extraction inspection). |
+| `extract_extra_flags` | Extra flags for `rclone archive extract`. |
+| `rclonex_extract_extra_flags` | Extra flags for `rclonex archive extract`. Password and window flags are configured separately. |
+| `move_extra_flags` | Extra flags for `rclone move` (promotion). |
+| `moveto_extra_flags` | Extra flags for `rclone moveto` (trash and Delete/Restore). |
+| `cat_extra_flags` | Extra flags for `rclone cat` (downloads). |
+| `lsl_extra_flags` | Extra flags for `rclone lsl` (exists check). |
+| `lsjson_extra_flags` | Extra flags for `rclone lsjson` (size/mtime probe). |
+| `purge_extra_flags` | Extra flags for `rclone purge` (temp cleanup). |
+| `rmdir_extra_flags` | Extra flags for `rclone rmdir` (empty-directory cleanup). |
 | `queue_max` | Maximum archives queued per run (default `500`). |
 | `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
@@ -318,7 +328,7 @@ is not affected. Specifically:
 
 Most settings are shown as compact rows on the Configuration page, each with a
 single terse line of help. Click **Edit** to unfold a field, then **Save**.
-`remote_flags` stays permanently visible.
+The extra-flags rows stay permanently visible.
 
 ### Switching between SQLite and Postgres
 

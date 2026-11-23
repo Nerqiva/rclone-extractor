@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { store, allSettings, SECRET_KEYS } from "../db";
+import { EXTRA_FLAG_FIELDS } from "../extraflags";
 import { encryptionEnabled, encrypt } from "../crypto";
 import { engineState } from "../engine";
 import { LOG_EXPORT_LIMIT } from "../log";
@@ -271,6 +272,24 @@ data.post("/import", async (c) => {
         for (const [k, v] of Object.entries(settings)) {
           if (k === "password") continue; // legacy setting; login uses APP_PASSWORD only
           if (typeof v !== "string") continue;
+          if (k === "remote_flags") {
+            // Import bypasses DB init: map the legacy value into the three
+            // commands that used it, without overwriting an explicit value.
+            for (const field of EXTRA_FLAG_FIELDS.filter((f) => f.fromLegacyRemoteFlags)) {
+              const incoming = settings[field.key];
+              if (typeof incoming === "string" && incoming) continue;
+              const existing = await tx.get1<{ value: string }>(
+                "SELECT value FROM settings WHERE key = ?",
+                [field.key],
+              );
+              if (existing?.value || !v) continue;
+              await tx.run("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", [
+                field.key,
+                v,
+              ]);
+            }
+            continue; // never re-create the legacy key
+          }
           // A non-secret export blanks secret values; importing one must not
           // wipe the stored credentials.
           if (v === "" && SECRET_KEYS.has(k)) continue;

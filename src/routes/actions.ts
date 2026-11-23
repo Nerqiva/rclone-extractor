@@ -19,6 +19,7 @@ import { loadTmpDirSettings } from "../tmpsweep";
 import { parseTrashSubdir, TRASH } from "../archive";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
 import { controlsFragment, configForm } from "../views";
+import { EXTRA_FLAG_FIELDS, validateExtraFlags } from "../extraflags";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
 
@@ -108,7 +109,17 @@ actions.post("/run/skip", async (c) => {
 
 const SETTING_KEYS = [
   "scan_root",
-  "remote_flags",
+  "lsf_extra_flags",
+  "archive_list_extra_flags",
+  "extract_extra_flags",
+  "rclonex_extract_extra_flags",
+  "move_extra_flags",
+  "moveto_extra_flags",
+  "cat_extra_flags",
+  "lsl_extra_flags",
+  "lsjson_extra_flags",
+  "purge_extra_flags",
+  "rmdir_extra_flags",
   "rclone_conf",
   "queue_max",
   "max_archive_size",
@@ -120,6 +131,27 @@ const SETTING_KEYS = [
 
 actions.post("/config", async (c) => {
   const form = await c.req.formData();
+
+  // Flag names cross a boundary here: check each non-empty field against the
+  // installed binary before anything is written. A missing/unreadable help
+  // output warns but never blocks configuration.
+  const flagProblems: string[] = [];
+  const flagWarnings: string[] = [];
+  for (const field of EXTRA_FLAG_FIELDS) {
+    const raw = form.get(field.key);
+    if (raw === null) continue;
+    const check = await validateExtraFlags(field, String(raw).trim());
+    if (!check.ok) flagProblems.push(`${field.key}: ${check.unknown.join(", ")}`);
+    else if (check.warning) flagWarnings.push(check.warning);
+  }
+  if (flagProblems.length) {
+    const msg = `Unknown rclone flag(s): ${flagProblems.join("; ")}`;
+    return c.html(
+      await configForm(`<p class="note err">${esc(msg)}</p>`),
+      200,
+      toastTriggerHeaders(msg, "err"),
+    );
+  }
 
   const confFile = form.get("rclone_conf_file");
   const confField = form.get("rclone_conf");
@@ -329,15 +361,18 @@ actions.post("/config", async (c) => {
   const savedNote = engineState.running
     ? "Saved. Changes apply from the next run (a run in progress is not affected)."
     : "Saved.";
+  const warningNote = flagWarnings.length
+    ? `<p class="note warn-line">${esc(flagWarnings.join(" "))}</p>`
+    : "";
   if (confNotice) {
     return c.html(
-      await configForm(`<p class="note warn-line">${esc(confNotice)}</p>`),
+      await configForm(`${warningNote}<p class="note warn-line">${esc(confNotice)}</p>`),
       200,
       toastTriggerHeaders(confNotice, "err"),
     );
   }
   return c.html(
-    await configForm(`<p class="note">${esc(savedNote)}</p>`),
+    await configForm(`${warningNote}<p class="note">${esc(savedNote)}</p>`),
     200,
     toastTriggerHeaders(engineState.running ? "Settings saved — applies from the next run." : "Settings saved."),
   );

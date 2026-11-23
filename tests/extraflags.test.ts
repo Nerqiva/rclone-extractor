@@ -35,7 +35,7 @@ const MARK: Record<string, string> = {
   archive_list_extra_flags: "MARK-archive-list",
   extract_extra_flags: "MARK-extract",
   rclonex_extract_extra_flags: "MARK-rclonex-extract",
-  move_extra_flags: "MARK-move",
+  move_extra_flags: "MARK-promote",
   moveto_extra_flags: "MARK-moveto",
   cat_extra_flags: "MARK-cat",
   lsl_extra_flags: "MARK-lsl",
@@ -91,10 +91,10 @@ beforeAll(async () => {
       '--help            Help.' \\
       '  -v, --verbose    Short verbose.'${extra}
     exit 0`;
-  const common = (log: string, helpExtra: string) => `#!/bin/sh
+  const common = (label: string, log: string, helpExtra: string) => `#!/bin/sh
 case "$*" in
   *--help*|"help flags") ;;
-  *) echo "${log.split("/").pop()} $*" >> "${log}" ;;
+  *) echo "${label} $*" >> "${log}" ;;
 esac
 if [ "$1" = "--config" ]; then shift 2; fi
 case "$*" in
@@ -119,8 +119,8 @@ exit 0
 `;
   const rclonePath = join(binDir, "rclone");
   const rclonexPath = join(binDir, "rclonex");
-  writeFileSync(rclonePath, common(rcloneLog, ""), { mode: 0o755 });
-  writeFileSync(rclonexPath, common(rclonexLog, `
+  writeFileSync(rclonePath, common("rclone", rcloneLog, ""), { mode: 0o755 });
+  writeFileSync(rclonexPath, common("rclonex", rclonexLog, `
       '--archive-password=PASS  Archive password.' \\
       '--archive-window-size=N  Window size.'`), { mode: 0o755 });
   chmodSync(rclonePath, 0o755);
@@ -187,7 +187,7 @@ test("each rclone command receives only its own extra flags", async () => {
     [" lsf ", "MARK-lsf"],
     [" archive list ", "MARK-archive-list"],
     [" archive extract ", "MARK-extract"],
-    [" move ", "MARK-move"],
+    [" move ", "MARK-promote"],
     [" moveto ", "MARK-moveto"],
     [" cat ", "MARK-cat"],
     [" lsl ", "MARK-lsl"],
@@ -205,7 +205,7 @@ test("each rclone command receives only its own extra flags", async () => {
       }
     }
   }
-  const version = oneCall(rcloneLog, " version ");
+  const version = oneCall(rcloneLog, " version");
   for (const marker of Object.values(MARK)) expect(version).not.toContain(marker);
 }, 15_000);
 
@@ -280,6 +280,8 @@ test("legacy remote_flags migrates once into only extract, move and cat", async 
 
   // Re-running is idempotent and copy-if-empty preserves a real value.
   await db.setSetting("extract_extra_flags", "--keep-me");
+  await db.setSetting("move_extra_flags", "");
+  await db.setSetting("cat_extra_flags", "");
   await db.store.run("INSERT OR REPLACE INTO settings(key, value) VALUES('remote_flags', '--legacy-2')", []);
   await db.initDb();
   expect(await db.getSetting("extract_extra_flags")).toBe("--keep-me");
