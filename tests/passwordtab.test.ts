@@ -38,6 +38,9 @@ process.env.MOCK_MARKERS = mockMarkers;
 let store: typeof import("../src/db").store;
 let setSetting: typeof import("../src/db").setSetting;
 let engineState: typeof import("../src/engine").engineState;
+let drainDeferredPasswordMoves: typeof import("../src/engine").drainDeferredPasswordMoves;
+let queuePasswordMove: typeof import("../src/engine").queuePasswordMove;
+let forceStopEngine: typeof import("../src/engine").forceStopEngine;
 let actions: Hono;
 
 async function insertPasswordArchive(path: string, status = "skipped"): Promise<number> {
@@ -53,7 +56,11 @@ beforeAll(async () => {
   store = db.store;
   setSetting = db.setSetting;
   await db.initDb();
-  engineState = (await import("../src/engine")).engineState;
+  const engine = await import("../src/engine");
+  engineState = engine.engineState;
+  drainDeferredPasswordMoves = engine.drainDeferredPasswordMoves;
+  queuePasswordMove = engine.queuePasswordMove;
+  forceStopEngine = engine.forceStopEngine;
   const scanRoot = join(process.env.DATA_DIR!, "scan");
   mkdirSync(scanRoot, { recursive: true });
   await setSetting("scan_root", scanRoot);
@@ -65,6 +72,8 @@ beforeAll(async () => {
 
 afterEach(() => {
   engineState.running = false;
+  engineState.forceStop = false;
+  engineState.deferredPasswordMoves = [];
 });
 
 test("renderPasswordList shows empty state and both row states", async () => {
@@ -107,13 +116,81 @@ test("delete refuses when the trash already contains the archive", async () => {
   }
 });
 
-test("delete is refused while a task is running", async () => {
+test("delete is queued while a task is running and applied on drain", async () => {
   engineState.running = true;
   const id = await insertPasswordArchive("live/protected.7z");
   const res = await actions.request(`/archives/${id}/delete`, { method: "POST" });
-  expect(res.headers.get("HX-Trigger")).toContain("Stop the task first.");
+  expect(res.headers.get("HX-Trigger")).toContain("Queued");
+  let row = await store.get1<{ status: string }>("SELECT status FROM archives WHERE id = ?", [id]);
+  expect(row?.status).toBe("skipped");
+  expect(engineState.deferredPasswordMoves.some((m) => m.id === id && m.direction === "delete")).toBe(true);
+  await drainDeferredPasswordMoves();
+  row = await store.get1<{ status: string }>("SELECT status FROM archives WHERE id = ?", [id]);
+  expect(row?.status).toBe("deleted");
+  expect(engineState.deferredPasswordMoves.length).toBe(0);
+});
+
+test("restore is queued while a task is running and applied on drain", async () => {
+  writeFileSync(join(mockMarkers, "trash_exists"), "");
+  try {
+    engineState.running = true;
+    const id = await insertPasswordArchive("livequeued/protected.rar", "deleted");
+    const res = await actions.request(`/archives/${id}/restore`, { method: "POST" });
+    expect(res.headers.get("HX-Trigger")).toContain("Queued");
+    expect(res.headers.get("HX-Trigger")).toContain("restore");
+    expect(engineState.deferredPasswordMoves.some((m) => m.id === id && m.direction === "restore")).toBe(true);
+    await drainDeferredPasswordMoves();
+    const row = await store.get1<{ status: string; error_kind: string | null }>(
+      "SELECT status, error_kind FROM archives WHERE id = ?",
+      [id],
+    );
+    expect(row?.status).toBe("queued");
+    expect(row?.error_kind).toBeNull();
+  } finally {
+    const { rmSync } = await import("node:fs");
+    rmSync(join(mockMarkers, "trash_exists"), { force: true });
+  }
+});
+
+test("a duplicate queued move is rejected", async () => {
+  engineState.running = true;
+  const id = await insertPasswordArchive("dupe/dup.7z");
+  const first = await actions.request(`/archives/${id}/delete`, { method: "POST" });
+  expect(first.headers.get("HX-Trigger")).toContain("Queued");
+  const second = await actions.request(`/archives/${id}/delete`, { method: "POST" });
+  expect(second.headers.get("HX-Trigger")).toContain("already queued");
+  expect(engineState.deferredPasswordMoves.filter((m) => m.id === id).length).toBe(1);
+});
+
+test("drain re-validates and skips a move whose row changed", async () => {
+  engineState.running = true;
+  const id = await insertPasswordArchive("changed/protected.7z");
+  queuePasswordMove("delete", id);
+  // The row stops being a password archive before the drain runs.
+  await store.run("UPDATE archives SET error_kind=NULL WHERE id=?", [id]);
+  await drainDeferredPasswordMoves();
   const row = await store.get1<{ status: string }>("SELECT status FROM archives WHERE id = ?", [id]);
   expect(row?.status).toBe("skipped");
+  expect(engineState.deferredPasswordMoves.length).toBe(0);
+});
+
+test("a hard stop discards pending password moves", async () => {
+  engineState.running = true;
+  const id = await insertPasswordArchive("hardstop/protected.7z");
+  queuePasswordMove("delete", id);
+  forceStopEngine();
+  expect(engineState.deferredPasswordMoves.length).toBe(0);
+});
+
+test("renderPasswordList marks a pending row and disables its action button", async () => {
+  const { renderPasswordList } = await import("../src/passwordrows");
+  const id = await insertPasswordArchive("pending/protected.7z");
+  queuePasswordMove("delete", id);
+  const html = renderPasswordList([
+    { id, path: "pending/protected.7z", size: 1, status: "skipped", updated_at: new Date().toISOString() },
+  ]);
+  expect(html).toContain("pending");
+  expect(html).toContain("disabled");
 });
 
 test("restore moves the archive back and re-queues it", async () => {
