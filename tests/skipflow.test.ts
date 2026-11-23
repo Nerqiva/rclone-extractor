@@ -1,7 +1,9 @@
 import { test, expect, beforeAll, beforeEach } from "bun:test";
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+const base = mkdtempSync(join(tmpdir(), "rx-skip-"));
 
 let db:
   | typeof import("../src/db")
@@ -19,7 +21,6 @@ async function waitFor(cond: () => boolean, ms = 8000): Promise<boolean> {
 }
 
 beforeAll(async () => {
-  const base = mkdtempSync(join(tmpdir(), "rx-skip-"));
   process.env.DATA_DIR = base;
   delete process.env.DATABASE_URL;
 
@@ -52,6 +53,9 @@ fi
 if [ "$1" = "archive" ] && [ "$2" = "extract" ]; then
   if [ "$RCLONE_STUB_BLOCK" = "extract" ]; then exec sleep 3600; fi
   exit 0
+fi
+if [ "$1" = "moveto" ] && [ -n "$RCLONE_TRASH_GATE" ]; then
+  while [ -f "$RCLONE_TRASH_GATE" ]; do sleep 0.05; done
 fi
 exit 0
 `;
@@ -89,6 +93,8 @@ beforeEach(async () => {
   engine.engineState.skipped = 0;
   engine.engineState.total = 0;
   process.env.RCLONE_STUB_BLOCK = "";
+  delete process.env.RCLONE_TRASH_GATE;
+  rmSync(`${base}/trash-gate`, { force: true });
 });
 
 test("skip listing stops the scan early and continues with the stored queue", async () => {
@@ -146,6 +152,29 @@ test("skip archive re-queues the current archive and finishes the run", async ()
   expect(row?.error_kind).toBeNull();
   expect(engine.engineState.skipped).toBe(1);
   expect(engine.engineState.skipArchive).toBe(false);
+});
+
+test("a skip asked while the trash move finishes does not re-queue the archive", async () => {
+  const gate = `${base}/trash-gate`;
+  writeFileSync(gate, "");
+  process.env.RCLONE_TRASH_GATE = gate;
+  process.env.RCLONE_STUB_BLOCK = "trash";
+  const done = engine.runEngine();
+  const sawTrash = await waitFor(
+    () => engine.engineState.activity === "Moving to trash",
+  );
+  expect(sawTrash).toBe(true);
+  // The skip lands while the moveto is blocked. Releasing the gate lets the
+  // move finish with exit 0, leaving the archive in trash.
+  engine.engineState.skipArchive = true;
+  rmSync(gate, { force: true });
+  await done;
+  const row = await db!.store.get1<{ status: string; error_kind: string | null }>(
+    "SELECT status, error_kind FROM archives WHERE path='victim.zip'",
+  );
+  expect(row?.status).toBe("done");
+  expect(row?.error_kind).toBeNull();
+  expect(engine.engineState.skipped).toBe(0);
 });
 
 test("skip requests are rejected outside their stage", async () => {
