@@ -880,6 +880,7 @@ GET  /logs  /errors        log & error pages    (auth)
 GET  /login  POST /login  POST /logout
 GET  /dashboard/fragment   live progress panel  (auth)
 GET  /dashboard/controls   run controls         (auth)
+GET  /dashboard/queue      paginated queue page (auth)
 GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
 GET  /logs/archives-fragment                    (auth, per-run archive rows for the Archives tab)

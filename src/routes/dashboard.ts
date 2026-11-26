@@ -424,6 +424,38 @@ export async function progressPanel(): Promise<string> {
   </section>`;
 }
 
+const QUEUE_PAGE_SIZE = 20;
+
+dashboard.get("/dashboard/queue", (c) => {
+  const queued = [...engineState.jobs.values()]
+    .filter((job) => job.status === "queued")
+    .sort((a, b) => a.order - b.order);
+  const totalPages = Math.max(1, Math.ceil(queued.length / QUEUE_PAGE_SIZE));
+  const asked = Number(c.req.query("page") ?? "1");
+  const page = Number.isFinite(asked)
+    ? Math.min(totalPages, Math.max(1, Math.floor(asked)))
+    : 1;
+  const rows = queued.slice((page - 1) * QUEUE_PAGE_SIZE, page * QUEUE_PAGE_SIZE);
+  const body =
+    rows.length === 0
+      ? `<p class="muted">No archives in the queue.</p>`
+      : `<div class="queue-scroll"><table class="queue-table">
+    <thead><tr><th scope="col">Queue ID</th><th scope="col">#</th><th scope="col">Archive</th></tr></thead>
+    <tbody>${rows
+      .map(
+        (r) =>
+          `<tr><td class="queue-id">Queue ID #${r.id}</td><td class="queue-order">${r.order + 1}</td><td title="${esc(r.rel)}">${esc(r.rel)}</td></tr>`,
+      )
+      .join("")}</tbody>
+  </table></div>`;
+  const pager = `<div class="queue-pager">
+    <button class="btn small ghost" type="button" data-queue-page="${page - 1}"${page <= 1 ? " disabled" : ""}>Prev</button>
+    <span class="muted">Page ${page} of ${totalPages} · ${queued.length} queued</span>
+    <button class="btn small ghost" type="button" data-queue-page="${page + 1}"${page >= totalPages ? " disabled" : ""}>Next</button>
+  </div>`;
+  return c.html(`<div class="queue-page">${body}${pager}</div>`);
+});
+
 dashboard.get("/dashboard/fragment", async (c) => {
   const confNotice = pendingRcloneConfNotice();
   return c.html(
