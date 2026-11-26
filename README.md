@@ -296,14 +296,19 @@ one in queue order is pre-inspected, and only related later archives of that
 group use the post-extraction inspection path. This keeps the inspection
 verdict deterministic while unrelated groups run in parallel.
 
-The Progress page shows one card per in-flight archive with its own phase,
-transfer bar, byte counts and ETA, plus a summary strip with queued, active,
-done, failed, skipped and configured concurrency. Finished archives also get a
-card, but only the four most recently failed ones are kept so old failures do
-not crowd the page. Upcoming archives are listed in queue order. The **Skip
-archive** button on a card targets only that archive. **Stop** lets in-flight
-archives finish; **Force stop** kills all active processes and re-queues every
-in-flight archive.
+The Progress page shows one card per in-flight archive under **Archives in
+flight** with its own phase, transfer bar, byte counts and ETA, plus a summary
+strip with queued, active, done, failed, skipped and configured concurrency.
+The **History** section keeps cards for the five most recently finished,
+failed or skipped archives so old results do not crowd the page. Every card
+shows its **Queue ID** — the archive's database id, also used on the Logs and
+Errors pages and for downloads.
+
+The queue is hidden by default. **Show Queue (N)** next to Start/Stop opens it
+and lists up to 20 archives per page with Prev/Next controls. The **Skip
+archive** button on an in-flight card targets only that archive. **Stop** lets
+in-flight archives finish; **Force stop** kills all active processes and
+re-queues every in-flight archive.
 
 ### Environment variables
 
@@ -785,6 +790,11 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
 - Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
   and appended, and polling stops as soon as the run finishes — finished
   sessions render statically, so they don't poll at all.
+- While a session is live, the run log and the Errors page start in **live
+  preview** with a **Live preview** / **Manual view** toolbar toggle.
+  Scrolling away from the bottom pauses polling automatically; switching back
+  resumes from the last fetched line, so lines already on screen are kept.
+  Finished sessions have no polling and no toggle.
 - The log view is **mobile-friendly and selectable**: every line is real text,
   you can tap and hold to select parts of it, or use the toolbar buttons
   **Copy all**, **Copy selection**, **Select all** and **Download**.
@@ -794,8 +804,9 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   deployments too.
 - The **Errors** page lists archives with `error_kind` set (except
   password-protected archives, see below) and has a **Copy all** button for a
-  tab-separated summary. Each card shows the failing command and the last
-  native error lines it produced, with app-written diagnostics filtered out.
+  tab-separated summary. Each card shows its Queue ID, the failing command and
+  the last native error lines it produced, with app-written diagnostics
+  filtered out.
   The row's **Copy** / **Download** button fetches the full archive log, where
   a `---` separator and a `$ ` line delimit each command's raw output. The run
   error log also records the redacted command that failed.
@@ -867,7 +878,7 @@ public/
   favicon.svg      r/ monogram icon
   styles.css       design system
   htmx.min.js      vendored htmx
-  copy.js          clipboard copy + incremental live-log polling
+  copy.js          clipboard copy + incremental polling with live-preview toggle
   fonts/           self-hosted JetBrains Mono
 ```
 

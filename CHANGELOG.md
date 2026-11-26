@@ -18,9 +18,19 @@ to `main`.
   before extraction starts. With the default the behavior is unchanged.
 - **Per-archive progress on the Progress page.** Each in-flight archive gets a
   card with its phase, transfer bar, byte counts and ETA, plus a summary strip
-  for queued/active/done/failed/skipped and the configured concurrency.
-  Upcoming archives are listed in queue order. The Archives tab shows live
-  phase and transfer bars for in-flight rows.
+  for queued/active/done/failed/skipped and the configured concurrency. The
+  Archives tab shows live phase and transfer bars for in-flight rows.
+- **Hidden, paginated queue.** **Show Queue (N)** next to Start/Stop opens a
+  panel listing the queued archives, 20 per page with Prev/Next controls. It
+  stays open while the progress panel polls and starts closed on every visit.
+- **Queue IDs everywhere.** Every archive card on the Progress, Logs and
+  Errors pages shows its database id as **Queue ID #N**, matching the id used
+  by logs, errors and downloads.
+- **Live preview toggle.** The run log and the Errors page start in live
+  preview while a session is running. Scrolling away from the bottom pauses
+  polling; the toolbar toggle switches between live preview and manual view,
+  and switching back resumes from the last fetched line without dropping lines
+  already on screen.
 - **Targeted skip.** The Skip button on an archive card sends that archive's
   id, so a skip re-queues only that archive and kills only its processes. The
   no-id API still targets the active archive for backwards compatibility.
@@ -29,9 +39,10 @@ to `main`.
   targeted skip, the group rule under load, and the multi-archive views.
 
 ### Changed
-- **Archives in flight shows only the four most recent failures.** Older
-  failed archives stay in the run data but no longer accumulate as cards on
-  the Progress page.
+- **History keeps the five newest terminal archives.** Done, failed and
+  skipped archives are ranked by finish time and shown under **History** below
+  the in-flight cards. Older archives stay in the run data but no longer
+  accumulate as cards on the Progress page.
 - **Stop semantics under concurrency.** Stop (soft) lets in-flight archives
   finish before the run ends; Force stop kills every active process and
   re-queues every in-flight archive. Run counters are now incremented
@@ -54,6 +65,10 @@ to `main`.
   written to per-archive logs. `tests/native-log.test.ts` covers this.
 
 ### Removed
+- **Leftover single-worker progress UI.** The Current/Last archive and
+  Active/Last command rows, the single-command progress block and the inline
+  upcoming-archive table are gone. In-flight cards and the paginated queue
+  replace them; the dead `commandStats` mirror in the engine is removed too.
 - **The single `remote_flags` setting is gone.** Extra flags now have one
   field per rclone/rclonex subcommand. Existing values are migrated into the
   extraction, promotion and download fields only, so no flag leaks into
