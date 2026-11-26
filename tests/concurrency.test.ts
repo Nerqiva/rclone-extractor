@@ -337,7 +337,7 @@ test("concurrency=1 keeps the serial order", async () => {
   expect(rows.every((r) => r.status === "done")).toBe(true);
 }, 20_000);
 
-test("the polled fragment renders one card per job, the summary strip, and the queue", async () => {
+test("the polled fragment renders active and History cards with Queue IDs", async () => {
   engineState.runId = 1;
   engineState.running = true;
   engineState.stage = "extracting";
@@ -386,15 +386,24 @@ test("the polled fragment renders one card per job, the summary strip, and the q
 
   expect(count(html, 'class="card job-card')).toBe(2);
   expect(html).toContain("Concurrency");
-  expect(html).toContain("Upcoming archives");
-  expect(html).toContain("dir3/archive3.zip");
+  expect(html).toContain("Archives in flight");
+  expect(html).toContain("History");
+  expect(html).toContain("Queue ID #1");
+  expect(html).toContain("Queue ID #2");
+  expect(html).toContain("dir1/archive1.zip");
+  expect(html).toContain("dir2/archive2.zip");
+  expect(html).not.toContain("dir3/archive3.zip");
+  expect(html).not.toContain("Upcoming archives");
+  expect(html).not.toContain("Current archive");
+  expect(html).not.toContain("Active command");
   expect(html).toContain("Extracting");
   expect(html).toContain("aria-valuenow=\"50\"");
   expect(html).toContain("50 B / 100 B");
   expect(html).toContain('hx-vals=\'{"target":"archive","id":"1"}\'');
+  expect(html).not.toContain('hx-vals=\'{"target":"archive","id":"2"}\'');
 });
 
-test("only the four newest failed archives appear in flight", async () => {
+test("only the five newest terminal archives appear in History", async () => {
   engineState.runId = 1;
   engineState.running = true;
   engineState.stage = "extracting";
@@ -432,12 +441,17 @@ test("only the four newest failed archives appear in flight", async () => {
   app.route("/", dashboard);
   const html = await (await app.request("/dashboard/fragment")).text();
 
-  expect(count(html, 'class="card job-card')).toBe(5);
+  expect(count(html, 'class="card job-card')).toBe(6);
+  expect(html).toContain("Archives in flight");
+  expect(html).toContain("History");
   expect(html).toContain("dir1/archive1.zip");
+  expect(html).toContain("Queue ID #1");
+  expect(html).toContain("dir3/archive3.zip");
+  expect(html).toContain("Queue ID #3");
   expect(html).toContain("dir4/archive4.zip");
   expect(html).toContain("dir7/archive7.zip");
   expect(html).not.toContain("dir2/archive2.zip");
-  expect(html).not.toContain("dir3/archive3.zip");
+  expect(html).not.toContain("Queue ID #2");
 });
 
 test("the archives tab renders live phase and a bar for in-flight rows", async () => {

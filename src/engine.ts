@@ -100,10 +100,6 @@ export const engineState = {
   startedAt: "",
   finishedAt: "",
   lastError: "",
-  // Live progress of the rclone command currently in flight, when it emits
-  // --stats (extract/move/moveto). Null for non-transfer commands (lsf,
-  // archive list, purge, rmdir) and between commands.
-  commandStats: null as ExtractStats | null,
   // Short human-readable label for the rclone command/phase currently in
   // flight ("Listing archives", "Extracting", ...). Drives the per-command
   // progress bar and status badge in the dashboard.
@@ -383,7 +379,6 @@ function refreshPrimaryMirror(): void {
   engineState.currentRel = job?.rel ?? "";
   engineState.currentCommand = job?.command ?? "";
   engineState.activity = job?.phase ?? "";
-  engineState.commandStats = job?.stats ?? null;
   engineState.archiveInFlight = engineState.activeIds.size > 0;
 }
 
@@ -396,7 +391,6 @@ function setActivity(label: string, job?: JobState | null): void {
   const primary = activeJobForSkip();
   if (!job || !primary || primary === job) {
     engineState.activity = label;
-    engineState.commandStats = null;
   }
 }
 
@@ -471,7 +465,6 @@ async function touchRun(runId: number): Promise<void> {
 function statsTracker(runId: number, job: JobState) {
   return (stats: ExtractStats) => {
     job.stats = stats;
-    if (activeJobForSkip() === job) engineState.commandStats = stats;
     void touchRun(runId);
   };
 }
@@ -687,7 +680,6 @@ export async function runEngine(): Promise<void> {
   engineState.skipped = 0;
   engineState.startedAt = "";
   engineState.finishedAt = "";
-  engineState.commandStats = null;
   engineState.activity = "";
   engineState.stopRequested = false;
   engineState.forceStop = false;
@@ -1742,7 +1734,6 @@ export async function runEngine(): Promise<void> {
     engineState.running = false;
     engineState.currentRel = "";
     engineState.currentCommand = "";
-    engineState.commandStats = null;
     engineState.activity = "";
     engineState.stopRequested = false;
     engineState.forceStop = false;

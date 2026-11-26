@@ -210,7 +210,7 @@ export async function configForm(note = ""): Promise<string> {
     settingRow(
       "Concurrency",
       s.concurrency ?? "1",
-      `<label class="field"><input type="number" name="concurrency" min="1" max="${MAX_CONCURRENCY}" value="${esc(s.concurrency ?? "1")}" aria-label="concurrency"></label>`,
+      `<label class="field"><input type="number" name="concurrency" min="1" max="${MAX_CONCURRENCY}" step="1" value="${esc(s.concurrency ?? "1")}" aria-label="concurrency"></label>`,
       {
         key: "concurrency",
         desc: `Archives processed at the same time (1–${MAX_CONCURRENCY}). The scan and queue stay serial. Applies from the next run.`,

@@ -26,8 +26,6 @@ interface Snapshot {
   running: boolean;
   runId: number;
   stage: string;
-  lastArchive: string;
-  lastCommand: string;
   total: number;
   done: number;
   failed: number;
@@ -36,7 +34,6 @@ interface Snapshot {
   finishedAt: string;
   lastError: string;
   scanRoot: string;
-  commandStats: ExtractStats | null;
   activity: string;
   interruptReason: string;
   outcome: string;
@@ -45,17 +42,12 @@ interface Snapshot {
   queued: number;
   active: number;
   jobs: JobView[];
-  upcoming: { order: number; id: number; path: string }[];
 }
 
-function jobViews(): { jobs: JobView[]; upcoming: { order: number; id: number; path: string }[] } {
+function jobViews(): JobView[] {
   const jobs: JobView[] = [];
-  const upcoming: { order: number; id: number; path: string }[] = [];
   for (const job of engineState.jobs.values()) {
-    if (job.status === "queued") {
-      upcoming.push({ order: job.order + 1, id: job.id, path: job.rel });
-      continue;
-    }
+    if (job.status === "queued") continue;
     jobs.push({
       id: job.id,
       name: job.rel.slice(job.rel.lastIndexOf("/") + 1),
@@ -68,20 +60,16 @@ function jobViews(): { jobs: JobView[]; upcoming: { order: number; id: number; p
       finishedAt: job.finishedAt,
     });
   }
-  upcoming.sort((a, b) => a.order - b.order);
-  // Failed jobs stay in the map for the whole run; only the four newest are
-  // useful on the progress page.
-  const recentFailed = new Set(
-    jobs
-      .filter((j) => j.status === "failed")
-      .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt) || b.order - a.order)
-      .slice(0, 4)
-      .map((j) => j.id),
-  );
-  return {
-    jobs: jobs.filter((j) => j.status !== "failed" || recentFailed.has(j.id)),
-    upcoming,
-  };
+  const active = jobs
+    .filter((j) => j.status === "active")
+    .sort((a, b) => a.order - b.order);
+  // Terminal jobs stay in the map for the whole run; the newest five are
+  // enough for the History strip.
+  const history = jobs
+    .filter((j) => j.status !== "active")
+    .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt) || b.order - a.order)
+    .slice(0, 5);
+  return [...active, ...history];
 }
 
 const STAGE_LABEL: Record<string, string> = {
@@ -132,8 +120,6 @@ async function snapshot(): Promise<Snapshot> {
       running: engineState.running,
       runId: engineState.runId,
       stage: engineState.stage,
-      lastArchive: engineState.currentRel,
-      lastCommand: engineState.currentCommand,
       total: engineState.total,
       done: engineState.done,
       failed: engineState.failed,
@@ -142,7 +128,6 @@ async function snapshot(): Promise<Snapshot> {
       finishedAt: engineState.finishedAt,
       lastError: engineState.lastError,
       scanRoot,
-      commandStats: engineState.commandStats,
       activity: engineState.activity,
       interruptReason:
         engineState.stage === "interrupted"
@@ -162,7 +147,7 @@ async function snapshot(): Promise<Snapshot> {
       concurrency: engineState.concurrency,
       queued: [...engineState.jobs.values()].filter((j) => j.status === "queued").length,
       active: engineState.activeIds.size,
-      ...jobViews(),
+      jobs: jobViews(),
     };
   }
 
@@ -178,18 +163,14 @@ async function snapshot(): Promise<Snapshot> {
     interrupted_reason: string | null;
     outcome: string | null;
     error_kind: string | null;
-    last_archive: string | null;
-    last_command: string | null;
   }>(
-    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind, last_archive, last_command FROM runs ORDER BY id DESC LIMIT 1",
+    "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind FROM runs ORDER BY id DESC LIMIT 1",
   );
   if (!row) {
     return {
       running: false,
       runId: 0,
       stage: "idle",
-      lastArchive: "",
-      lastCommand: "",
       total: 0,
       done: 0,
       failed: 0,
@@ -198,7 +179,6 @@ async function snapshot(): Promise<Snapshot> {
       finishedAt: "",
       lastError: "",
       scanRoot,
-      commandStats: null,
       activity: "",
       interruptReason: "",
       outcome: "",
@@ -207,7 +187,6 @@ async function snapshot(): Promise<Snapshot> {
       queued: 0,
       active: 0,
       jobs: [],
-      upcoming: [],
     };
   }
 
@@ -225,8 +204,6 @@ async function snapshot(): Promise<Snapshot> {
             : row.finished_at
               ? "finished"
               : "idle",
-    lastArchive: row.last_archive ?? "",
-    lastCommand: row.last_command ?? "",
     total: Number(row.total),
     done: Number(row.done),
     failed: Number(row.failed),
@@ -235,7 +212,6 @@ async function snapshot(): Promise<Snapshot> {
     finishedAt: row.finished_at ?? "",
     lastError: "",
     scanRoot,
-    commandStats: null,
     activity: "",
     interruptReason: row.interrupted_reason ?? "",
     outcome,
@@ -244,7 +220,6 @@ async function snapshot(): Promise<Snapshot> {
     queued: 0,
     active: 0,
     jobs: [],
-    upcoming: [],
   };
 }
 
@@ -300,46 +275,35 @@ function jobBar(job: JobView): string {
 
 function jobCards(jobs: JobView[]): string {
   if (jobs.length === 0) return "";
-  const cards = jobs
-    .map((job) => {
-      const label = job.phase || stageLabel(job.status);
-      const skip =
-        job.status === "active"
-          ? `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive","id":"${job.id}"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>`
-          : "";
-      return `<article class="card job-card ${jobStatusClass(job.status)}">
-        <div class="job-card-head">
-          <span class="status-badge ${jobStatusClass(job.status)}"><span class="dot"></span>${esc(label)}</span>
-          <span class="pill ${jobPillClass(job.status)}">${esc(job.status)}</span>
-        </div>
-        <div class="error-name" title="${esc(job.path)}">${esc(job.name)}</div>
-        <div class="error-path muted">${esc(job.path)}</div>
-        ${jobBar(job)}
-        ${skip ? `<div class="job-card-foot">${skip}</div>` : ""}
-      </article>`;
-    })
-    .join("");
-  return `<div class="job-section">
-    <h3 class="job-section-title">Archives in flight</h3>
-    <div class="job-grid">${cards}</div>
+  const renderCard = (job: JobView, withSkip: boolean): string => {
+    const label = job.phase || stageLabel(job.status);
+    const skip =
+      withSkip && job.status === "active"
+        ? `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive","id":"${job.id}"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>`
+        : "";
+    return `<article class="card job-card ${jobStatusClass(job.status)}">
+      <div class="job-card-head">
+        <span class="status-badge ${jobStatusClass(job.status)}"><span class="dot"></span>${esc(label)}</span>
+        <span class="pill ${jobPillClass(job.status)}">${esc(job.status)}</span>
+        <span class="queue-id">Queue ID #${job.id}</span>
+      </div>
+      <div class="error-name" title="${esc(job.path)}">${esc(job.name)}</div>
+      <div class="error-path muted">${esc(job.path)}</div>
+      ${jobBar(job)}
+      ${skip ? `<div class="job-card-foot">${skip}</div>` : ""}
+    </article>`;
+  };
+  const section = (title: string, list: JobView[], withSkip: boolean): string =>
+    list.length === 0
+      ? ""
+      : `<div class="job-section">
+    <h3 class="job-section-title">${esc(title)}</h3>
+    <div class="job-grid">${list.map((job) => renderCard(job, withSkip)).join("")}</div>
   </div>`;
-}
-
-function upcomingTable(rows: { order: number; id: number; path: string }[]): string {
-  if (rows.length === 0) return "";
-  const body = rows
-    .map(
-      (r) =>
-        `<tr><td class="queue-order">${r.order}</td><td title="${esc(r.path)}">${esc(r.path)}</td></tr>`,
-    )
-    .join("");
-  return `<div class="job-section">
-    <h3 class="job-section-title">Upcoming archives <span class="muted">(${rows.length})</span></h3>
-    <div class="queue-scroll"><table class="queue-table">
-      <thead><tr><th scope="col">#</th><th scope="col">Archive</th></tr></thead>
-      <tbody>${body}</tbody>
-    </table></div>
-  </div>`;
+  return (
+    section("Archives in flight", jobs.filter((j) => j.status === "active"), true) +
+    section("History", jobs.filter((j) => j.status !== "active"), false)
+  );
 }
 
 export async function progressPanel(): Promise<string> {
@@ -370,10 +334,6 @@ export async function progressPanel(): Promise<string> {
   const elapsed = formatDuration(elapsedMs);
   const cls = stateClass(s.stage, s.running);
   const label = s.activity || stageLabel(s.stage);
-  const archive = s.lastArchive || "—";
-  const command = s.lastCommand || "—";
-  const archiveLabel = s.running ? "Current archive" : "Last archive";
-  const commandLabel = s.running ? "Active command" : "Last command";
   const mutedNote =
     s.total === 0 && s.stage === "finished"
       ? `<p class="muted">No matching archives were found in this run.</p>`
@@ -397,32 +357,6 @@ export async function progressPanel(): Promise<string> {
         : s.outcome === "error"
           ? `<p class="warn-line">Error — ${esc(s.errorKind || "engine_error")}${reason ? `: ${esc(reason)}` : ""}${timeSuffix}. See the Logs page (Errors tab) for details.</p>`
           : "";
-  const commandBlock = s.activity
-    ? (() => {
-        const st = s.commandStats;
-        if (st) {
-          const pctText = st.percent === null ? "—" : `${Math.round(st.percent)}%`;
-          const width = st.percent === null ? 0 : Math.max(0, Math.min(100, st.percent));
-          const eta = st.etaText ? st.etaText : "—";
-          return `
-    <div class="extract-mini">
-      <div class="extract-mini-head">
-        <span class="extract-mini-label">${esc(s.activity)}</span>
-        <span class="extract-mini-value">${esc(formatBytes(st.bytesDone))} / ${esc(formatBytes(st.bytesTotal))} · ${esc(pctText)} · ${esc(formatRate(st.speedBytesPerSec))} · ETA ${esc(eta)}</span>
-      </div>
-      <div class="minibar" aria-hidden="true"><span style="width:${width.toFixed(1)}%"></span></div>
-    </div>`;
-        }
-        return `
-    <div class="extract-mini">
-      <div class="extract-mini-head">
-        <span class="extract-mini-label">${esc(s.activity)}</span>
-      </div>
-      <div class="minibar is-indeterminate" role="progressbar" aria-label="${esc(s.activity)}"><span></span></div>
-    </div>`;
-      })()
-    : "";
-
   return `<section class="progress-panel ${cls}">
     <header class="run-header">
       <div class="run-identity">
@@ -455,7 +389,6 @@ export async function progressPanel(): Promise<string> {
         <span><i class="legend-dot remain"></i>Remaining ${remaining}</span>
       </div>
       <div class="progress-count">${processed} of ${s.total} processed</div>
-      ${commandBlock}
     </div>
 
     <div class="stat-grid">
@@ -468,20 +401,11 @@ export async function progressPanel(): Promise<string> {
     </div>
 
     ${jobCards(s.jobs)}
-    ${upcomingTable(s.upcoming)}
 
     <dl class="detail-grid">
       <div>
         <dt>Scan root</dt>
         <dd>${esc(s.scanRoot || "—")} ${info("rclone remote or local path this app scans.", "Scan root")}</dd>
-      </div>
-      <div>
-        <dt>${archiveLabel}</dt>
-        <dd title="${esc(archive)}">${esc(archive)} ${info("Archive currently being processed (this run's last one when idle).", archiveLabel)}</dd>
-      </div>
-      <div>
-        <dt>${commandLabel}</dt>
-        <dd class="cmd" title="${esc(command)}">${esc(command)} ${info("rclone command currently running (or the last one that ran).", commandLabel)}</dd>
       </div>
       <div>
         <dt>Rate</dt>
