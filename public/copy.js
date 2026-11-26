@@ -137,7 +137,9 @@
       return;
     }
     var liveBtn = target.closest("[data-live-toggle]");
-    if (liveBtn && !liveBtn.disabled) {
+    if (liveBtn) {
+      // The global busy handler disables .btn in the capture phase; a genuinely
+      // disabled button never dispatches a click, so no guard is needed here.
       event.preventDefault();
       var which = liveBtn.getAttribute("data-live-toggle");
       var viewer = document.getElementById("logViewer");

@@ -406,7 +406,9 @@ const GLOBAL_SCRIPT = `<script>
       return;
     }
     var pager = event.target.closest ? event.target.closest("[data-queue-page]") : null;
-    if (pager && !pager.disabled) {
+    if (pager) {
+      // The global busy handler disables .btn in the capture phase, so do not
+      // gate on disabled here; the server clamps the requested page anyway.
       loadQueue(Number(pager.getAttribute("data-queue-page")));
       if (window.appUnmark) window.appUnmark(pager);
     }
