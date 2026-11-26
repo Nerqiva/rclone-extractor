@@ -28,6 +28,9 @@ beforeAll(async () => {
       "2026/11/23 10:00:00 ERROR: archive broken.zip: corrupt zip data",
       "skipped (tiny): broken.zip",
       "failed to unzip: invalid signature",
+      "---",
+      "$ rclone --config /data/tmp/c.conf purge tmp/broken",
+      "cleanup failed: permission denied",
     ],
   );
   const rows = await import("../src/errorrows");
@@ -35,13 +38,17 @@ beforeAll(async () => {
   renderErrorCards = rows.renderErrorCards;
 });
 
-test("error cards show raw native output without app wording", async () => {
+test("error cards show the failing command with raw native output", async () => {
   const rows = await readErrorRows(store);
   const row = rows.find((r) => Number(r.id) === archiveId);
   expect(row).toBeDefined();
   expect(row!.message).toContain("ERROR: archive broken.zip: corrupt zip data");
   expect(row!.message).toContain("failed to unzip: invalid signature");
-  expect(row!.message).not.toContain("$ rclone");
+  expect(row!.message).toContain("$ rclone");
+  expect(row!.message).toContain("archive extract");
+  expect(row!.message).not.toContain("purge");
+  expect(row!.message).not.toContain("cleanup failed");
+  expect(row!.message).not.toContain("---");
   expect(row!.message).not.toContain("skipped (tiny)");
   const html = renderErrorCards(rows);
   expect(html).toContain("ERROR: archive broken.zip: corrupt zip data");

@@ -298,10 +298,12 @@ verdict deterministic while unrelated groups run in parallel.
 
 The Progress page shows one card per in-flight archive with its own phase,
 transfer bar, byte counts and ETA, plus a summary strip with queued, active,
-done, failed, skipped and configured concurrency. Upcoming archives are listed
-in queue order. The **Skip archive** button on a card targets only that
-archive. **Stop** lets in-flight archives finish; **Force stop** kills all
-active processes and re-queues every in-flight archive.
+done, failed, skipped and configured concurrency. Finished archives also get a
+card, but only the four most recently failed ones are kept so old failures do
+not crowd the page. Upcoming archives are listed in queue order. The **Skip
+archive** button on a card targets only that archive. **Stop** lets in-flight
+archives finish; **Force stop** kills all active processes and re-queues every
+in-flight archive.
 
 ### Environment variables
 
@@ -474,11 +476,13 @@ Postgres.
 Each `*_extra_flags` field is appended only to its own subcommand. Nothing
 leaks into another command, and `--config` is always ignored. All rclone output streams are stored
 verbatim: the run log carries human-readable annotations plus every command
-the app runs, while each per-archive archive log holds the binary's raw
-output only (no app wording) — except for failures that produce no binary
-output at all, which store a single diagnostic line so downloads are never
-empty 404s (see the Errors page note below). The **Errors** page and
-per-archive downloads show that raw output.
+the app runs, while each per-archive archive log holds the binary's raw output
+grouped by command. A `---` separator and a `$ <redacted command>` line mark
+the start of each command's output, so a log with several commands is easy to
+read and the failing one is identifiable. Failures that produce no binary
+output at all store a single diagnostic line so downloads are never empty 404s
+(see the Errors page note below). The **Errors** page and per-archive downloads
+show that output.
 
 `promote` passes `--exclude /<tmp-top-segment>/**` (only when `tmp_dir` is a
 relative path nested inside the scan root) because `rclone move` refuses to
@@ -790,11 +794,11 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   deployments too.
 - The **Errors** page lists archives with `error_kind` set (except
   password-protected archives, see below) and has a **Copy all** button for a
-  tab-separated summary. Each card shows the last native error lines from
-  that archive's log, with app-written diagnostics filtered out. The row's
-  **Copy** / **Download** button fetches the full archive log, which stores
-  the raw rclone output of the failing command. The run error log also records
-  the redacted command that failed.
+  tab-separated summary. Each card shows the failing command and the last
+  native error lines it produced, with app-written diagnostics filtered out.
+  The row's **Copy** / **Download** button fetches the full archive log, where
+  a `---` separator and a `$ ` line delimit each command's raw output. The run
+  error log also records the redacted command that failed.
 - The **Password-protected** section on the Errors page lists every archive
   that reached a run but needs a password (a warning is logged and the run moves
   to the next archive; they are never extracted without one). Each row shows

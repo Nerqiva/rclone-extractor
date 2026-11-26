@@ -18,6 +18,8 @@ interface JobView {
   phase: string;
   command: string;
   stats: ExtractStats | null;
+  order: number;
+  finishedAt: string;
 }
 
 interface Snapshot {
@@ -62,10 +64,24 @@ function jobViews(): { jobs: JobView[]; upcoming: { order: number; id: number; p
       phase: job.phase,
       command: job.command,
       stats: job.stats,
+      order: job.order,
+      finishedAt: job.finishedAt,
     });
   }
   upcoming.sort((a, b) => a.order - b.order);
-  return { jobs, upcoming };
+  // Failed jobs stay in the map for the whole run; only the four newest are
+  // useful on the progress page.
+  const recentFailed = new Set(
+    jobs
+      .filter((j) => j.status === "failed")
+      .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt) || b.order - a.order)
+      .slice(0, 4)
+      .map((j) => j.id),
+  );
+  return {
+    jobs: jobs.filter((j) => j.status !== "failed" || recentFailed.has(j.id)),
+    upcoming,
+  };
 }
 
 const STAGE_LABEL: Record<string, string> = {

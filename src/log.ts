@@ -11,6 +11,13 @@ export const LOG_TAIL_LIMIT = 300;
 
 export const LOG_EXPORT_LIMIT = 50_000;
 
+/** Neutral delimiter written into archive logs before each command's output. */
+export const COMMAND_SEPARATOR = "---";
+
+export function commandMarker(command: string): string[] {
+  return [COMMAND_SEPARATOR, `$ ${command}`];
+}
+
 export interface LogRef {
   scope: LogScope;
   refId: number;

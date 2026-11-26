@@ -29,6 +29,9 @@ to `main`.
   targeted skip, the group rule under load, and the multi-archive views.
 
 ### Changed
+- **Archives in flight shows only the four most recent failures.** Older
+  failed archives stay in the run data but no longer accumulate as cards on
+  the Progress page.
 - **Stop semantics under concurrency.** Stop (soft) lets in-flight archives
   finish before the run ends; Force stop kills every active process and
   re-queues every in-flight archive. Run counters are now incremented
@@ -38,6 +41,10 @@ to `main`.
   archives depend on its verdict, while different groups run in parallel.
 
 ### Fixed
+- **Per-archive logs identify the failing command.** Each command that writes
+  to an archive log prepends a `---` separator and the redacted `$ command`,
+  so output from several commands is separated and the program that caused an
+  error is visible. Error cards show that command with the native error lines.
 - **Per-archive logs keep native binary errors.** `rclone archive list` can
   print its error on stdout as well as stderr. Only stderr was being saved to
   the archive log, so a failed inspection showed the app's `skipped (...)`

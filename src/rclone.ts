@@ -19,7 +19,7 @@ import {
 } from "./config";
 import { normalizeRcloneConf } from "./rcloneconf";
 import { EXTRA_FLAG_FIELDS, extraFlagKey, parseExtraFlags } from "./extraflags";
-import { insertLogLines } from "./log";
+import { insertLogLines, commandMarker } from "./log";
 import type { Logger } from "./log";
 
 type SpawnError = Error & { code?: string };
@@ -734,7 +734,6 @@ export class Rclone {
     ];
     const command = this.announce(args);
 
-    // No `$ command` pre-line: archive logs hold raw binary output only.
     const proc = spawnBinary(this.bin, args, {
       stdout: "pipe",
       stderr: "pipe",
@@ -785,12 +784,15 @@ export class Rclone {
     const nativeStderr = stderr.trim();
     const nativeOutput = [...stdoutLines, nativeStderr].filter(Boolean).join("\n");
     const failed = Boolean(streamError) || code !== 0;
+    // Marker and output go in one batch so concurrent writers keep their order.
+    const logLines = commandMarker(command);
     if (failed) {
       // Raw binary output only — except a completely silent failure, where a
       // neutral one-liner keeps Copy/Download from being an empty 404.
       const raw = [nativeOutput, streamError ?? ""].filter(Boolean).join("\n");
-      await insertLogLines(ref, (raw || `listing failed (exit ${code})`).split("\n"));
+      logLines.push(...(raw || `listing failed (exit ${code})`).split("\n"));
     }
+    await insertLogLines(ref, logLines);
 
     // The caller uses stderr to classify password failures; binary errors may
     // arrive on either stream, so expose both when the listing failed.
@@ -804,9 +806,9 @@ export class Rclone {
   }
 
   /**
-   * Run a command. When `ref` is given, the binary's raw output lines are
-   * appended to that archive's log; without a ref the command still goes to
-   * the run log via `announce()`. Archive logs never carry app wording.
+   * Run a command. When `ref` is given, a `$ command` marker and the binary's
+   * raw output lines are appended to that archive's log; without a ref the
+   * command still goes to the run log via `announce()`.
    */
   async run(args: string[], ref?: RcloneRef, extra: string[] = []): Promise<Outcome> {
     const full = [...this.confArgs(), ...args, ...extra];
@@ -831,7 +833,7 @@ export class Rclone {
       // Copy/Download is not an empty 404.
       combined.push(`command failed with exit ${code} (no output)`);
     }
-    if (ref) await insertLogLines(ref, combined);
+    if (ref) await insertLogLines(ref, [...commandMarker(command), ...combined]);
 
     return { code, tail: combined.slice(-40), stderr: err, command };
   }
@@ -839,9 +841,9 @@ export class Rclone {
   /**
    * Run a transfer command (archive extract, move, moveto) with `--stats`
    * output streamed line by line: per-second stats lines are forwarded live
-   * via `onStats` and kept out of the archive log; every other raw line the
-   * binary writes is appended verbatim (bounded batches, only the tail is
-   * kept in memory). Archive logs never carry app wording.
+   * via `onStats` and kept out of the archive log; a `$ command` marker and
+   * every other raw line the binary writes are appended verbatim (bounded
+   * batches, only the tail is kept in memory).
    */
   private async streamTransfer(
     args: string[],
@@ -852,7 +854,6 @@ export class Rclone {
     const full = [...this.confArgs(), ...args, ...extra];
     const command = this.announce(full);
 
-    // No `$ command` pre-line: archive logs hold raw binary output only.
     const proc = spawnBinary(this.bin, full, {
       stdout: "pipe",
       stderr: "pipe",
@@ -861,7 +862,7 @@ export class Rclone {
     // Output is streamed to the archive log in bounded batches instead of
     // buffered whole; only the tail is kept for the returned Outcome.
     const LOG_BATCH = 100;
-    let pending: string[] = [];
+    let pending: string[] = commandMarker(command);
     let loggedLines = 0;
     let flushChain: Promise<void> = Promise.resolve();
     const flush = (force = false): void => {

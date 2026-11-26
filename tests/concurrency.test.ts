@@ -394,6 +394,52 @@ test("the polled fragment renders one card per job, the summary strip, and the q
   expect(html).toContain('hx-vals=\'{"target":"archive","id":"1"}\'');
 });
 
+test("only the four newest failed archives appear in flight", async () => {
+  engineState.runId = 1;
+  engineState.running = true;
+  engineState.stage = "extracting";
+  engineState.startedAt = new Date().toISOString();
+  engineState.concurrency = 3;
+  const base = Date.parse("2026-11-23T10:00:00.000Z");
+  const mkJob = (id: number, order: number, status: "active" | "failed", offset: number) => ({
+    id,
+    rel: `dir${id}/archive${id}.zip`,
+    baseName: `archive${id}.zip`,
+    order,
+    status,
+    phase: "",
+    command: "",
+    stats: null,
+    skipArchive: false,
+    skipInspection: false,
+    groupKey: null,
+    startedAt: "",
+    finishedAt: status === "failed" ? new Date(base + offset).toISOString() : "",
+  });
+  engineState.jobs = new Map([
+    [1, mkJob(1, 0, "active", 0)],
+    [2, mkJob(2, 1, "failed", 1)],
+    [3, mkJob(3, 2, "failed", 2)],
+    [4, mkJob(4, 3, "failed", 3)],
+    [5, mkJob(5, 4, "failed", 4)],
+    [6, mkJob(6, 5, "failed", 5)],
+    [7, mkJob(7, 6, "failed", 6)],
+  ]);
+  engineState.activeIds = new Set([1]);
+
+  const { dashboard } = await import("../src/routes/dashboard");
+  const app = new Hono();
+  app.route("/", dashboard);
+  const html = await (await app.request("/dashboard/fragment")).text();
+
+  expect(count(html, 'class="card job-card')).toBe(5);
+  expect(html).toContain("dir1/archive1.zip");
+  expect(html).toContain("dir4/archive4.zip");
+  expect(html).toContain("dir7/archive7.zip");
+  expect(html).not.toContain("dir2/archive2.zip");
+  expect(html).not.toContain("dir3/archive3.zip");
+});
+
 test("the archives tab renders live phase and a bar for in-flight rows", async () => {
   const html = renderArchiveLogRows(
     [

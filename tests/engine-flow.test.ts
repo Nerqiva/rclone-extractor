@@ -155,7 +155,7 @@ test("run log and error log include the active rclone command", async () => {
   expect(commandLine).toBeDefined();
 });
 
-test("per-archive log holds the raw binary output, not app lines", async () => {
+test("per-archive log marks the failing command and holds raw binary output", async () => {
   const row = await db!.store.get1<{ id: number }>(
     "SELECT id FROM archives WHERE path='a/c.zip'",
   );
@@ -167,8 +167,24 @@ test("per-archive log holds the raw binary output, not app lines", async () => {
   });
   // The raw stderr of the failed extract is stored verbatim...
   expect(lines.some((line) => line.includes("password required"))).toBe(true);
-  // ...and no app-written command line is added.
-  expect(lines.some((line) => line.includes("$ rclone"))).toBe(false);
+  // ...preceded by the command that produced it and a separator.
+  expect(lines.some((line) => line.includes("$ rclone") && line.includes("archive extract"))).toBe(true);
+  expect(lines.some((line) => line.includes("---"))).toBe(true);
+  expect(lines.some((line) => line.includes("skipped ("))).toBe(false);
+});
+
+test("archive log separates each command with a marker", async () => {
+  const row = await db!.store.get1<{ id: number }>(
+    "SELECT id FROM archives WHERE path='a/b.zip'",
+  );
+  expect(row).toBeDefined();
+  const lines = await readAll({
+    scope: "archive",
+    refId: Number(row!.id),
+    kind: "extract",
+  });
+  expect(lines.filter((line) => line.includes("$ rclone")).length).toBeGreaterThanOrEqual(3);
+  expect(lines.some((line) => line.includes("---"))).toBe(true);
 });
 
 test("promote command excludes the tmp workspace from the destination", async () => {
@@ -198,8 +214,7 @@ test("temp parents are removed (rmdir) after processing", async () => {
     refId: Number(row!.id),
     kind: "extract",
   });
-  // The per-archive archive log holds raw binary output only — the rmdir
-  // command line is an app line and lives in the run log.
+  // rmdir has no archive ref, so its marker stays in the run log.
   expect(lines.some((line) => line.includes("$ rclone rmdir"))).toBe(false);
 
   const main = await readAll({

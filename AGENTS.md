@@ -82,9 +82,10 @@ you add/remove an endpoint, env var, or setting.**
 - Secrets (`rclone.conf`, database URL, `rclonex_archive_password`) are
   encrypted at rest with AES-256-GCM when `SECRET_KEY` is set — never log
   them, never render them.
-- Per-archive logs hold **raw binary output only** — no app wording. App
-  diagnostics for webapp failures go through `appendRawLines` as neutral
-  one-liners; user-facing toasts carry `HX-Trigger`.
+- Per-archive logs hold the binary's raw output grouped by command. A `---`
+  separator and a `$ <redacted command>` line mark each command's output; no
+  app-written summaries. App diagnostics for webapp failures go through
+  `appendRawLines` as neutral one-liners; user-facing toasts carry `HX-Trigger`.
 - Skip state is **never persisted** — skips are per-run, in-memory only.
 - The archive file is never deleted outright by the app: "Delete" means
   *move to the trash subdir*. Moves overwrite an existing destination file
