@@ -189,7 +189,6 @@
       if (note) note.textContent = "session finished \u2014 polling stopped";
       var btn = document.querySelector('[data-live-toggle="log"]');
       if (btn) {
-        btn.textContent = "Live preview";
         btn.disabled = true;
         btn.title = "Session finished";
       }
@@ -208,9 +207,9 @@
         .then(function (response) { return response.ok ? response.json() : null; })
         .then(function (data) {
           if (!data) return;
-          if (typeof data.lastId === "number" && data.lastId > 0) lastId = data.lastId;
-          if (viewer.dataset.live === "1" && data.entries && data.entries.length) {
-            appendEntries(data.entries);
+          if (viewer.dataset.live === "1") {
+            if (data.entries && data.entries.length) appendEntries(data.entries);
+            if (typeof data.lastId === "number" && data.lastId > 0) lastId = data.lastId;
           }
           if (data.finishedAt) markFinished();
         })

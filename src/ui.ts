@@ -370,11 +370,11 @@ const GLOBAL_SCRIPT = `<script>
       btn.setAttribute("aria-expanded", hidden ? "false" : "true");
     }
   }
-  function loadQueue(page) {
+  function loadQueue(page, quiet) {
     var body = document.getElementById("queuePanelBody");
     if (!body) return;
     body.setAttribute("data-page", String(page));
-    body.innerHTML = '<p class="muted">Loading…</p>';
+    if (!quiet) body.innerHTML = '<p class="muted">Loading…</p>';
     fetch("/dashboard/queue?page=" + encodeURIComponent(String(page)), {
       credentials: "same-origin",
       cache: "no-store",
@@ -392,7 +392,7 @@ const GLOBAL_SCRIPT = `<script>
     var body = document.getElementById("queuePanelBody");
     if (!panel || panel.hidden || !body || document.hidden) return;
     syncQueueButtons();
-    loadQueue(Number(body.getAttribute("data-page") || "1"));
+    loadQueue(Number(body.getAttribute("data-page") || "1"), true);
   }
   document.body.addEventListener("click", function (event) {
     var toggle = event.target.closest ? event.target.closest("[data-queue-toggle]") : null;
