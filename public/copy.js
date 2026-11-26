@@ -5,6 +5,23 @@
     if (typeof window.appToast === "function") window.appToast(message, kind);
   }
 
+  // Live preview state is shared by the run-log viewer and the Errors page:
+  // both pause on scroll-up and resume from the last fetched position.
+  var setLogLive = function () {};
+  var setErrorsLive = function () {};
+
+  function nearBottom(box) {
+    return box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  }
+
+  function syncToggle(which, on) {
+    var btn = document.querySelector('[data-live-toggle="' + which + '"]');
+    if (!btn) return;
+    btn.textContent = on ? "Live preview" : "Manual view";
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    if (window.appUnmark) window.appUnmark(btn);
+  }
+
   function isSecureContext() {
     try {
       return window.isSecureContext === true;
@@ -119,19 +136,29 @@
       void handleCopyTable(tableBtn);
       return;
     }
+    var liveBtn = target.closest("[data-live-toggle]");
+    if (liveBtn && !liveBtn.disabled) {
+      event.preventDefault();
+      var which = liveBtn.getAttribute("data-live-toggle");
+      var viewer = document.getElementById("logViewer");
+      var cards = document.getElementById("errorCards");
+      if (which === "log" && viewer) setLogLive(viewer.dataset.live !== "1");
+      if (which === "errors" && cards) setErrorsLive(cards.dataset.live !== "1");
+      if (window.appUnmark) window.appUnmark(liveBtn);
+    }
   });
 
 
   var viewer = document.getElementById("logViewer");
-  if (viewer && viewer.dataset.live === "1") {
+  if (viewer) {
     var runId = Number(viewer.dataset.run);
     var kind = viewer.dataset.kind;
     var lastId = Number(viewer.dataset.lastId || "0");
+    var logTimer = null;
 
     function appendEntries(htmlStrings) {
       if (!htmlStrings || !htmlStrings.length) return;
-      var nearBottom =
-        viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 80;
+      var wasNearBottom = nearBottom(viewer);
       var current = viewer.children.length;
       if (current + htmlStrings.length > 1500) {
         var remove = current + htmlStrings.length - 1500;
@@ -146,11 +173,11 @@
         while (wrap.firstChild) frag.appendChild(wrap.firstChild);
       });
       viewer.appendChild(frag);
-      if (nearBottom) viewer.scrollTop = viewer.scrollHeight;
+      if (wasNearBottom) viewer.scrollTop = viewer.scrollHeight;
     }
 
     function markFinished() {
-      viewer.dataset.live = "0";
+      setLogLive(false);
       var pill = document.getElementById("livePill");
       if (pill) {
         pill.className = "pill ok";
@@ -158,11 +185,16 @@
       }
       var note = document.getElementById("liveNote");
       if (note) note.textContent = "session finished \u2014 polling stopped";
-      window.clearInterval(timer);
+      var btn = document.querySelector('[data-live-toggle="log"]');
+      if (btn) {
+        btn.textContent = "Live preview";
+        btn.disabled = true;
+        btn.title = "Session finished";
+      }
     }
 
-    function poll() {
-      if (document.hidden) return;
+    var pollLog = function () {
+      if (viewer.dataset.live !== "1" || document.hidden) return;
       var url =
         "/logs/fragment?run=" +
         runId +
@@ -171,56 +203,104 @@
         "&after=" +
         lastId;
       fetch(url, { credentials: "same-origin", cache: "no-store" })
-        .then(function (response) {
-          if (!response.ok) return;
-          return response.json().then(function (data) {
-            if (data.entries && data.entries.length) {
-              appendEntries(data.entries);
-            }
-            if (typeof data.lastId === "number" && data.lastId > 0) {
-              lastId = data.lastId;
-            }
-            if (data.finishedAt) markFinished();
-          });
-        })
-        .catch(function () {
-          /* transient network error; retry on the next tick */
-        });
-    }
-
-    var timer = window.setInterval(poll, 2000);
-    poll();
-  }
-
-
-  var errorCards = document.getElementById("errorCards");
-  if (errorCards && errorCards.dataset.live === "1") {
-    var pollErrors = function () {
-      if (document.hidden) return;
-      fetch("/errors/fragment", {
-        credentials: "same-origin",
-        cache: "no-store",
-      })
-        .then(function (response) {
-          if (!response.ok) return;
-          var live = response.headers.get("X-Engine-Live") !== "0";
-          return response.text().then(function (html) {
-            errorCards.innerHTML = html;
-            if (!live) {
-              window.clearInterval(errorsTimer);
-              errorCards.dataset.live = "0";
-              var pill = document.getElementById("livePill");
-              if (pill) {
-                pill.className = "pill ok";
-                pill.textContent = "finished";
-              }
-            }
-          });
+        .then(function (response) { return response.ok ? response.json() : null; })
+        .then(function (data) {
+          if (!data) return;
+          if (typeof data.lastId === "number" && data.lastId > 0) lastId = data.lastId;
+          if (viewer.dataset.live === "1" && data.entries && data.entries.length) {
+            appendEntries(data.entries);
+          }
+          if (data.finishedAt) markFinished();
         })
         .catch(function () {
           /* transient network error; retry on the next tick */
         });
     };
-    var errorsTimer = window.setInterval(pollErrors, 3000);
+
+    setLogLive = function (on) {
+      viewer.dataset.live = on ? "1" : "0";
+      syncToggle("log", on);
+      var note = document.getElementById("liveNote");
+      if (note) {
+        note.textContent = on
+          ? "polling 2s \u2014 scroll up to pause"
+          : "paused \u2014 scroll to the bottom to resume";
+      }
+      if (on) {
+        if (!logTimer) logTimer = window.setInterval(pollLog, 2000);
+        pollLog();
+      } else if (logTimer) {
+        window.clearInterval(logTimer);
+        logTimer = null;
+      }
+    };
+
+    viewer.addEventListener("scroll", function () {
+      if (viewer.dataset.live === "1" && !nearBottom(viewer)) setLogLive(false);
+    });
+    if (viewer.dataset.live === "1") setLogLive(true);
+  }
+
+
+  var errorCards = document.getElementById("errorCards");
+  if (errorCards) {
+    var errorsTimer = null;
+
+    var pollErrors = function () {
+      if (errorCards.dataset.live !== "1" || document.hidden) return;
+      fetch("/errors/fragment", {
+        credentials: "same-origin",
+        cache: "no-store",
+      })
+        .then(function (response) {
+          if (!response.ok) return null;
+          var live = response.headers.get("X-Engine-Live") !== "0";
+          return response.text().then(function (html) {
+            return { html: html, live: live };
+          });
+        })
+        .then(function (payload) {
+          if (!payload) return;
+          if (errorCards.dataset.live === "1") {
+            var atBottom = nearBottom(errorCards);
+            var top = errorCards.scrollTop;
+            errorCards.innerHTML = payload.html;
+            errorCards.scrollTop = atBottom ? errorCards.scrollHeight : top;
+          }
+          if (!payload.live) {
+            setErrorsLive(false);
+            var pill = document.getElementById("livePill");
+            if (pill) {
+              pill.className = "pill ok";
+              pill.textContent = "finished";
+            }
+          }
+        })
+        .catch(function () {
+          /* transient network error; retry on the next tick */
+        });
+    };
+
+    setErrorsLive = function (on) {
+      errorCards.dataset.live = on ? "1" : "0";
+      syncToggle("errors", on);
+      var pill = document.getElementById("livePill");
+      if (pill) {
+        pill.className = on ? "pill warn" : "pill";
+        pill.textContent = on ? "live" : "paused";
+      }
+      if (on) {
+        if (!errorsTimer) errorsTimer = window.setInterval(pollErrors, 3000);
+        pollErrors();
+      } else if (errorsTimer) {
+        window.clearInterval(errorsTimer);
+        errorsTimer = null;
+      }
+    };
+
+    errorCards.addEventListener("scroll", function () {
+      if (errorCards.dataset.live === "1" && !nearBottom(errorCards)) setErrorsLive(false);
+    });
+    if (errorCards.dataset.live === "1") setErrorsLive(true);
   }
 })();

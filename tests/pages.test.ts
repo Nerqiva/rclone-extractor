@@ -117,6 +117,32 @@ test("Logs page renders and lists no runs", async () => {
   expect(body).not.toContain("tab=password");
 });
 
+test("Logs page offers a live-preview toggle for a running session", async () => {
+  const db = await import("../src/db");
+  const runId = await db.store.insertReturningId(
+    "INSERT INTO runs(started_at, total) VALUES(?, 0)",
+    [new Date().toISOString()],
+  );
+  engineState.running = true;
+  engineState.runId = runId;
+  const res = await app.request(`/logs?run=${runId}`);
+  const body = await res.text();
+  expect(body).toContain('id="logViewer"');
+  expect(body).toContain('data-live="1"');
+  expect(body).toContain('data-live-toggle="log"');
+  expect(body).toContain("Live preview");
+});
+
+test("Errors page offers a live-preview toggle while a task runs", async () => {
+  engineState.running = true;
+  engineState.runId = 1;
+  const res = await app.request("/errors");
+  const body = await res.text();
+  expect(body).toContain('id="errorCards"');
+  expect(body).toContain('data-live="1"');
+  expect(body).toContain('data-live-toggle="errors"');
+});
+
 test("Errors page renders both sections (failures and password-protected)", async () => {
   const res = await app.request("/errors");
   expect(res.status).toBe(200);
