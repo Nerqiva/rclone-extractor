@@ -69,6 +69,7 @@ export function renderArchiveLogRows(
       return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
+          <span class="queue-id">Queue ID #${id}</span>
           ${phase}${pill}
         </div>
         <div class="error-path muted">${esc(r.path)}</div>

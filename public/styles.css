@@ -1614,7 +1614,8 @@ button[disabled] {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.job-card-head .queue-id {
+.job-card-head .queue-id,
+.error-card-head .queue-id {
   font-size: 11px;
 }
 .controls-idle {
