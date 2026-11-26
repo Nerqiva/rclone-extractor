@@ -8,6 +8,11 @@ import { TMP_DIR } from "./tmpdir";
 import { TRASH } from "./archive";
 import { EXTRA_FLAG_FIELDS } from "./extraflags";
 
+function queueToggleButton(): string {
+  const queued = [...engineState.jobs.values()].filter((j) => j.status === "queued").length;
+  return `<button class="btn small ghost" type="button" data-queue-toggle data-queue-count="${queued}" aria-expanded="false" aria-controls="queuePanel">Show Queue (${queued})</button>`;
+}
+
 export function controlsFragment(): string {
   const running = engineState.running;
   if (!running) {
@@ -15,6 +20,7 @@ export function controlsFragment(): string {
     <form class="controls-start" hx-post="/run/start" hx-target="#controls" hx-swap="outerHTML">
       <div class="btn-row">
         <button class="btn primary" type="submit"><span class="spinner" aria-hidden="true"></span>Start</button>
+        ${queueToggleButton()}
       </div>
     </form>
   </div>`;
@@ -22,6 +28,7 @@ export function controlsFragment(): string {
   if (engineState.forceStop) {
     return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
     <span class="controls-note warn-line stop-note">Stopping immediately — in-flight archives were aborted…</span>
+    ${queueToggleButton()}
     <button class="btn danger solid is-loading btn-stop" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
   </div>`;
   }
@@ -65,6 +72,7 @@ export function controlsFragment(): string {
   return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
     ${note}
     ${skipCluster}
+    ${queueToggleButton()}
     <button class="btn danger btn-stop" data-modal-open="stop-modal">Stop</button>${info(
       "Soft stop: in-flight archives finish, then the run stops. Hard stop: all in-flight archives are aborted immediately.",
       "Stop",

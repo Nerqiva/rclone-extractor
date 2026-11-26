@@ -34,6 +34,8 @@ afterEach(() => {
   engineState.running = false;
   engineState.runId = 0;
   engineState.stage = "idle";
+  engineState.jobs = new Map();
+  engineState.activeIds = new Set();
 });
 
 test("Progress page renders", async () => {
@@ -42,6 +44,40 @@ test("Progress page renders", async () => {
   const body = await res.text();
   expect(body).toContain("<title>Progress · rclone-extractor</title>");
   expect(body).toContain("Start, stop and watch the current task.");
+  expect(body).toContain('data-queue-toggle');
+  expect(body).toContain('Show Queue (0)');
+  expect(body).toContain('id="queuePanel"');
+  expect(body).toContain('id="queuePanelBody"');
+  // The panel sits outside the poll-swapped progress panel.
+  expect(body.indexOf('id="dashboard-panel"')).toBeLessThan(body.indexOf('id="queuePanel"'));
+  expect(body).not.toContain("Current archive");
+  expect(body).not.toContain("Active command");
+  expect(body).not.toContain("Upcoming archives");
+});
+
+test("the queue toggle counts queued archives", async () => {
+  engineState.jobs = new Map([
+    [
+      5,
+      {
+        id: 5,
+        rel: "incoming/a.zip",
+        baseName: "a.zip",
+        order: 0,
+        status: "queued" as const,
+        phase: "",
+        command: "",
+        stats: null,
+        skipArchive: false,
+        skipInspection: false,
+        groupKey: null,
+        startedAt: "",
+        finishedAt: "",
+      },
+    ],
+  ]);
+  const res = await app.request("/");
+  expect(await res.text()).toContain("Show Queue (1)");
 });
 
 test("Configuration page renders the sectioned plain-English form", async () => {
@@ -55,6 +91,7 @@ test("Configuration page renders the sectioned plain-English form", async () => 
   }
   expect(body).toContain("Scan root");
   expect(body).toContain("scan_root"); // stored key stays visible
+  expect(body).toMatch(/name="concurrency"[^>]*step="1"/);
 });
 
 test("Configuration page stays editable while a task runs", async () => {

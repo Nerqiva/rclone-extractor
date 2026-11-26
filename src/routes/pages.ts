@@ -28,7 +28,13 @@ pages.get("/", async (c) => {
     layout(
       "Progress",
       `<div id="dashboard-panel" hx-get="/dashboard/fragment" hx-trigger="every 1s" hx-swap="innerHTML">${panel}</div>
-      <div class="controls-dock">${controls}</div>${noticeScript}`,
+      <div class="controls-dock">
+        ${controls}
+        <div id="queuePanel" class="queue-panel" hidden>
+          <h2 class="section-title">Queue</h2>
+          <div id="queuePanelBody"></div>
+        </div>
+      </div>${noticeScript}`,
       "dashboard",
       csrfFor(c),
       "Start, stop and watch the current task.",

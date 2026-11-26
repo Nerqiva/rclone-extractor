@@ -1582,8 +1582,40 @@ button[disabled] {
 
 .controls-dock {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
   margin-top: 14px;
+}
+.queue-panel {
+  width: 100%;
+  max-width: 720px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 10px;
+}
+.queue-panel[hidden] {
+  display: none;
+}
+.queue-panel .section-title {
+  margin: 0 0 10px;
+}
+.queue-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.queue-id {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.job-card-head .queue-id {
+  font-size: 11px;
 }
 .controls-idle {
   display: flex;
