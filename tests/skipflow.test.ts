@@ -177,6 +177,24 @@ test("a skip asked while the trash move finishes does not re-queue the archive",
   expect(engine.engineState.skipped).toBe(0);
 });
 
+test("requestSkipArchive is refused once the move to trash has started", async () => {
+  const gate = `${base}/trash-gate`;
+  writeFileSync(gate, "");
+  process.env.RCLONE_TRASH_GATE = gate;
+  const done = engine.runEngine();
+  const sawTrash = await waitFor(
+    () => engine.engineState.activity === "Moving to trash",
+  );
+  expect(sawTrash).toBe(true);
+  expect(engine.requestSkipArchive()).toBe(false);
+  rmSync(gate, { force: true });
+  await done;
+  const row = await db!.store.get1<{ status: string }>(
+    "SELECT status FROM archives WHERE path='victim.zip'",
+  );
+  expect(row?.status).toBe("done");
+});
+
 test("skip requests are rejected outside their stage", async () => {
   engine.engineState.running = false;
   expect(engine.requestSkipListing()).toBe(false);

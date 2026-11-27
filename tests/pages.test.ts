@@ -147,12 +147,12 @@ test("Errors page offers a live-preview toggle while a task runs", async () => {
   expect(body).toContain('data-live-toggle="errors"');
 });
 
-test("Errors page renders both sections (failures and password-protected)", async () => {
+test("Errors page renders failures and one Skipped section", async () => {
   const res = await app.request("/errors");
   expect(res.status).toBe(200);
   const body = await res.text();
   expect(body).toContain("<title>Errors · rclone-extractor</title>");
   expect(body).toContain("Failed archives");
-  expect(body).toContain("Password-protected");
+  expect(body).toContain("Skipped archives");
   expect(body).toContain("No password-protected archives.");
 });

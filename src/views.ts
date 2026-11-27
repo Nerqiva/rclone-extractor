@@ -51,7 +51,11 @@ export function controlsFragment(): string {
       )}`,
     );
   }
-  if (stage === "extracting" && engineState.archiveInFlight) {
+  if (
+    stage === "extracting" &&
+    engineState.archiveInFlight &&
+    activity !== "Moving to trash"
+  ) {
     skips.push(
       `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>${info(
         "Leave this archive queued; it retries next run. This run only.",
@@ -306,7 +310,6 @@ export async function configForm(note = ""): Promise<string> {
   )}
   ${section(
     "RcloneX",
-    toggleRow("rclonex", "Enable RcloneX", s.rclonex === "1", "Extract RAR/7Z/ISO with rclonex; everything else stays on rclone.") +
     `<div class="setting setting-toggle setting-compound">
       <span class="setting-label"><input type="checkbox" name="rclonex_archive_password_enabled" id="rclonex-pw"${s.rclonex_archive_password_enabled === "1" ? " checked" : ""}> <label for="rclonex-pw">Archive password <code class="setting-key">rclonex_archive_password</code> ${info("Password for encrypted RAR/7Z archives. Blank keeps the stored one.", "rclonex_archive_password")}</label></span>
       <span class="field-inline">

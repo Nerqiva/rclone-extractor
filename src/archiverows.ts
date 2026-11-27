@@ -1,4 +1,5 @@
 import { store } from "./db";
+import { MAX_RETRIES } from "./engine";
 import { esc } from "./ui";
 import { formatBytes } from "./format";
 import { baseNameOf } from "./domain";
@@ -9,6 +10,8 @@ export interface LiveArchiveState {
   phase: string;
   status: string;
   stats: ExtractStats | null;
+  attempt: number;
+  cooldownUntil: number;
 }
 
 
@@ -36,6 +39,16 @@ const PILL: Record<string, [string, string]> = {
   deleted: ["", "in trash"],
   queued: ["", "queued"],
 };
+
+function retryBadge(attempt: number, cooldownUntil: number): string {
+  if (attempt <= 1) return "";
+  const now = Date.now();
+  const retry = `<span class="retry-info">retry ${attempt - 1}/${MAX_RETRIES}</span>`;
+  const cooling = cooldownUntil > now
+    ? `<span class="cooldown-info">cooldown ${Math.ceil((cooldownUntil - now) / 1000)}s</span>`
+    : "";
+  return retry + cooling;
+}
 
 export function renderArchiveLogRows(
   rows: ArchiveLogRow[],
@@ -72,6 +85,7 @@ export function renderArchiveLogRows(
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
           <span class="queue-id">Queue ID #${id}</span>
           ${phase}${pill}
+          ${live ? retryBadge(live.attempt, live.cooldownUntil) : ""}
         </div>
         <div class="error-path muted">${esc(r.path)}</div>
         ${bar}

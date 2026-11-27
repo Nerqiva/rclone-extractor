@@ -31,14 +31,6 @@ export const EXTRA_FLAG_FIELDS: readonly ExtraFlagField[] = [
     desc: "Extra flags for rclone archive list (pre-extraction inspection).",
   },
   {
-    key: "extract_extra_flags",
-    label: "Extraction (archive extract)",
-    binary: "rclone",
-    command: "archive extract",
-    desc: "Extra flags for rclone archive extract.",
-    fromLegacyRemoteFlags: true,
-  },
-  {
     key: "rclonex_extract_extra_flags",
     label: "RcloneX extraction (archive extract)",
     binary: "rclonex",

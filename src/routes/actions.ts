@@ -117,7 +117,6 @@ const SETTING_KEYS = [
   "scan_root",
   "lsf_extra_flags",
   "archive_list_extra_flags",
-  "extract_extra_flags",
   "rclonex_extract_extra_flags",
   "move_extra_flags",
   "moveto_extra_flags",
@@ -384,7 +383,6 @@ actions.post("/config", async (c) => {
   if (cooldownStored !== undefined) {
     await setSetting("retry_cooldown_seconds", cooldownStored);
   }
-  await setSetting("rclonex", form.get("rclonex") !== null ? "1" : "0");
   await setSetting(
     "auto_skip_known",
     form.get("auto_skip_known") !== null ? "1" : "0",

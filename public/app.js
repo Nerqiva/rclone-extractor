@@ -7,6 +7,21 @@
   // morphdom patches changed nodes in place, so a poll leaves text selection
   // and scroll position alone. childrenOnly keeps target ids and JS attributes.
   function morphInto(target, html) {
+    // A poll must not close a log the reader has open. Save its contents and
+    // restored state across the morph, then put them back on the new nodes.
+    var openLogs = [];
+    if (target.querySelectorAll) {
+      var before = target.querySelectorAll(".log-viewer");
+      for (var b = 0; b < before.length; b++) {
+        if (!before[b].hidden) {
+          openLogs.push({
+            id: before[b].id,
+            html: before[b].innerHTML,
+            loaded: before[b].dataset.loaded || "",
+          });
+        }
+      }
+    }
     var wrap = document.createElement("div");
     if (typeof html === "string") wrap.innerHTML = html;
     else while (html.firstChild) wrap.appendChild(html.firstChild);
@@ -15,6 +30,20 @@
       morphdom(target, root);
     } else {
       morphdom(target, wrap, { childrenOnly: true });
+    }
+    for (var i = 0; i < openLogs.length; i++) {
+      var saved = openLogs[i];
+      var after = target.querySelectorAll(".log-viewer");
+      for (var j = 0; j < after.length; j++) {
+        if (after[j].id !== saved.id) continue;
+        after[j].hidden = false;
+        after[j].dataset.loaded = saved.loaded;
+        if (!after[j].innerHTML && saved.html) after[j].innerHTML = saved.html;
+        var toggleId = after[j].id.split("-log-").pop();
+        var toggle = target.querySelector('[data-log-toggle="' + toggleId + '"]');
+        if (toggle) toggle.setAttribute("aria-expanded", "true");
+        break;
+      }
     }
   }
   window.appMorph = morphInto;

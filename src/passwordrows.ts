@@ -3,6 +3,7 @@ import { esc } from "./ui";
 import { formatBytes } from "./format";
 import { baseNameOf } from "./domain";
 import { relativeTime } from "./errorrows";
+import { stageOf } from "./log";
 import { engineState } from "./engine";
 
 
@@ -12,12 +13,26 @@ export interface PasswordRow {
   size: number | string;
   status: string;
   updated_at: string;
+  stage: string;
 }
 
 export async function readPasswordRows(): Promise<PasswordRow[]> {
-  return store.query<PasswordRow>(
+  const rows = await store.query<Omit<PasswordRow, "stage">>(
     "SELECT id, path, size, status, updated_at FROM archives WHERE error_kind='password' ORDER BY updated_at DESC LIMIT 200",
   );
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => Number(r.id));
+  const placeholders = ids.map(() => "?").join(", ");
+  const lines = await store.query<{ ref_id: number; line: string }>(
+    `SELECT ref_id, line FROM log_lines WHERE scope='archive' AND kind='extract' AND ref_id IN (${placeholders}) ORDER BY id DESC LIMIT ?`,
+    [...ids, ids.length * 80],
+  );
+  const stages = new Map<number, string>();
+  for (const entry of lines) {
+    const stage = stageOf(entry.line);
+    if (stage && !stages.has(Number(entry.ref_id))) stages.set(Number(entry.ref_id), stage);
+  }
+  return rows.map((r) => ({ ...r, stage: stages.get(Number(r.id)) ?? "" }));
 }
 
 /** Render the outerHTML-swappable list container for the password section. */
@@ -45,6 +60,7 @@ export function renderPasswordList(rows: PasswordRow[]): string {
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
           <span class="queue-id">Queue ID #${id}</span>
+          ${r.stage ? `<span class="stage-badge">failed at ${esc(r.stage)}</span>` : ""}
           ${pill}
         </div>
         <div class="error-path muted">${esc(r.path)}</div>

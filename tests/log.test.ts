@@ -45,4 +45,27 @@ test("error() detail block folds and rows survive the round trip", async () => {
   expect(html).toContain("line one");
   expect(html).toContain("line two");
   expect(html).toContain("log-detail-pre");
+  expect(html).toContain("<details");
+  expect(html).toContain(" open>");
+});
+
+test("staged command markers render a colour-coded stage chip", async () => {
+  const ref = { scope: "archive" as const, refId: 987003, kind: "extract" as const };
+  const { insertLogLines, stageOf, tailRendered } = await import("../src/log");
+  await insertLogLines(ref, [
+    "---",
+    "$ [Extracting] rclonex archive extract in.zip tmp",
+    "raw output line",
+    "---",
+    "$ [Moving to trash] rclone moveto in.zip .Trash/in.zip",
+    "moved",
+  ]);
+  expect(stageOf("$ [Extracting] rclonex archive extract in.zip tmp")).toBe("Extracting");
+  expect(stageOf("$ rclone archive extract in.zip tmp")).toBe("");
+  const { entries } = await tailRendered(ref, 50);
+  const html = entries.map((e) => e.html).join("\n");
+  expect(html).toContain('class="log-entry log-cmd log-cmd-stage"');
+  expect(html).toContain('class="log-stage">Extracting</span>');
+  expect(html).toContain("raw output line");
+  expect(html).toContain("Moving to trash");
 });

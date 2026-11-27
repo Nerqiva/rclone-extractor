@@ -47,24 +47,24 @@ test("multiVolumePart detects rar/7z multivolume shapes", () => {
   expect(multiVolumePart("a.part1.7z")).toBeNull();
 });
 
-test("isSupported: rclonex formats only when enabled, first volume only", () => {
-  expect(isSupported("a.rar")).toBe(false);
-  expect(isSupported("a.7z")).toBe(false);
-  expect(isSupported("a.iso")).toBe(false);
-  expect(isSupported("a.rar", true)).toBe(true);
-  expect(isSupported("a.7z", true)).toBe(true);
-  expect(isSupported("a.iso", true)).toBe(true);
-  expect(isSupported("a.part1.rar", true)).toBe(true);
-  expect(isSupported("a.part01.rar", true)).toBe(true);
-  expect(isSupported("a.part2.rar", true)).toBe(false);
-  expect(isSupported("a.part10.rar", true)).toBe(false);
-  expect(isSupported("a.r00", true)).toBe(false);
-  expect(isSupported("a.r99", true)).toBe(false);
-  expect(isSupported("a.7z.001", true)).toBe(true);
-  expect(isSupported("a.7z.002", true)).toBe(false);
-  expect(isSupported("a.7Z.001", true)).toBe(true);
-  expect(isSupported("a.zip", true)).toBe(true);
-  expect(isSupported("a.tar.zst", true)).toBe(true);
+test("isSupported: first volume only, rclonex formats always supported", () => {
+  expect(isSupported("a.rar")).toBe(true);
+  expect(isSupported("a.7z")).toBe(true);
+  expect(isSupported("a.iso")).toBe(true);
+  expect(isSupported("a.rar")).toBe(true);
+  expect(isSupported("a.7z")).toBe(true);
+  expect(isSupported("a.iso")).toBe(true);
+  expect(isSupported("a.part1.rar")).toBe(true);
+  expect(isSupported("a.part01.rar")).toBe(true);
+  expect(isSupported("a.part2.rar")).toBe(false);
+  expect(isSupported("a.part10.rar")).toBe(false);
+  expect(isSupported("a.r00")).toBe(false);
+  expect(isSupported("a.r99")).toBe(false);
+  expect(isSupported("a.7z.001")).toBe(true);
+  expect(isSupported("a.7z.002")).toBe(false);
+  expect(isSupported("a.7Z.001")).toBe(true);
+  expect(isSupported("a.zip")).toBe(true);
+  expect(isSupported("a.tar.zst")).toBe(true);
   expect(isSupported("a.zip")).toBe(true);
 });
 

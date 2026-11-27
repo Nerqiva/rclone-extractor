@@ -285,14 +285,11 @@ function parseListLineRaw(
 }
 
 /** Scan listing: same as raw, but drops anything that is not a supported archive. */
-function parseScanListLine(
-  line: string,
-  rclonex = false,
-): { rel: string; size: number } | null {
+function parseScanListLine(line: string): { rel: string; size: number } | null {
   const parsed = parseListLineRaw(line);
   if (!parsed) return null;
   const name = baseNameOf(parsed.rel);
-  if (!isSupported(name, rclonex)) return null;
+  if (!isSupported(name)) return null;
   return parsed;
 }
 
@@ -505,6 +502,8 @@ function syncConfFile(conf: string): string | null {
 
 export class Rclone {
   onCommand?: (command: string) => void;
+  /** Current pipeline stage, stamped into this runner's archive command markers. */
+  stage = "";
 
   constructor(
     public bin: string,
@@ -512,8 +511,6 @@ export class Rclone {
     /** Extra flag arguments by settings key, shared by every command reader. */
     private extra: Record<string, string[]>,
     private runLog?: Logger,
-    /** True when RcloneX is enabled and its formats are eligible for queueing. */
-    public rclonexEnabled: boolean = false,
     /** --config target; defaults to the shared working copy, pass a per-run snapshot to isolate a run. */
     private confPath: string = effectiveConfPath,
     public binaryKind: "rclone" | "rclonex" = "rclone",
@@ -540,8 +537,8 @@ export class Rclone {
   /**
    * Build an Rclone runner. By default it targets the rclone binary;
    * `opts.rclonex` targets the rclonex binary (Nerqiva/rclonex) with its own
-   * extra-flags field and --config. The listing filter always reflects the rclonex
-   * setting, so archives queued in a mixed run carry format info correctly.
+   * extra-flags field and --config. The listing filter always includes the
+   * RcloneX formats, since RcloneX is the only extractor.
    *
    * When `opts.confPath` is set (per-run private snapshot), the instance
    * points --config at that file and the shared working copy is left
@@ -566,7 +563,6 @@ export class Rclone {
     for (const field of EXTRA_FLAG_FIELDS) {
       extra[field.key] = parseExtraFlags(cfg[field.key] ?? "");
     }
-    const rclonexEnabled = (cfg["rclonex"] ?? "0") === "1";
 
     const conf = await resolveConfText();
     if (conf && !opts.confPath) {
@@ -584,7 +580,6 @@ export class Rclone {
       root,
       extra,
       runLog,
-      rclonexEnabled,
       opts.confPath,
       opts.rclonex ? "rclonex" : "rclone",
     );
@@ -633,6 +628,7 @@ export class Rclone {
     ) => boolean | void | Promise<boolean | void>,
     filterArchives = false,
     scanFilter: ScanListFilter = {},
+    ref?: RcloneRef,
   ): Promise<ListOutcome> {
     const args = [
       ...this.confArgs(),
@@ -651,7 +647,7 @@ export class Rclone {
       // fewer lines streamed, parsed and checked. The remote still
       // enumerates everything; the in-app checks stay as a backstop.
       args.push("--ignore-case");
-      for (const pattern of archiveIncludePatterns(this.rclonexEnabled)) {
+      for (const pattern of archiveIncludePatterns()) {
         args.push("--include", pattern);
       }
       const min = Math.floor(scanFilter.minSizeBytes ?? 0);
@@ -671,12 +667,20 @@ export class Rclone {
     let buffer = "";
     let stopped = false;
     let streamError: string | undefined;
+    const nativeLines: string[] = [];
 
     const consume = async (line: string): Promise<boolean> => {
+      const clean = line.replace(/\r$/, "");
       const parsed = filterArchives
-        ? parseScanListLine(line.replace(/\r$/, ""), this.rclonexEnabled)
-        : parseListLineRaw(line.replace(/\r$/, ""));
-      if (!parsed) return true;
+        ? parseScanListLine(clean)
+        : parseListLineRaw(clean);
+      if (!parsed) {
+        if (ref && clean) {
+          nativeLines.push(clean);
+          if (nativeLines.length > 300) nativeLines.shift();
+        }
+        return true;
+      }
       const more = await onFile(parsed.rel, parsed.size);
       return more !== false;
     };
@@ -711,6 +715,13 @@ export class Rclone {
     if (stopped) proc.kill();
     const stderr = await stderrPromise;
     const code = await proc.exited;
+    if (ref) {
+      const native = [...nativeLines, stderr.trim()].filter(Boolean);
+      await insertLogLines(ref, [
+        ...commandMarker(command, this.stage),
+        ...(native.length ? native : []),
+      ]);
+    }
     return { code, tail: [], stderr, command, stopped, streamError };
   }
 
@@ -790,7 +801,7 @@ export class Rclone {
     const nativeOutput = [...stdoutLines, nativeStderr].filter(Boolean).join("\n");
     const failed = Boolean(streamError) || code !== 0;
     // Marker and output go in one batch so concurrent writers keep their order.
-    const logLines = commandMarker(command);
+    const logLines = commandMarker(command, this.stage);
     if (failed) {
       // Raw binary output only — except a completely silent failure, where a
       // neutral one-liner keeps Copy/Download from being an empty 404.
@@ -838,7 +849,7 @@ export class Rclone {
       // Copy/Download is not an empty 404.
       combined.push(`command failed with exit ${code} (no output)`);
     }
-    if (ref) await insertLogLines(ref, [...commandMarker(command), ...combined]);
+    if (ref) await insertLogLines(ref, [...commandMarker(command, this.stage), ...combined]);
 
     return { code, tail: combined.slice(-40), stderr: err, command };
   }
@@ -867,7 +878,7 @@ export class Rclone {
     // Output is streamed to the archive log in bounded batches instead of
     // buffered whole; only the tail is kept for the returned Outcome.
     const LOG_BATCH = 100;
-    let pending: string[] = commandMarker(command);
+    let pending: string[] = commandMarker(command, this.stage);
     let loggedLines = 0;
     let flushChain: Promise<void> = Promise.resolve();
     const flush = (force = false): void => {

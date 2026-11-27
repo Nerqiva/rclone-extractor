@@ -98,9 +98,11 @@ scan  →  extract  →  promote  →  trash
   fresh scan.
 - **Mobile-friendly logs** — the log and error views are selectable text with
   Copy all / Copy selection / Select all / Download controls.
-- **Task-first interface** — system UI typography for navigation and controls,
+- **Task-first interface** — self-hosted Inter for navigation and controls,
   monospaced data for logs and values, sentence-case labels, and direct links
-  from the empty Progress page to configuration, logs and errors.
+  from the empty Progress page to configuration, logs and errors. Help tips use
+  a small `?` marker, and the active nav item is marked by an underline rather
+  than a filled box.
 - **Continue previous task** — resumable runs. If the app crashes or is
   restarted mid-job, archives stuck in *extracting* are automatically re-queued.
   Runs have an explicit outcome: a **user stop** ends as **Interrupted**, a
@@ -340,7 +342,6 @@ re-queues every in-flight archive.
 | `scan_root` | rclone remote or path to scan, e.g. `s3:bucket/archives` or `/data/in`. |
 | `lsf_extra_flags` | Extra flags for `rclone lsf` (scan listing and temp-dir listing). |
 | `archive_list_extra_flags` | Extra flags for `rclone archive list` (pre-extraction inspection). |
-| `extract_extra_flags` | Extra flags for `rclone archive extract`. |
 | `rclonex_extract_extra_flags` | Extra flags for `rclonex archive extract`. Password and window flags are configured separately. |
 | `move_extra_flags` | Extra flags for `rclone move` (promotion). |
 | `moveto_extra_flags` | Extra flags for `rclone moveto` (trash and Delete/Restore). |
@@ -353,7 +354,6 @@ re-queues every in-flight archive.
 | `retry_cooldown_seconds` | Base wait before retrying a failed extract, promote (move) or trash (moveto), in whole seconds `0`–`86400` (default `60`). Each retry doubles it: 60s, 120s, 240s, for four attempts total. A skip request or hard stop ends the wait immediately and re-queues the archive; a soft stop waits it out. Password, website/torrent and other skip decisions are never retried. |
 | `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
-| `rclonex` | **Enable RcloneX** (default off). When on, archives whose format rclone cannot handle — RAR/RAR5, multivolume RAR (`x.partN.rar` / `x.r00…`), 7Z, split/multivolume 7Z (`x.7z.NNN`), and ISO9660 — are queued (only the first volume of a set: `part1.rar` / `.7z.001` / plain `.rar`), and **every** queued archive, ZIP/TAR included, is extracted with rclonex. Listing, inspection, promotion, cleanup and trash stay on rclone. When off, those formats are not queued at all and rclone does all extraction. |
 | `auto_skip_known` | Keep reappearing archives classified as a torrent or website dump skipped automatically (default on — they are never re-queued/re-inspected). Uncheck to re-inspect such reappearing archives on later runs. |
 | `rclonex_archive_password_enabled` + `rclonex_archive_password` | RcloneX flag `--archive-password` (default off): password for encrypted RAR/7Z archives (multivolume sets included). The password is stored encrypted at rest; leaving the field blank on save keeps the stored value, and the **Clear** button removes it (disables the flag). |
 | `rclonex_archive_buffer_size` | RcloneX flag `--archive-window-size` (how much of the archive is buffered in memory while rclonex reads random-access formats such as 7Z/ISO). Bytes; `0` keeps rclonex's own default. The Configuration page asks for MB/GB. |
@@ -456,7 +456,7 @@ For each archive at `<ROOT>/<REL>`:
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";" --ignore-case --include "<each supported archive extension glob>" [--min-size <bytes>B] [--max-size <bytes>B]
 inspect: rclone archive list <ROOT>/<REL> --files-only (skipped for RcloneX formats by default, always for ISO)
 extract: rclonex archive extract <ROOT>/<REL> <TMPDIR>/resume/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
-         (with the configured --archive-* flags and --archive-skip-existing; rclone's native `archive extract` is used only when RcloneX is disabled)
+         (with the configured --archive-* flags and --archive-skip-existing)
 promote: rclone move <TMPDIR>/resume/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
 cleanup: rclone purge <TMPDIR>/resume/<archiveid>
 purge:   rclone purge <TMPDIR>/run_<runid>
@@ -468,15 +468,22 @@ in total, with waits of `retry_cooldown_seconds`, twice that and four times
 that (60s, 120s, 240s by default). Listing, inspection, cleanup/purge and
 skipped archives are never retried. Every attempt gets its own `$ <redacted
 command>` marker and raw output block in the archive log, and the run log gets
-one `retry N/3 after Xs: <command> <archive>` line before each wait. A re-extract
-reuses the stem temp dir instead of purging it. RcloneX extraction passes
+one `retry N/3 after Xs: <command> <archive>` line before each wait. The
+Progress page shows the current attempt and the remaining cooldown seconds on
+the active card. Retries react only to API limits and network glitches; they
+are not a workaround for an rclonex limitation. A re-extract reuses the stem
+temp dir instead of purging it. RcloneX extraction passes
 `--archive-skip-existing`, so files already at the destination with the same
-size are not uploaded again. A failed extract keeps the resume dir for a later
-run. A startup sweep removes resume dirs older than 24 hours or tied to
-archives that are no longer eligible for retry. A skip request or hard stop
-during a cooldown aborts the wait and re-queues the archive; a soft stop waits
-it out. Password, website/torrent, empty and unreadable archives are never
-resurrected by a retry.
+size are not uploaded again. The resume dir is kept through every retry and
+cooldown and removed only at a terminal outcome, or when the archive is
+skipped after extraction, or on a skip request / stop. Pre-extraction skips
+(empty, tiny, unreadable) do not purge it. A startup sweep removes resume dirs
+older than 24 hours or tied to archives that are no longer eligible for retry.
+A skip request or hard stop during a cooldown aborts the wait and re-queues the
+archive; a soft stop waits it out. Password, website/torrent, empty and
+unreadable archives are never resurrected by a retry. The **Skip archive**
+button works at every stage up to the move to trash; it is hidden once that
+stage begins.
 
 The listing is spawned with `--ignore-case` and one `--include` glob per
 supported archive extension (RAR/7z/ISO and split `name.7z.NNN` volumes only
@@ -503,13 +510,16 @@ Postgres.
 Each `*_extra_flags` field is appended only to its own subcommand. Nothing
 leaks into another command, and `--config` is always ignored. All rclone output streams are stored
 verbatim: the run log carries human-readable annotations plus every command
-the app runs, while each per-archive archive log holds the binary's raw output
-grouped by command. A `---` separator and a `$ <redacted command>` line mark
-the start of each command's output, so a log with several commands is easy to
-read and the failing one is identifiable. Failures that produce no binary
+the app runs, with an `archive #<queue-id> started: <path>` line and a matching
+end line around each job so concurrent workers can be told apart. Each
+per-archive log holds the binary's raw output grouped by command: a `---`
+separator, a `$ [<stage>] <redacted command>` line, then that command's native
+output — in that order, for every stage including pre- and post-extraction
+inspection. Stage chips are colour-coded. Failures that produce no binary
 output at all store a single diagnostic line so downloads are never empty 404s
-(see the Errors page note below). The **Errors** page and per-archive downloads
-show that output.
+(see the Errors page note below). Folded detail blocks open expanded. The
+**Errors** page, the **Archives** tab and per-archive downloads show that
+output.
 
 `promote` passes `--exclude /<tmp-top-segment>/**` (only when `tmp_dir` is a
 relative path nested inside the scan root) because `rclone move` refuses to
@@ -550,26 +560,23 @@ all are disabled while a task is running except **Clear queues**):
 - **Clear everything** wipes queue, history, logs, errors and the tmp
   directory; next run starts from #1.
 
-### RcloneX (optional)
+### RcloneX
 
 [Nerqiva/rclonex](https://github.com/Nerqiva/rclonex) is a public fork of
 rclone that extends `archive extract` with streaming remote-to-remote
 extraction for **RAR/RAR5, multivolume RAR, 7Z, multivolume 7Z and ISO9660**.
-Enable it with **Enable RcloneX** on the Configuration page. While enabled,
-rclonex performs **all** extraction, including ZIP and TAR.
+RcloneX is always enabled and performs **all** extraction, including ZIP and
+TAR; there is no toggle.
 
-- **Enable RcloneX is the format gate** — the RcloneX-only formats above are
-  queued only while the setting is on; once on, every queued archive is
-  extracted with rclonex. Promotion/move/trash/purge stay rclone operations
-  in both modes.
+- **Format gate** — the RcloneX-only formats above are always queued (only the
+  first volume of a set: `part1.rar` / `.7z.001` / plain `.rar`), and every
+  queued archive is extracted with rclonex. Promotion/move/trash/purge stay
+  rclone operations.
 - **Multivolume sets** — only the first volume is queued and extracted:
   `name.part1.rar` (or `part01.rar`), `name.rar` (old-style `.r00…` sets), and
   `name.7z.001`. Volumes 2..N are never queued. The stem used for temp
   extraction names strips the multivolume marker.
 - **RAR5** is supported as part of the RAR format — no separate toggle.
-- When RcloneX is disabled, those formats are not queueable at all (they are
-  filtered out of the listing exactly like `.sqfs`), and every archive-family
-  capability beyond upstream rclone is off.
 - **Inspection happens after extraction** for RcloneX-handled archives
   (RAR/RAR5, 7Z, ISO9660): the archive is extracted into a temporary tree
   and **then** the extracted contents are listed. This avoids a slow
@@ -812,13 +819,14 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   the session, delimited by section headers.
 
 - Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
-  and appended, and polling stops as soon as the run finishes — finished
-  sessions render statically, so they don't poll at all.
+  and appended. Finishing a run updates the pill but keeps polling available,
+  so a new run started elsewhere is picked up without a reload; the toolbar
+  **Manual view** toggle stops it deliberately.
 - While a session is live, the run log and the Errors page start in **live
   preview** with a **Live preview** / **Manual view** toolbar toggle.
-  Scrolling away from the bottom pauses polling automatically; switching back
+  Scrolling away from the bottom pauses polling temporarily; switching back
   resumes from the last fetched line, so lines already on screen are kept.
-  Finished sessions have no polling and no toggle.
+  An open **Log view** stays open across polled updates.
 - The log view is **mobile-friendly and selectable**: every line is real text,
   you can tap and hold to select parts of it, or use the toolbar buttons
   **Copy all**, **Copy selection**, **Select all** and **Download**.
@@ -826,16 +834,15 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   copies whatever you have selected; **Select all** selects the whole log for
   partial manual copying. Clipboard fallbacks work on plain-HTTP self-hosted
   deployments too.
-- The **Errors** page lists archives with `error_kind` set (except
-  password-protected archives, see below) and has a **Copy all** button for a
-  tab-separated summary. Each card shows its Queue ID, the failing command and
-  the last native error lines it produced, with app-written diagnostics
-  filtered out.
-  The row's **Copy** / **Download** button fetches the full archive log, where
-  a `---` separator and a `$ ` line delimit each command's raw output. The run
-  error log also records the redacted command that failed.
-- The **Password-protected** section on the Errors page lists every archive
-  that reached a run but needs a password (a warning is logged and the run moves
+- The **Errors** page has a **Failed archives** section and one **Skipped
+  archives** section covering password-protected, website/torrent dump, tiny
+  and other informational skips. It has a **Copy all** button for a
+  tab-separated summary. Every card shows its Queue ID and the stage where it
+  stopped, and has an inline **Log view** with the same staged command output
+  as the Archives tab, plus **Copy** / **Download** for the full archive log.
+  The run error log also records the redacted command that failed.
+- The **Skipped archives** section lists every archive that reached a run but
+  needs a password (a warning is logged and the run moves
   to the next archive; they are never extracted without one). Each row shows
   the file name and path and its size, a **Log view** for the per-archive
   log, **Copy log**, a **Download** button that streams the archive itself
@@ -908,7 +915,7 @@ public/
   morphdom-umd.min.js vendored morphdom for targeted DOM updates
   app.js           shared client runtime: toasts, busy state, polling, DOM morphing, modals, config editing
   copy.js          clipboard copy + incremental polling with live-preview toggle
-  fonts/           self-hosted JetBrains Mono
+  fonts/           self-hosted Inter (UI) and JetBrains Mono (data)
 ```
 
 ### HTTP routes

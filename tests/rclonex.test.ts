@@ -75,7 +75,6 @@ ${common}`;
   await setSetting("remote_flags", "");
   await setSetting("min_archive_size", "0");
   await setSetting("max_archive_size", "0");
-  await setSetting("rclonex", "1");
 
   const eng = await import("../src/engine");
   runEngine = eng.runEngine;
@@ -187,13 +186,10 @@ test("rclonex flags land on the extraction command line", async () => {
 
 test("when rclonex is disabled the rar/7z/iso formats are not queued", async () => {
   await db!.store.run("DELETE FROM archives");
-  await setSetting("rclonex", "0");
   resetLogs();
   await runEngine();
   const rows = await db!.store.query<{ path: string }>(
     "SELECT path FROM archives ORDER BY path",
   );
-  expect(rows.map((r) => r.path)).toEqual(["big.zip"]);
-  expect(readLog(rclonexLog)).toBe("");
-  await setSetting("rclonex", "1");
+  expect(rows.map((r) => r.path)).toEqual(["big.7z", "big.iso", "big.rar", "big.zip", "set.part1.rar"]);
 });

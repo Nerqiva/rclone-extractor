@@ -14,8 +14,14 @@ export const LOG_EXPORT_LIMIT = 50_000;
 /** Neutral delimiter written into archive logs before each command's output. */
 export const COMMAND_SEPARATOR = "---";
 
-export function commandMarker(command: string): string[] {
-  return [COMMAND_SEPARATOR, `$ ${command}`];
+export const STAGE_RE = /^\$ \[([^\]]+)\] /;
+
+export function commandMarker(command: string, stage = ""): string[] {
+  return [COMMAND_SEPARATOR, `$ ${stage ? `[${stage}] ` : ""}${command}`];
+}
+
+export function stageOf(line: string): string {
+  return line.match(STAGE_RE)?.[1] ?? "";
 }
 
 export interface LogRef {
@@ -66,7 +72,7 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
         const id = `log-det-${detailIdSeq++}`;
         const content = detailLines.map((l) => esc(l)).join("\n");
         entries.push({
-          html: `<div class="log-entry log-detail"><span class="log-time">${esc(time)}</span><details id="${id}"><summary>Show full output (${detailLines.length} lines)</summary><pre class="log-detail-pre">${content}</pre></details></div>`,
+          html: `<div class="log-entry log-detail"><span class="log-time">${esc(time)}</span><details id="${id}" open><summary>Show full output (${detailLines.length} lines)</summary><pre class="log-detail-pre">${content}</pre></details></div>`,
         });
         inDetail = false;
         detailLines = [];
@@ -80,13 +86,19 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
     }
 
     const isCmd = line.startsWith("$ ");
+    const stage = isCmd ? stageOf(line) : "";
     // Imported levels are arbitrary strings; the class wants a bare slug.
     const lvl = /^[a-z0-9-]+$/.test(level.toLowerCase())
       ? level.toLowerCase()
       : "info";
-    const cls = isCmd ? "log-entry log-cmd" : `log-entry log-${lvl}`;
+    const cls = isCmd
+      ? `log-entry log-cmd${stage ? " log-cmd-stage" : ""}`
+      : `log-entry log-${lvl}`;
     const chip = level
       ? `<span class="log-chip log-chip-${lvl}">${esc(level)}</span>`
+      : "";
+    const stageChip = stage
+      ? `<span class="log-stage">${esc(stage)}</span>`
       : "";
 
     const isContinuation = !level && !isCmd && entries.length > 0;
@@ -98,7 +110,7 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
     }
 
     entries.push({
-      html: `<div class="${cls}"><span class="log-time">${esc(time)}</span>${chip}<span class="log-msg">${esc(line)}</span></div>`,
+      html: `<div class="${cls}"><span class="log-time">${esc(time)}</span>${chip}${stageChip}<span class="log-msg">${esc(line)}</span></div>`,
     });
   }
 

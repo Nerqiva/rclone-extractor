@@ -4,7 +4,7 @@ import { tailRendered, readAll, insertLogLines, LOG_TAIL_LIMIT, LOG_EXPORT_LIMIT
 import { engineState } from "../engine";
 import { baseNameOf, positiveId } from "../domain";
 import { liveArchiveStates } from "../live";
-import { readErrorRows, renderErrorCards } from "../errorrows";
+import { readErrorRows, renderFailureCards } from "../errorrows";
 import { readArchiveLogRows, renderArchiveLogRows } from "../archiverows";
 import { Rclone } from "../rclone";
 import { cachedFragment } from "../fragmentcache";
@@ -92,9 +92,9 @@ logsapi.get("/errors/fragment", async (c) => {
            (SELECT MAX(updated_at) FROM archives WHERE error_kind IS NOT NULL AND error_kind <> 'password') AS t,
            (SELECT COALESCE(MAX(id), 0) FROM log_lines WHERE scope = 'archive' AND kind = 'extract') AS l`,
       );
-      return `${row?.n ?? 0}|${row?.t ?? ""}|${row?.l ?? 0}`;
+      return `${row?.n ?? 0}|${row?.t ?? ""}|${row?.l ?? 0}|${Math.floor(Date.now() / 30000)}`;
     },
-    async () => renderErrorCards(await readErrorRows(store)),
+    async () => renderFailureCards(await readErrorRows(store)),
   );
   return c.html(html);
 });

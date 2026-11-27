@@ -13,3 +13,8 @@ if (!process.env.SECRET_KEY) {
 if (!process.env.APP_PASSWORD) {
   process.env.APP_PASSWORD = "test-pw";
 }
+// RcloneX is the only extractor now. Tests that only mock `rclone` still need
+// an extraction binary, so fall back to that mock unless they provide one.
+if (!process.env.RCLONEX_BIN) {
+  process.env.RCLONEX_BIN = "rclone";
+}

@@ -41,10 +41,23 @@ to `main`.
   seconds `0`–`86400`, default `60`). A failed extract, promote or trash is
   retried up to three times with waits of 60s, 120s and 240s at the default;
   each wait doubles the previous one. `tests/retry.test.ts` covers the attempt
-  count, the doubling waits, resume data kept across retries and runs, and
+  count, the doubling waits, resume data kept across retries and purged on a final failure, and
   skip/hard-stop aborts.
 - **App version and boot time on the Configuration page.** The Runtime card
   shows the running build's `VERSION` and the process start time in `APP_TZ`.
+- **Retry and cooldown on active cards.** A retried archive shows `retry N/3`
+  and a `cooldown Ns` pill while it waits. Retries exist only to get past API
+  limits and network glitches, never to work around rclonex.
+- **Stage-labelled per-archive logs.** Every command block is now `---`, then
+  `$ [<stage>] <redacted command>`, then that command's native output, for all
+  stages including pre- and post-extraction inspection. Stage chips are
+  colour-coded, and failed archives show the stage where they stopped on their
+  card. The run log brackets each archive with a `Queue ID #N` line and its
+  path.
+- **Full logs on the Errors page.** Failed and skipped archives, including
+  password-protected ones, now share one per-archive **Log view** with the
+  Archives tab, under *Failed archives* and a single *Skipped archives*
+  section.
 
 ### Changed
 - **Polling patches only changed values.** Progress, controls, archive rows,
@@ -67,12 +80,27 @@ to `main`.
   polls and pauses them in hidden tabs, and a busy button stays disabled while
   its request is still in flight. The tooltip guard moved with the code, and
   `tests/asset.test.ts` now checks it at its new home.
-- **Interface makeover.** Navigation and controls use system UI typography;
-  logs, paths and values keep the monospaced face. Labels read as sentences,
-  raw setting keys are de-emphasized, cards use softer corners, and the active
-  navigation item has a clear accent bar. The empty Progress page now links
-  directly to configuration, logs and errors. The mobile navigation overlay
-  no longer sits below the confirmation modal.
+- **Interface makeover.** Navigation and controls use self-hosted Inter;
+  logs, paths and values keep JetBrains Mono. Labels read as sentences, raw
+  setting keys are de-emphasized, cards use softer corners, and the active
+  navigation item is marked by a thin underline instead of a filled box.
+  Help tips use a small `?` marker. Archive headers no longer stretch badges
+  apart. The empty Progress page now links directly to configuration, logs
+  and errors. The mobile navigation overlay no longer sits below the
+  confirmation modal.
+- **Temp files are kept until an archive reaches a terminal state.** The resume
+  dir survives every retry and cooldown so a later run can reuse extracted
+  files. It is removed on final failure, on skip and stop, and on in-app skips
+  after extraction, but not on pre-extraction skips. The run-level temp dir is
+  now purged on every finished run, including interrupted and error paths.
+  **Skip archive** is accepted at every stage until the move to trash starts.
+- **RcloneX is the only extractor.** The stale `extract_extra_flags` setting,
+  the rclone native `archive extract` fallback and the **Enable RcloneX**
+  checkbox are gone; RAR/RAR5, 7Z and ISO are always queueable.
+- **Polling keeps what you opened.** An open log view stays open across polled
+  fragments on every page. Scroll-paused log and error polls resume when you
+  return to the bottom, and a finished run no longer stops polling forever.
+  Folded log detail blocks open expanded.
 - **Shared status and path helpers.** Stage labels, state classes, archive
   basenames and route id parsing now live in one module instead of being
   redefined in each view, so the Progress, Logs and Errors pages cannot drift

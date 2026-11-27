@@ -17,7 +17,7 @@ import { isSafeRel } from "../src/archive";
 test("supported", () => {
   expect(isSupported("a.zip")).toBe(true);
   expect(isSupported("a.tar.zst")).toBe(true);
-  expect(isSupported("x.rar")).toBe(false);
+  expect(isSupported("x.rar")).toBe(true);
   expect(isSupported("y.sqfs")).toBe(false);
 });
 

@@ -168,7 +168,7 @@ test("per-archive log marks the failing command and holds raw binary output", as
   // The raw stderr of the failed extract is stored verbatim...
   expect(lines.some((line) => line.includes("password required"))).toBe(true);
   // ...preceded by the command that produced it and a separator.
-  expect(lines.some((line) => line.includes("$ rclone") && line.includes("archive extract"))).toBe(true);
+  expect(lines.some((line) => line.includes("$ [Extracting]") && line.includes("archive extract"))).toBe(true);
   expect(lines.some((line) => line.includes("---"))).toBe(true);
   expect(lines.some((line) => line.includes("skipped ("))).toBe(false);
 });
@@ -183,7 +183,7 @@ test("archive log separates each command with a marker", async () => {
     refId: Number(row!.id),
     kind: "extract",
   });
-  expect(lines.filter((line) => line.includes("$ rclone")).length).toBeGreaterThanOrEqual(3);
+  expect(lines.filter((line) => line.includes("$ [") && line.includes("rclone")).length).toBeGreaterThanOrEqual(3);
   expect(lines.some((line) => line.includes("---"))).toBe(true);
 });
 

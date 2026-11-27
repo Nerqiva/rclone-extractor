@@ -38,7 +38,6 @@ const defaults: Record<string, string> = {
   database_url: DATABASE_URL,
   rclone_conf: "",
   last_run_id: "0",
-  rclonex: "0",
   rclonex_archive_password_enabled: "0",
   rclonex_archive_password: "",
   rclonex_archive_buffer_size: "16777216",
@@ -358,8 +357,8 @@ async function migrateRclonexArchiveBufferSize(): Promise<void> {
 }
 
 /**
- * Move the legacy single remote_flags value into the three commands that used
- * it (extract, promote, downloads). Runs before defaults are inserted so an
+ * Move the legacy single remote_flags value into the commands that used
+ * it (promote, downloads). Runs before defaults are inserted so an
  * empty default cannot hide the legacy value. Copy-if-empty keeps a value a
  * user already set; the legacy key is removed on every path. Idempotent.
  */

@@ -10,7 +10,13 @@ export function liveArchiveStates(
   return new Map(
     [...engineState.jobs.values()].map((job) => [
       job.id,
-      { phase: job.phase, status: job.status, stats: job.stats },
+      {
+        phase: job.phase,
+        status: job.status,
+        stats: job.stats,
+        attempt: job.attempt,
+        cooldownUntil: job.cooldownUntil,
+      },
     ]),
   );
 }

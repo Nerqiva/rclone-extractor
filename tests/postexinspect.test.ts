@@ -84,7 +84,6 @@ exit 0
   await setSetting("remote_flags", "");
   await setSetting("min_archive_size", "0");
   await setSetting("max_archive_size", "0");
-  await setSetting("rclonex", "1");
 
   const eng = await import("../src/engine");
   runEngine = eng.runEngine;

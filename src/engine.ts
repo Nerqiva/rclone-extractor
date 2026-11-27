@@ -51,6 +51,10 @@ export interface JobState {
   phase: string;
   command: string;
   stats: ExtractStats | null;
+  // Live retry state for the progress panels. Never persisted: a retry is a
+  // per-run reaction to an API limit or a network glitch, not archive data.
+  attempt: number;
+  cooldownUntil: number;
   skipArchive: boolean;
   skipInspection: boolean;
   groupKey: string | null;
@@ -331,10 +335,14 @@ export function requestSkipInspection(id?: number): boolean {
   return true;
 }
 
+// Once the archive is being moved to trash there is no safe unwind: the
+// source file is already half-moved. Earlier stages remain skippable.
+const NO_SKIP_PHASES = ["Moving to trash"];
+
 export function requestSkipArchive(id?: number): boolean {
   if (!engineState.running || engineState.stage !== "extracting") return false;
   const job = activeJobForSkip(id);
-  if (!job) return false;
+  if (!job || NO_SKIP_PHASES.includes(job.phase)) return false;
   job.skipArchive = true;
   killActiveProcs(job.id);
   return true;
@@ -353,7 +361,7 @@ class ArchiveSkipRequested extends Error {
 }
 
 function throwIfSkipArchive(job: JobState): void {
-  if (job.skipArchive || engineState.forceStop) {
+  if (engineState.forceStop || (job.skipArchive && !NO_SKIP_PHASES.includes(job.phase))) {
     throw new ArchiveSkipRequested();
   }
 }
@@ -417,7 +425,8 @@ export function parseCooldownSeconds(raw: string | null | undefined): number | n
   return n;
 }
 
-export type RetryPolicy = { baseMs: number; maxRetries: 3 };
+export const MAX_RETRIES = 3;
+export type RetryPolicy = { baseMs: number; maxRetries: typeof MAX_RETRIES };
 
 /** Cooldowns for retries 1, 2 and 3: base, twice base, four times base. */
 export function retryDelays(baseMs: number): readonly [number, number, number] {
@@ -428,7 +437,6 @@ type RetryOptions<T> = {
   label: string;
   log: (line: string) => void;
   retryable?: (outcome: T) => boolean;
-  beforeRetry?: () => Promise<void>;
 };
 
 /** Sleep in short slices so a skip or hard stop aborts the wait promptly. */
@@ -457,14 +465,16 @@ async function withRetries<T extends Outcome>(
   const delays = retryDelays(policy.baseMs);
   for (let attempt = 0; ; attempt++) {
     let outcome: T;
+    job.attempt = attempt + 1;
+    job.cooldownUntil = 0;
     try {
       outcome = await invoke();
     } catch (e) {
       if (e instanceof ArchiveSkipRequested || attempt >= policy.maxRetries) throw e;
       const ms = delays[attempt];
       opts.log(`retry ${attempt + 1}/${policy.maxRetries} after ${ms / 1000}s: ${opts.label}`);
+      job.cooldownUntil = Date.now() + ms;
       await waitCooldown(job, ms);
-      await opts.beforeRetry?.();
       throwIfSkipArchive(job);
       continue;
     }
@@ -474,8 +484,8 @@ async function withRetries<T extends Outcome>(
     if (attempt >= policy.maxRetries) return outcome;
     const ms = delays[attempt];
     opts.log(`retry ${attempt + 1}/${policy.maxRetries} after ${ms / 1000}s: ${opts.label}`);
+    job.cooldownUntil = Date.now() + ms;
     await waitCooldown(job, ms);
-    await opts.beforeRetry?.();
     throwIfSkipArchive(job);
   }
 }
@@ -761,6 +771,7 @@ export async function runEngine(): Promise<void> {
   const tmpSpec = tmpSettings?.spec ?? null;
 
   let runRowId = 0;
+  let tmpRoot = "";
   let logger: Logger | null = null;
   let errorLog: Logger | null = null;
   let errorKind = "engine_error";
@@ -807,6 +818,40 @@ export async function runEngine(): Promise<void> {
     await logger?.flush();
     await errorLog?.flush();
     engineState.running = false;
+  };
+
+  // Remove only this run's temp tree at run end — never the shared temp root,
+  // which may hold another run's data. Called on every outcome, including an
+  // app error, so a failed or stopped run does not leave extracted data behind.
+  let runTmpPurged = false;
+  const purgeRunTempDir = async (rc?: Rclone): Promise<void> => {
+    if (runTmpPurged || !runRowId || !tmpRoot) return;
+    runTmpPurged = true;
+    const tmpRootNorm = tmpRoot.replace(/\/+$/, "");
+    const runDir = tmpRunDir(tmpRootNorm, runRowId);
+    const tmpRootIsSafe =
+      tmpRootNorm.length > 1 &&
+      tmpRootNorm !== "/" &&
+      !tmpRootNorm.endsWith(":") &&
+      !/^[A-Za-z]:[\\/]?$/.test(tmpRootNorm) &&
+      runDir === tmpRunDir(tmpRootNorm, runRowId);
+    if (!tmpRootIsSafe) {
+      logger?.info(`left ${runDir} in place (temp root not safe to purge)`);
+      return;
+    }
+    try {
+      const runner =
+        rc ??
+        (await Rclone.fromSettings(logger ?? undefined, runConf ? { confPath: runConf } : {}));
+      const purged = await runner.purge(runDir);
+      if (purged.code === 0) {
+        logger?.info(`purged ${runDir}`);
+      } else {
+        logger?.info(`left ${runDir} in place (${purged.stderr.trim() || "purge failed"})`);
+      }
+    } catch (e) {
+      logger?.info(`left ${runDir} in place (${String(e)})`);
+    }
   };
 
   // Create the run row and logger up front so even a pre-flight failure
@@ -900,7 +945,7 @@ export async function runEngine(): Promise<void> {
     rc.onCommand = persistCommand;
 
     // Absolute when tmp_dir is a remote/local path; inside root otherwise.
-    const tmpRoot = tmpRootPath(scanRoot, tmpSpec);
+    tmpRoot = tmpRootPath(scanRoot, tmpSpec);
     const tmpTop = tmpTopSegment(tmpSpec);
     // tmpSettings is non-null here: an invalid tmp_dir already aborted above.
     setActivity("Purging stale temp");
@@ -955,9 +1000,8 @@ export async function runEngine(): Promise<void> {
     const minArchiveSize = clampArchiveSize(cfg["min_archive_size"] ?? "0");
     const cooldownSeconds =
       parseCooldownSeconds(cfg["retry_cooldown_seconds"] ?? "60") ?? 60;
-    const policy: RetryPolicy = { baseMs: cooldownSeconds * 1000, maxRetries: 3 };
+    const policy: RetryPolicy = { baseMs: cooldownSeconds * 1000, maxRetries: MAX_RETRIES };
     logger.info(`retry cooldown=${cooldownSeconds}s (up to ${policy.maxRetries} retries)`);
-    const rclonexEnabled = (cfg["rclonex"] ?? "0") === "1";
     // RcloneX-specific extraction flags (default off). A stored archive
     // password is only passed when its checkbox enabled it.
     const rclonexPasswordEnabled =
@@ -1192,12 +1236,11 @@ export async function runEngine(): Promise<void> {
     // only that job's processes.
     const makeRunners = async () => {
       const rc = await Rclone.fromSettings(logger, runConf ? { confPath: runConf } : {});
-      const rx = rclonexEnabled
-        ? await Rclone.fromSettings(
-            logger,
-            runConf ? { rclonex: true, confPath: runConf } : { rclonex: true },
-          )
-        : null;
+      // RcloneX is the only extractor, so it is always available.
+      const rx = await Rclone.fromSettings(
+        logger,
+        runConf ? { rclonex: true, confPath: runConf } : { rclonex: true },
+      );
       return { rc, rx };
     };
 
@@ -1231,6 +1274,8 @@ export async function runEngine(): Promise<void> {
         phase: "",
         command: "",
         stats: null,
+        attempt: 0,
+        cooldownUntil: 0,
         skipArchive: false,
         skipInspection: false,
         groupKey,
@@ -1319,6 +1364,7 @@ export async function runEngine(): Promise<void> {
         [now(), row.id],
       );
       await markRunTouch(Number(row.id), runRowId);
+      logger.info(`archive #${row.id} started: ${rel}`);
 
       const baseName = baseNameOf(rel);
       // Family of the rclone-handled archive this archive is; null for
@@ -1349,16 +1395,43 @@ export async function runEngine(): Promise<void> {
       ) {
         extractFirst = true;
       }
-      // The setting gates which formats are queued and which skip
-      // pre-inspection, but once enabled every supported archive is extracted
-      // with rclonex (including ZIP/TAR). Rclone stays responsible for
-      // listing, inspection, promotion, cleanup and trash.
-      const useRclonex = rclonexEnabled && isRclonexFormat(baseName);
+      // RcloneX is the only extractor, so the format only decides how the
+      // binary reads it. Rclone stays responsible for listing, inspection,
+      // promotion, cleanup and trash.
+      const useRclonex = isRclonexFormat(baseName);
       const extractor = rclonexRc ?? rc;
       const tmp = tmpResumeStemDir(tmpRoot, row.id, stem(baseName));
       const archiveTmpDir = tmpResumeDir(tmpRoot, row.id);
       const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
+      // Stamp the stage onto both runners so every command marker in this
+      // archive's log reads stage -> command -> native output.
+      const setStage = (label: string) => {
+        setActivity(label, job);
+        rc.stage = label;
+        if (rclonexRc) rclonexRc.stage = label;
+      };
       let result: "done" | "failed" | "skipped" = "failed";
+      // The resume tree is kept across retries and cooldowns: a re-run after
+      // a cooldown reuses what was already extracted. It is removed only on a
+      // terminal outcome that cannot benefit from it, never between attempts.
+      let tmpPurged = false;
+      const purgeTmp = async (reason: string): Promise<void> => {
+        if (tmpPurged) return;
+        tmpPurged = true;
+        setStage("Cleaning up");
+        try {
+          const purged = await rc.purge(archiveTmpDir, ref);
+          if (purged.code !== 0) {
+            warn(
+              `temp purge failed (${reason}): ${archiveTmpDir} [$ ${purged.command}] ${purged.stderr.trim() || "unknown error"}`,
+            );
+          }
+        } catch (e) {
+          warn(`temp purge failed (${reason}): ${String(e)}`);
+        } finally {
+          setStage("");
+        }
+      };
 
       try {
         // Inspect the archive before any extraction happens. Archives that
@@ -1398,7 +1471,7 @@ export async function runEngine(): Promise<void> {
           // Inspection always goes through the rclone binary: upstream's
           // `archive list` reads RAR/7Z fine, rclonex does not extend it and
           // would only add a full-stream re-read.
-          setActivity("Inspecting archive", job);
+          setStage("Inspecting archive");
           const listOut = await rc.archiveList(rel, ref, (entry) => {
             addArchiveEntry(stats, entry.path, entry.size);
             void touchRun(runRowId);
@@ -1406,7 +1479,7 @@ export async function runEngine(): Promise<void> {
           // Skip-archive takes precedence over the inspection outcome:
           // re-queue the archive instead of classifying/extracting it.
           throwIfSkipArchive(job);
-          setActivity("", job);
+          setStage("");
           if (job.skipInspection) {
             // The user asked to skip while the listing was in flight; treat
             // the inspection as passed for this archive only.
@@ -1443,7 +1516,7 @@ export async function runEngine(): Promise<void> {
           warn(`skipped (${skipReason}): ${rel} [${detail}]`);
           result = "skipped";
         } else {
-        setActivity("Extracting", job);
+        setStage("Extracting");
         const ex = await withRetries(
           job,
           policy,
@@ -1463,15 +1536,13 @@ export async function runEngine(): Promise<void> {
               !PASSWORD_ERROR.test(`${outcome.tail.join("\n")}\n${outcome.stderr}`),
           },
         );
-        setActivity("", job);
+        setStage("");
         throwIfSkipArchive(job);
 
         if (ex.code !== 0) {
           const all = `${ex.tail.join("\n")}\n${ex.stderr}`;
           if (PASSWORD_ERROR.test(all)) {
-            setActivity("Cleaning up", job);
-            await rc.purge(archiveTmpDir, ref);
-            setActivity("", job);
+            await purgeTmp("password");
             await store.run(
               "UPDATE archives SET status='skipped', error_kind='password', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -1481,6 +1552,7 @@ export async function runEngine(): Promise<void> {
             result = "skipped";
           } else {
             throwIfSkipArchive(job);
+            await purgeTmp("extract failed");
             await store.run(
               "UPDATE archives SET status='failed', error_kind='extract', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -1503,11 +1575,15 @@ export async function runEngine(): Promise<void> {
           let postSkip: "website" | "torrent" | null = null;
           const exStats = createArchiveStats();
           if (useRclonex || extractFirst) {
-            setActivity("Inspecting extracted files", job);
-            const listOut = await rc.listPath(tmp, (p, size) =>
-              addArchiveEntry(exStats, p, size),
+            setStage("Inspecting extracted files");
+            const listOut = await rc.listPath(
+              tmp,
+              (p, size) => addArchiveEntry(exStats, p, size),
+              false,
+              {},
+              ref,
             );
-            setActivity("", job);
+            setStage("");
             throwIfSkipArchive(job);
             // A listing that failed partway through streamed partial data;
             // classification of a partial tree would purge it wrongly.
@@ -1524,14 +1600,7 @@ export async function runEngine(): Promise<void> {
             }
           }
           if (postSkip) {
-            setActivity("Cleaning up", job);
-            const purged = await rc.purge(archiveTmpDir, ref);
-            setActivity("", job);
-            if (purged.code !== 0) {
-              warn(
-                `temp purge failed: ${archiveTmpDir} [$ ${purged.command}] ${purged.stderr.trim() || "unknown error"}`,
-              );
-            }
+            await purgeTmp(postSkip);
             await store.run(
               "UPDATE archives SET status='skipped', error_kind=?, updated_at=? WHERE id=?",
               [postSkip, now(), row.id],
@@ -1540,17 +1609,18 @@ export async function runEngine(): Promise<void> {
             warn(`skipped (${postSkip}): ${rel} [extracted tree]`);
             result = "skipped";
           } else {
-          setActivity("Moving to destination", job);
+          setStage("Moving to destination");
           const promoted = await withRetries(
             job,
             policy,
             () => rc.promote(rel, tmp, ref, tmpTop, statsTracker(runRowId, job)),
             { label: `promote ${rel}`, log: (line) => logger.info(line) },
           );
-          setActivity("", job);
+          setStage("");
           throwIfSkipArchive(job);
           if (promoted.code !== 0) {
             throwIfSkipArchive(job);
+            await purgeTmp("promote failed");
             await store.run(
               "UPDATE archives SET status='failed', error_kind='promote', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -1561,31 +1631,25 @@ export async function runEngine(): Promise<void> {
               `$ ${promoted.command}\n${promoted.tail.join("\n")}`.trim(),
             );
           } else {
-            setActivity("Cleaning up", job);
-            const cleaned = await rc.purge(archiveTmpDir, ref);
-            setActivity("", job);
-            if (cleaned.code !== 0) {
-              warn(
-                `cleanup failed: ${rel} [$ ${cleaned.command}] ${cleaned.stderr.trim()}`,
-              );
-            }
+            await purgeTmp("done");
             // A skip asked while the cleanup ran must not move the archive to
             // trash — without this guard the archive was extracted, promoted
             // and trashed, then re-queued anyway.
             throwIfSkipArchive(job);
 
-            setActivity("Moving to trash", job);
+            setStage("Moving to trash");
             const trashed = await withRetries(
               job,
               policy,
               () => rc.trash(rel, trashSubdir, ref, statsTracker(runRowId, job)),
               { label: `trash ${rel}`, log: (line) => logger.info(line) },
             );
-            setActivity("", job);
+            setStage("");
             if (trashed.code !== 0) {
               // The move did not complete, so the existing skip unwind still
               // applies.
               throwIfSkipArchive(job);
+              await purgeTmp("trash failed");
               await store.run(
                 "UPDATE archives SET status='failed', error_kind='trash', updated_at=? WHERE id=?",
                 [now(), row.id],
@@ -1616,6 +1680,7 @@ export async function runEngine(): Promise<void> {
           // User skip or hard stop: put the archive back in the queue (like a
           // force-stop) and count it as skipped for this run. Done and skipped
           // rows are never resurrected.
+          await purgeTmp(engineState.forceStop ? "hard stop" : "skip request");
           job.skipArchive = false; // consumed by this archive
           await store.run(
             "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=? AND status NOT IN ('done','skipped')",
@@ -1629,6 +1694,7 @@ export async function runEngine(): Promise<void> {
           }
           result = "skipped";
         } else {
+        await purgeTmp("archive error");
         await store.run(
           "UPDATE archives SET status='failed', error_kind='spawn', updated_at=? WHERE id=?",
           [now(), row.id],
@@ -1642,6 +1708,9 @@ export async function runEngine(): Promise<void> {
         }
       } finally {
         engineState.activeIds.delete(job.id);
+        logger.info(
+          `archive #${row.id} ${engineState.forceStop ? "re-queued" : result}: ${rel}`,
+        );
         if (engineState.forceStop) {
           // Hard stop while the archive was mid-flight: put it back in the
           // queue instead of counting it as done/failed/skipped, so it is
@@ -1649,6 +1718,7 @@ export async function runEngine(): Promise<void> {
           // whose terminal state (done/skipped) already committed. The
           // clear error_kind drops any half-written failure from the aborted
           // attempt so it never shows up as a bogus error row.
+          await purgeTmp("hard stop");
           await store.run(
             "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE id=? AND status NOT IN ('done', 'skipped')",
             [now(), row.id],
@@ -1713,27 +1783,9 @@ export async function runEngine(): Promise<void> {
     await Promise.all(workers);
 
     // Best effort: purge only this run's temp dir, which may still hold
-    // extracted data (e.g. an archive was force-stopped mid-flight). Never
-    // purge the shared temp root: it may hold other runs' data.
+    // extracted data (e.g. an archive was force-stopped mid-flight).
     setActivity("Cleaning up");
-    const tmpRootNorm = tmpRoot.replace(/\/+$/, "");
-    const runDir = tmpRunDir(tmpRootNorm, runRowId);
-    const tmpRootIsSafe =
-      tmpRootNorm.length > 1 &&
-      tmpRootNorm !== "/" &&
-      !tmpRootNorm.endsWith(":") &&
-      !/^[A-Za-z]:[\\/]?$/.test(tmpRootNorm) &&
-      runDir === tmpRunDir(tmpRootNorm, runRowId);
-    if (tmpRootIsSafe) {
-      const purged = await rc.purge(runDir);
-      if (purged.code === 0) {
-        logger.info(`purged ${runDir}`);
-      } else {
-        logger.info(`left ${runDir} in place (${purged.stderr.trim() || "purge failed"})`);
-      }
-    } else {
-      logger.info(`left ${runDir} in place (temp root not safe to purge)`);
-    }
+    await purgeRunTempDir(rc);
     setActivity("");
 
     // A move accepted after the last per-archive drain (or with no archives
@@ -1791,6 +1843,11 @@ export async function runEngine(): Promise<void> {
   } catch (e) {
     await abortWithError(errorKind, String(e));
   } finally {
+    // A run that ended early via abortWithError never reaches the normal
+    // cleanup above; a stopped run still needs its temp tree removed.
+    setActivity("Cleaning up");
+    await purgeRunTempDir();
+    setActivity("");
     // Let queued log writes land before the run state resets and (on
     // shutdown) the database closes.
     await logger?.flush();

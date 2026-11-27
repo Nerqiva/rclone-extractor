@@ -9,6 +9,7 @@
   // both pause on scroll-up and resume from the last fetched position.
   var setLogLive = function () {};
   var setErrorsLive = function () {};
+  var manualPause = { log: false, errors: false };
 
   function nearBottom(box) {
     return box.scrollHeight - box.scrollTop - box.clientHeight < 80;
@@ -144,8 +145,14 @@
       var which = liveBtn.getAttribute("data-live-toggle");
       var viewer = document.getElementById("logViewer");
       var cards = document.getElementById("errorCards");
-      if (which === "log" && viewer) setLogLive(viewer.dataset.live !== "1");
-      if (which === "errors" && cards) setErrorsLive(cards.dataset.live !== "1");
+      if (which === "log" && viewer) {
+        manualPause.log = viewer.dataset.live === "1";
+        setLogLive(viewer.dataset.live !== "1");
+      }
+      if (which === "errors" && cards) {
+        manualPause.errors = cards.dataset.live === "1";
+        setErrorsLive(cards.dataset.live !== "1");
+      }
       if (window.appUnmark) window.appUnmark(liveBtn);
     }
   });
@@ -179,19 +186,13 @@
     }
 
     function markFinished() {
-      setLogLive(false);
       var pill = document.getElementById("livePill");
       if (pill) {
         pill.className = "pill ok";
         pill.textContent = "Finished";
       }
       var note = document.getElementById("liveNote");
-      if (note) note.textContent = "session finished \u2014 polling stopped";
-      var btn = document.querySelector('[data-live-toggle="log"]');
-      if (btn) {
-        btn.disabled = true;
-        btn.title = "Session finished";
-      }
+      if (note) note.textContent = "session finished \u2014 log is complete";
     }
 
     var pollLog = function () {
@@ -238,6 +239,11 @@
 
     viewer.addEventListener("scroll", function () {
       if (viewer.dataset.live === "1" && !nearBottom(viewer)) setLogLive(false);
+      else if (
+        viewer.dataset.live === "0" &&
+        !manualPause.log &&
+        nearBottom(viewer)
+      ) setLogLive(true);
     });
     if (viewer.dataset.live === "1") setLogLive(true);
   }
@@ -269,7 +275,6 @@
             errorCards.scrollTop = atBottom ? errorCards.scrollHeight : top;
           }
           if (!payload.live) {
-            setErrorsLive(false);
             var pill = document.getElementById("livePill");
             if (pill) {
               pill.className = "pill ok";
@@ -301,6 +306,11 @@
 
     errorCards.addEventListener("scroll", function () {
       if (errorCards.dataset.live === "1" && !nearBottom(errorCards)) setErrorsLive(false);
+      else if (
+        errorCards.dataset.live === "0" &&
+        !manualPause.errors &&
+        nearBottom(errorCards)
+      ) setErrorsLive(true);
     });
     if (errorCards.dataset.live === "1") setErrorsLive(true);
   }

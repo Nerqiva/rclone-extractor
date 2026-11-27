@@ -28,6 +28,53 @@ test("the shared client runtime ships the htmx:beforeSwap tooltip guard", async 
   expect(app).toContain('htmx.defineExtension("app-morph"');
 });
 
+test("the help indicator is a question mark and the nav uses a slim active marker", async () => {
+  const { info } = await import("../src/ui");
+  expect(info("tip", "thing")).toContain('class="info-i"');
+  expect(info("tip", "thing")).toContain(">?</button>");
+  const css = readFileSync(join(import.meta.dir, "..", "public", "styles.css"), "utf8");
+  const nav = css.slice(css.indexOf(".nav-link {"), css.indexOf(".rail-foot {"));
+  expect(nav).toContain("-webkit-tap-highlight-color: transparent");
+  expect(nav).not.toContain("background: rgba(");
+  expect(nav).toContain("box-shadow: inset 2px 0 0 var(--accent)");
+});
+
+test("archive cards keep their header inline and show retry and cooldown chips", async () => {
+  const css = readFileSync(join(import.meta.dir, "..", "public", "styles.css"), "utf8");
+  const jobHead = css.slice(css.indexOf(".job-card-head {"), css.indexOf(".job-card-foot {"));
+  const errorHead = css.slice(css.indexOf(".error-card-head {"), css.indexOf(".error-name {"));
+  expect(jobHead).not.toContain("justify-content: space-between");
+  expect(errorHead).not.toContain("justify-content: space-between");
+  expect(css).toContain(".retry-info,");
+  expect(css).toContain(".cooldown-info {");
+  const { renderArchiveLogRows } = await import("../src/archiverows");
+  const row = {
+    id: 7,
+    path: "incoming/a.zip",
+    size: 10,
+    status: "extracting",
+    error_kind: null,
+    updated_at: new Date().toISOString(),
+  };
+  const jobs = new Map([[7, { phase: "Extracting", status: "active", stats: null, attempt: 2, cooldownUntil: Date.now() + 30_000 }]]);
+  const html = renderArchiveLogRows([row], jobs);
+  expect(html).toContain("retry 1/3");
+  expect(html).toContain("cooldown 30s");
+  expect(renderArchiveLogRows([row], new Map([[7, { phase: "Extracting", status: "active", stats: null, attempt: 1, cooldownUntil: 0 }]]))).not.toContain("retry 1/3");
+});
+
+test("the UI face is self-hosted Inter and data stays monospace", async () => {
+  const css = readFileSync(join(import.meta.dir, "..", "public", "styles.css"), "utf8");
+  expect(css).toContain('font-family: "Inter"');
+  expect(css).toContain('src: url("/public/fonts/inter-latin-var.woff2")');
+  expect(css).toContain('--font-ui: "Inter"');
+  expect(css).toContain("--font-data: var(--mono)");
+  const font = readFileSync(
+    join(import.meta.dir, "..", "public", "fonts", "inter-latin-var.woff2"),
+  );
+  expect(font.subarray(0, 4).toString("ascii")).toBe("wOF2");
+});
+
 test("the client runtime morphs polled fragments instead of repeating their HTML", async () => {
   const app = readFileSync(join(import.meta.dir, "..", "public", "app.js"), "utf8");
   const copy = readFileSync(join(import.meta.dir, "..", "public", "copy.js"), "utf8");

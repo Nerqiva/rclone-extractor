@@ -1,6 +1,6 @@
 import { esc, info } from "./ui";
 import { baseNameOf } from "./domain";
-import { COMMAND_SEPARATOR } from "./log";
+import { COMMAND_SEPARATOR, stageOf } from "./log";
 
 export interface ErrorRow {
   id: number | string;
@@ -8,6 +8,7 @@ export interface ErrorRow {
   error_kind: string;
   updated_at: string;
   message: string;
+  stage: string;
 }
 
 const APP_LINE = /^(?:skipped \(|killed:|recovered:|archive error:|listing failed|command failed with exit|post-extraction listing failed)/;
@@ -67,40 +68,55 @@ export function relativeTime(iso: string): string {
 function errorCard(r: ErrorRow): string {
   const cls = KIND_CLASS[r.error_kind] || "err";
   const name = baseNameOf(r.path) || r.path;
+  const idAttr = encodeURIComponent(String(r.id));
+  const stage = r.stage
+    ? `<span class="stage-badge">failed at ${esc(r.stage)}</span>`
+    : "";
   return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
           <span class="queue-id">Queue ID #${r.id}</span>
-          <span class="pill ${cls}">${esc(r.error_kind)}</span>
+          ${stage}<span class="pill ${cls}">${esc(r.error_kind)}</span>
         </div>
         <div class="error-path muted">${esc(r.path)}</div>
         ${r.message ? `<pre class="error-message">${esc(r.message)}</pre>` : ""}
         <div class="error-card-foot">
           <span class="muted" title="${esc(r.updated_at)}">${esc(relativeTime(r.updated_at))}</span>
           <span class="error-actions">
-            <button class="btn small" data-copy-url="/download/archive/${encodeURIComponent(String(r.id))}?kind=extract"
+            <button class="btn small" type="button" data-log-toggle="${idAttr}" aria-expanded="false" aria-controls="er-log-${idAttr}">Log view</button>
+            <button class="btn small" data-copy-url="/download/archive/${idAttr}?kind=extract"
               title="Copy the full error log" aria-label="Copy error log for ${esc(name)}">Copy</button>
-            <a class="btn small ghost" href="/download/archive/${encodeURIComponent(String(r.id))}?kind=extract"
+            <a class="btn small ghost" href="/download/archive/${idAttr}?kind=extract"
               aria-label="Download error log for ${esc(name)}">Download</a>
           </span>
         </div>
+        <div class="pw-log log-viewer" id="er-log-${idAttr}" hidden></div>
       </div>`;
 }
 
-export function renderErrorCards(rows: ErrorRow[]): string {
+export function renderFailureCards(rows: ErrorRow[]): string {
   const failures = rows.filter((r) => !isInformationalKind(r.error_kind));
+  return failures.length
+    ? `<div class="error-grid">${failures.map(errorCard).join("")}</div>`
+    : `<div class="empty-state"><p>No failed archives.</p></div>`;
+}
+
+export function renderSkipCards(rows: ErrorRow[]): string {
   const skips = rows.filter((r) => isInformationalKind(r.error_kind));
-  if (failures.length === 0 && skips.length === 0) {
-    return `<div class="empty-state"><p>No errors.</p></div>`;
-  }
-  const grid = (rs: ErrorRow[]) =>
-    `<div class="error-grid">${rs.map(errorCard).join("")}</div>`;
-  return `${failures.length > 0 ? grid(failures) : ""}${
-    skips.length > 0
+  return skips.length
+    ? `<div class="error-grid">${skips.map(errorCard).join("")}</div>`
+    : "";
+}
+
+export function renderErrorCards(rows: ErrorRow[]): string {
+  const failures = renderFailureCards(rows);
+  const skips = renderSkipCards(rows);
+  return `${failures}${
+    skips
       ? `<h3 class="error-group-title">Informational skips ${info(
           "Archives intentionally skipped by the skip rules (tiny, website dump, torrent collection, unreadable). No action needed.",
           "Informational skips",
-        )}</h3>${grid(skips)}`
+        )}</h3>${skips}`
       : ""
   }`;
 }
@@ -135,7 +151,11 @@ export async function readErrorRows(
     }
     // Logs written before command markers have no groups; show the raw tail.
     if (groups.length === 0) {
-      return { ...r, message: chronological.slice(-8).join("\n") };
+      return {
+        ...r,
+        message: chronological.slice(-8).join("\n"),
+        stage: chronological.map(stageOf).filter(Boolean).pop() ?? "",
+      };
     }
     const newestFirst = [...groups].reverse();
     const wanted = KIND_COMMAND[r.error_kind];
@@ -146,6 +166,7 @@ export async function readErrorRows(
     return {
       ...r,
       message: [group.command, ...group.output.slice(-8)].filter(Boolean).join("\n"),
+      stage: stageOf(group.command),
     };
   });
 }

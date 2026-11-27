@@ -10,7 +10,7 @@ import { engineState } from "../engine";
 import { liveArchiveStates } from "../live";
 import { checkRclone, checkRclonex, pendingRcloneConfNotice } from "../rclone";
 import { tailRendered, LOG_TAIL_LIMIT } from "../log";
-import { readErrorRows, renderErrorCards } from "../errorrows";
+import { readErrorRows, renderFailureCards, renderSkipCards } from "../errorrows";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
 import { readArchiveLogRows, renderArchiveLogRows } from "../archiverows";
 import { progressPanel } from "./dashboard";
@@ -50,13 +50,10 @@ pages.get("/config", async (c) => {
   const runtimeRow = runtime.ok
     ? `<dt>rclone</dt><dd><code>${esc(runtime.detail)}</code><br><span class="muted">${esc(runtime.bin)}</span></dd>`
     : `<dt>rclone</dt><dd><span class="note err">not runnable</span><br><code>${esc(runtime.detail)}</code></dd>`;
-  const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
-  const rclonexRuntime = rclonexEnabled ? await checkRclonex() : null;
-  const rclonexRow = rclonexRuntime
-    ? rclonexRuntime.ok
-      ? `<dt>rclonex</dt><dd><code>${esc(rclonexRuntime.detail)}</code><br><span class="muted">${esc(rclonexRuntime.bin)}</span></dd>`
-      : `<dt>rclonex</dt><dd><span class="note err">not runnable</span><br><code>${esc(rclonexRuntime.detail)}</code></dd>`
-    : "";
+  const rclonexRuntime = await checkRclonex();
+  const rclonexRow = rclonexRuntime.ok
+    ? `<dt>rclonex</dt><dd><code>${esc(rclonexRuntime.detail)}</code><br><span class="muted">${esc(rclonexRuntime.bin)}</span></dd>`
+    : `<dt>rclonex</dt><dd><span class="note err">not runnable</span><br><code>${esc(rclonexRuntime.detail)}</code></dd>`;
   const versionRow = `<dt>App version</dt><dd><code>${esc(APP_VERSION)}</code></dd>`;
   const bootRow = `<dt>Booted at</dt><dd><code>${esc(fmtDisplayTime(BOOT_AT.toISOString(), true))}</code></dd>`;
   const running = engineState.running;
@@ -290,14 +287,15 @@ pages.get("/logs", async (c) => {
 pages.get("/errors", async (c) => {
   const running = engineState.running && engineState.runId > 0;
   const [rows, pwRows] = await Promise.all([readErrorRows(store), readPasswordRows()]);
-  const body = `<h2 class="section-title" style="margin-top:0">Failed archives ${info("Archives with an error_kind set, newest first. Password-protected archives are excluded — they have their own section below. Copy fetches the raw output of the failing command.", "Failed archives")}</h2>
+  const body = `<h2 class="section-title" style="margin-top:0">Failed archives ${info("Archives that failed in this run, newest first. Each card shows the stage and command that failed; Log view opens the per-archive output with stage markers.", "Failed archives")}</h2>
     <div class="log-actions" role="toolbar" aria-label="Error actions">
       ${running ? `<span class="pill warn" id="livePill">live</span>` : ""}
       ${running ? `<button class="btn small" type="button" data-live-toggle="errors" aria-pressed="true" title="Toggle live preview">Live preview</button>` : ""}
       <button class="btn small" type="button" data-copy-table="#errorCards">Copy all errors</button>
     </div>
-    <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
-    <h2 class="section-title">Password-protected ${info("Skipped during runs: a warning is logged and the run moves on. Delete moves the file to the trash folder; Restore returns it to the queue.", "Password-protected")}</h2>
+    <div id="errorCards" data-live="${running ? "1" : "0"}">${renderFailureCards(rows)}</div>
+    <h2 class="section-title">Skipped archives ${info("Archives skipped by the built-in rules and by password detection: password protected, website dump, torrent collection, tiny or unreadable. Delete moves the file to the trash folder; Restore returns it to the queue.", "Skipped archives")}</h2>
+    ${renderSkipCards(rows)}
     ${renderPasswordList(pwRows)}
     <script src="${asset("copy.js")}" defer></script>`;
   return c.html(layout("Errors", body, "errors", csrfFor(c), "Archives that need attention: failures and password-protected files."));

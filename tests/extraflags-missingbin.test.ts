@@ -12,7 +12,7 @@ beforeAll(async () => {
   process.env.RCLONEX_BIN = "/nonexistent/path/to/rclonex";
   const mod = await import("../src/extraflags");
   validateExtraFlags = mod.validateExtraFlags;
-  field = mod.EXTRA_FLAG_FIELDS.find((f) => f.key === "extract_extra_flags")!;
+  field = mod.EXTRA_FLAG_FIELDS.find((f) => f.key === "rclonex_extract_extra_flags")!;
 });
 
 test("missing binary allows the save with a clear warning", async () => {
@@ -20,6 +20,6 @@ test("missing binary allows the save with a clear warning", async () => {
   expect(result.ok).toBe(true);
   if (result.ok) {
     expect(result.warning).toContain("saved without validation");
-    expect(result.warning).toContain("extract_extra_flags");
+    expect(result.warning).toContain("rclonex_extract_extra_flags");
   }
 });

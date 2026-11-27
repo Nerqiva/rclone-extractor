@@ -70,14 +70,14 @@ export function fmtDisplayTime(iso: string, withDate = false): string {
 let infoTipSeq = 0;
 
 /**
- * Superscript "(i)" indicator rendered with its tooltip bubble. Hover or
+ * Small superscript help indicator rendered with its tooltip bubble. Hover or
  * keyboard focus reveals it (CSS), tapping toggles it (global script in
  * layout()). `tip` is the full description shown to mouse/touch users;
  * `label` names the thing for screen readers ("More info: <label>").
  */
 export function info(tip: string, label: string): string {
   const id = `info-tip-${++infoTipSeq}`;
-  return `<span class="info-tip"><button type="button" class="info-i" aria-expanded="false" aria-describedby="${id}" aria-label="More info: ${esc(label)}">i</button><span class="info-tip-bubble" role="tooltip" id="${id}">${esc(tip)}</span></span>`;
+  return `<span class="info-tip"><button type="button" class="info-i" aria-expanded="false" aria-describedby="${id}" aria-label="More info: ${esc(label)}">?</button><span class="info-tip-bubble" role="tooltip" id="${id}">${esc(tip)}</span></span>`;
 }
 
 const MODALS = `<div class="modal-overlay" id="stop-modal" hidden role="dialog" aria-modal="true" aria-label="Stop">

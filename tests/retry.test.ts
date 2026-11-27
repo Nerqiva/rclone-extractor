@@ -162,7 +162,6 @@ beforeEach(async () => {
   writeMark("list_out", "40000 ./big.bin\n");
   resetLogs();
   await setSetting("retry_cooldown_seconds", "60");
-  await setSetting("rclonex", "0");
   await setSetting("scan_cache_key", "");
   await setSetting("scan_cache_state", "incomplete");
   engineState.running = false;
@@ -207,7 +206,7 @@ test("extract is attempted four times with a doubling cooldown", async () => {
   const elapsed = Date.now() - started;
 
   expect(await archiveRow("one.zip")).toEqual({ status: "failed", errorKind: "extract" });
-  expect(count(readLog(rcloneLog), "archive extract")).toBe(4);
+  expect(count(readLog(rclonexLog), "archive extract")).toBe(4);
   const log = await runLogText();
   expect(log).toContain("retry 1/3 after 1s: extract one.zip");
   expect(log).toContain("retry 2/3 after 2s: extract one.zip");
@@ -223,12 +222,11 @@ test("a password failure skips immediately without a retry", async () => {
   await runEngine();
 
   expect(await archiveRow("one.zip")).toEqual({ status: "skipped", errorKind: "password" });
-  expect(count(readLog(rcloneLog), "archive extract")).toBe(1);
+  expect(count(readLog(rclonexLog), "archive extract")).toBe(1);
   expect(await runLogText()).not.toContain("retry 1/3");
 });
 
 test("a website skip after extraction is not retried", async () => {
-  await setSetting("rclonex", "1");
   await setSetting("retry_cooldown_seconds", "1");
   writeMark("scan_out", "./site.rar;100000\n");
   writeMark("list_out", "./index.html;100\n./style.css;100\n");
@@ -245,42 +243,33 @@ test("a failed extract keeps resume data for the retry and purges it after succe
   await runEngine();
 
   expect(await archiveRow("one.zip")).toEqual({ status: "done", errorKind: null });
-  const lines = readLog(rcloneLog)
-    .split("\n")
-    .filter((l) => l.includes("archive extract") || l.includes(" purge "));
-  const extracts = lines.flatMap((l, i) => (l.includes("archive extract") ? [i] : []));
+  const xLines = readLog(rclonexLog).split("\n");
+  const extracts = xLines.flatMap((l, i) => (l.includes("archive extract") ? [i] : []));
   expect(extracts.length).toBe(2);
-  const resumePurges = lines.flatMap((l, i) =>
+  const rcLines = readLog(rcloneLog).split("\n");
+  const resumePurges = rcLines.flatMap((l, i) =>
     l.includes(" purge ") && l.includes("/resume/") ? [i] : [],
   );
   expect(resumePurges.length).toBe(1);
   expect(resumePurges[0]).toBeGreaterThan(extracts[1]);
 });
 
-test("resume data survives a failed run and is reused on the next run", async () => {
+test("resume data survives every retry and is purged once the extract fails", async () => {
   await setSetting("retry_cooldown_seconds", "0");
   writeMark("fail_extract", "99");
   await runEngine();
 
   expect(await archiveRow("one.zip")).toEqual({ status: "failed", errorKind: "extract" });
-  const firstLog = readLog(rcloneLog).split("\n");
-  const firstExtract = firstLog.find((l) => l.includes("archive extract")) ?? "";
-  expect(firstExtract).toContain("/resume/");
-  expect(
-    firstLog.some((l) => l.includes(" purge ") && l.includes("/resume/")),
-  ).toBe(false);
-
-  await store.run(
-    "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE path=?",
-    [new Date().toISOString(), "one.zip"],
+  const lines = readLog(rclonexLog).split("\n");
+  const extracts = lines.flatMap((l, i) => (l.includes("archive extract") ? [i] : []));
+  expect(extracts.length).toBe(4);
+  const rcLines = readLog(rcloneLog).split("\n");
+  const resumePurges = rcLines.flatMap((l, i) =>
+    l.includes(" purge ") && l.includes("/resume/") ? [i] : [],
   );
-  rmMark("fail_extract");
-  resetLogs();
-  await runEngine();
-
-  expect(await archiveRow("one.zip")).toEqual({ status: "done", errorKind: null });
-  const secondExtract = readLog(rcloneLog).split("\n").find((l) => l.includes("archive extract")) ?? "";
-  expect(secondExtract).toBe(firstExtract);
+  // No purge between attempts; the failed outcome is the only trigger.
+  expect(resumePurges.length).toBe(1);
+  expect(resumePurges[0]).toBeGreaterThan(extracts[3]);
 });
 
 test("promote and trash failures are retried too", async () => {
@@ -314,7 +303,7 @@ test("a skip during cooldown aborts the wait and re-queues immediately", async (
   await running;
 
   expect(Date.now() - abortedAt).toBeLessThan(3000);
-  expect(count(readLog(rcloneLog), "archive extract")).toBe(1);
+  expect(count(readLog(rclonexLog), "archive extract")).toBe(1);
   expect(await archiveRow("one.zip")).toEqual({ status: "queued", errorKind: null });
 }, 15_000);
 
@@ -337,6 +326,6 @@ test("a hard stop during cooldown aborts the wait and re-queues immediately", as
   await running;
 
   expect(Date.now() - abortedAt).toBeLessThan(3000);
-  expect(count(readLog(rcloneLog), "archive extract")).toBe(1);
+  expect(count(readLog(rclonexLog), "archive extract")).toBe(1);
   expect(await archiveRow("one.zip")).toEqual({ status: "queued", errorKind: null });
 }, 15_000);

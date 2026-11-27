@@ -69,8 +69,7 @@ function matchesAny(patterns: string[], path: string): boolean {
 }
 
 test("patterns are exactly the supported suffixes, in order", () => {
-  expect(archiveIncludePatterns(false)).toEqual(NATIVE.map((s) => `*${s}`));
-  expect(archiveIncludePatterns(true)).toEqual([
+  expect(archiveIncludePatterns()).toEqual([
     ...NATIVE.map((s) => `*${s}`),
     ...RCLONEX_ONLY,
   ]);
@@ -83,8 +82,8 @@ test("every isSupported true-case matches a glob (no false negatives)", () => {
     `UPPER${s.toUpperCase()}`,
   ]);
   for (const name of nativeNames) {
-    expect(matchesAny(archiveIncludePatterns(false), name)).toBe(true);
-    expect(isSupported(name, false)).toBe(true);
+    expect(matchesAny(archiveIncludePatterns(), name)).toBe(true);
+    expect(isSupported(name)).toBe(true);
   }
   const rclonexNames = [
     "x.rar",
@@ -99,8 +98,8 @@ test("every isSupported true-case matches a glob (no false negatives)", () => {
     "x.ISO",
   ];
   for (const name of rclonexNames) {
-    expect(matchesAny(archiveIncludePatterns(true), name)).toBe(true);
-    expect(isSupported(name, true)).toBe(true);
+    expect(matchesAny(archiveIncludePatterns(), name)).toBe(true);
+    expect(isSupported(name)).toBe(true);
   }
 });
 
@@ -109,32 +108,28 @@ test("non-archives and other-volume files are not hidden by the globs", () => {
     "notes.txt",
     "image.png",
     "video.mp4",
-    "x.rar", // rclonex disabled
-    "x.7z", // rclonex disabled
-    "x.iso", // rclonex disabled
     "x.r00", // old-style volumes are never queueable
     "x.r99",
     "file.tar.gz.bak",
     "x.7z.bak",
-    "x.7z.0012", // split volumes are exactly three digits
     "nomatch.txt.gz",
   ];
   for (const name of neverMatch) {
-    expect(matchesAny(archiveIncludePatterns(false), name)).toBe(false);
+    expect(matchesAny(archiveIncludePatterns(), name)).toBe(false);
   }
   // .rNN is not matched even with rclonex enabled (first volume is the .rar)
-  expect(matchesAny(archiveIncludePatterns(true), "x.r00")).toBe(false);
+  expect(matchesAny(archiveIncludePatterns(), "x.r00")).toBe(false);
 });
 
 test("multivolume globs are broad; first-volume selection stays in-app", () => {
-  const patterns = archiveIncludePatterns(true);
+  const patterns = archiveIncludePatterns();
   // Listed (so the app can decide) but never queueable by themselves.
   expect(matchesAny(patterns, "x.part2.rar")).toBe(true);
-  expect(isSupported("x.part2.rar", true)).toBe(false);
+  expect(isSupported("x.part2.rar")).toBe(false);
   expect(matchesAny(patterns, "x.7z.999")).toBe(true);
-  expect(isSupported("x.7z.999", true)).toBe(false);
+  expect(isSupported("x.7z.999")).toBe(false);
   expect(matchesAny(patterns, "x.part01.rar")).toBe(true);
-  expect(isSupported("x.part01.rar", true)).toBe(true);
+  expect(isSupported("x.part01.rar")).toBe(true);
 });
 
 let db: typeof import("../src/db") | null = null;
@@ -190,7 +185,6 @@ exit 0
   const setSetting = db.setSetting;
   await setSetting("scan_root", scanRoot);
   await setSetting("remote_flags", "");
-  await setSetting("rclonex", "0");
   // 1 MB min / 5 MB max; edge.zip (exactly 1 MB) and limit.zip (exactly
   // 5 MB) are kept, toobig/toosmall dropped.
   await setSetting("min_archive_size", String(MB));
@@ -212,9 +206,9 @@ test("lsf is spawned with ignore-case, includes and byte size filters", () => {
   expect(argv).toContain("--include *.tar.gz");
   expect(argv).toContain(`--min-size ${MB}B`);
   expect(argv).toContain(`--max-size ${5 * MB}B`);
-  // rclonex is disabled: no rclonex-only includes
-  expect(argv).not.toContain("*.rar");
-  expect(argv).not.toContain("*.iso");
+  // RcloneX formats are always included now.
+  expect(argv).toContain("*.rar");
+  expect(argv).toContain("*.iso");
 });
 
 test("archives at exactly the size limits are kept", async () => {

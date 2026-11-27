@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { engineState } from "../engine";
+import { engineState, MAX_RETRIES } from "../engine";
 import { store, getSetting } from "../db";
 import { esc, toastTriggerHeaders, fmtDisplayTime, info } from "../ui";
 import { formatBytes, formatRate, formatDuration } from "../format";
@@ -19,6 +19,8 @@ interface JobView {
   phase: string;
   command: string;
   stats: ExtractStats | null;
+  attempt: number;
+  cooldownUntil: number;
   order: number;
   finishedAt: string;
 }
@@ -57,6 +59,8 @@ function jobViews(): JobView[] {
       phase: job.phase,
       command: job.command,
       stats: job.stats,
+      attempt: job.attempt,
+      cooldownUntil: job.cooldownUntil,
       order: job.order,
       finishedAt: job.finishedAt,
     });
@@ -235,12 +239,22 @@ function jobBar(job: JobView): string {
   </div>`;
 }
 
+function retryBadge(attempt: number, cooldownUntil: number): string {
+  if (attempt <= 1) return "";
+  const now = Date.now();
+  const retry = `<span class="retry-info" title="This command is on its ${attempt - 1}${attempt - 1 === 1 ? "st" : "nd"} retry after ${MAX_RETRIES} max">retry ${attempt - 1}/${MAX_RETRIES}</span>`;
+  const cooling = cooldownUntil > now
+    ? `<span class="cooldown-info">cooldown ${Math.ceil((cooldownUntil - now) / 1000)}s</span>`
+    : "";
+  return retry + cooling;
+}
+
 function jobCards(jobs: JobView[]): string {
   if (jobs.length === 0) return "";
   const renderCard = (job: JobView, withSkip: boolean): string => {
     const label = job.phase || stageLabel(job.status);
     const skip =
-      withSkip && job.status === "active"
+      withSkip && job.status === "active" && job.phase !== "Moving to trash"
         ? `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive","id":"${job.id}"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>`
         : "";
     return `<article class="card job-card ${jobStatusClass(job.status)}">
@@ -248,6 +262,7 @@ function jobCards(jobs: JobView[]): string {
         <span class="status-badge ${jobStatusClass(job.status)}"><span class="dot"></span>${esc(label)}</span>
         <span class="pill ${jobPillClass(job.status)}">${esc(job.status)}</span>
         <span class="queue-id">Queue ID #${job.id}</span>
+        ${retryBadge(job.attempt, job.cooldownUntil)}
       </div>
       <div class="error-name" title="${esc(job.path)}">${esc(job.name)}</div>
       <div class="error-path muted">${esc(job.path)}</div>

@@ -70,3 +70,29 @@ test("informational skips are separated from failures", async () => {
   expect(html.indexOf("tiny.zip")).toBeGreaterThan(skipHeading);
   expect(html.indexOf("broken.zip")).toBeLessThan(skipHeading);
 });
+
+test("error cards show the failed stage and an inline log view", async () => {
+  const now = new Date().toISOString();
+  const id = await store.insertReturningId(
+    "INSERT INTO archives(path, size, status, error_kind, created_at, updated_at) VALUES('incoming/staged.zip', 100, 'failed', 'promote', ?, ?)",
+    [now, now],
+  );
+  const { insertLogLines } = await import("../src/log");
+  await insertLogLines(
+    { scope: "archive", refId: id, kind: "extract" },
+    [
+      "---",
+      "$ [Moving to destination] rclone move tmp/out remote/incoming",
+      "native move failure",
+    ],
+  );
+  const rows = await readErrorRows(store);
+  const row = rows.find((r) => Number(r.id) === id);
+  expect(row).toBeDefined();
+  expect(row!.stage).toBe("Moving to destination");
+  const html = renderErrorCards(rows);
+  expect(html).toContain("failed at");
+  expect(html).toContain("Moving to destination");
+  expect(html).toContain(`data-log-toggle="${id}"`);
+  expect(html).toContain(`id="er-log-${id}"`);
+});

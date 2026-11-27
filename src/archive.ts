@@ -25,7 +25,7 @@ const SUPPORTED = [
   ".tar",
 ];
 // RcloneX (Nerqiva/rclonex) adds these to `archive extract`; upstream rclone
-// does not know them. Only honored when the rclonex setting is enabled.
+// does not know them. RcloneX is always enabled, so they are always queued.
 const RCLONEX_SUPPORTED = [".rar", ".7z", ".iso"];
 
 export type MultiVolume = { kind: "rar" | "7z"; index: number };
@@ -58,10 +58,9 @@ export function isRclonexFormat(name: string): boolean {
   return RCLONEX_SUPPORTED.some((suffix) => lower.endsWith(suffix));
 }
 
-export function isSupported(name: string, rclonex = false): boolean {
+export function isSupported(name: string): boolean {
   const lower = name.toLowerCase();
   if (SUPPORTED.some((suffix) => lower.endsWith(suffix))) return true;
-  if (!rclonex) return false;
   return isRclonexFormat(name);
 }
 
@@ -73,12 +72,14 @@ export function isSupported(name: string, rclonex = false): boolean {
  * first-volume selection stays in-app. Old-style `.rNN` volumes are not
  * queueable at all, so no pattern is emitted for them.
  */
-export function archiveIncludePatterns(rclonex = false): string[] {
-  const patterns = SUPPORTED.map((suffix) => `*${suffix}`);
-  if (rclonex) {
-    patterns.push("*.rar", "*.7z", "*.7z.[0-9][0-9][0-9]", "*.iso");
-  }
-  return patterns;
+export function archiveIncludePatterns(): string[] {
+  return [
+    ...SUPPORTED.map((suffix) => `*${suffix}`),
+    "*.rar",
+    "*.7z",
+    "*.7z.[0-9][0-9][0-9]",
+    "*.iso",
+  ];
 }
 
 const STEM_SUFFIXES = [...SUPPORTED, ...RCLONEX_SUPPORTED];
