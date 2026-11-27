@@ -604,17 +604,18 @@ TAR; there is no toggle.
   **off by default**. Use `rclonex_extract_extra_flags` for other `--archive-*`
   flags; they reach rclonex only and never the rclone binary, where they would
   make every command fail.
-- **Docker**: at every container start the entrypoint refreshes both
-  **rclone** and **rclonex** to the latest release into `/app/data/bin`
-  (checksum-verified: rclone against the signed `SHA256SUMS` on
-  downloads.rclone.org, rclonex against the release's `checksums.txt`, and
-  rclonex prefers the latest stable release, falling back to the newest
-  pre-release). Restarts are cheap. The refresh only runs when a newer
-  release exists. If the download or verification fails (e.g. no network at
-  boot), the previous binary is kept and the app starts either way; the
-  image also bakes in build-time copies at `/usr/local/bin` as an offline
-  floor. `RCLONE_BIN` / `RCLONEX_BIN` set by the operator always win. The
-  config page shows an rclonex version row when the feature is enabled.
+- **Docker**: at every container start the entrypoint refreshes **rclone** and
+  **rclonex** into `/app/data/bin` and only when a newer release exists.
+  rclone is checksum-verified against the signed `SHA256SUMS` on
+  downloads.rclone.org. rclonex is refreshed with its own install script,
+  which verifies the release's `checksums.txt` and installs `libc7zip.so`,
+  `7z.so` and `Codecs` beside the binary, where archive extraction needs them.
+  RcloneX uses the newest pre-release. Restarts are cheap. If the download or
+  verification fails (e.g. no network at boot), the previous copy is kept and
+  the app starts either way; the image also bakes in build-time copies at
+  `/usr/local/bin` as an offline floor. `RCLONE_BIN` / `RCLONEX_BIN` set by
+  the operator always win. The config page shows an rclonex version row when
+  the feature is enabled.
 
 ### Content filters
 

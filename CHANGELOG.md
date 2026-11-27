@@ -164,6 +164,7 @@ to `main`.
   `tests/tmppurge.test.ts` cover the new behavior.
 
 ### Fixed
+- **RcloneX extraction no longer fails with `could not initialize libc7zip`.** The container refresh installed only the rclonex binary and dropped the 7-Zip libraries packed beside it in the release. It now runs rclonex's own install script with `RCLONEX_INSTALL_DIR` set to `/app/data/bin`, so `libc7zip.so`, `7z.so` and `Codecs` land with the binary. `tests/fetch-deps.test.ts` covers the refresh.
 - **"Show full output" now uses the same compact log rows as the rest of the page.** Folded command output was rendered as one plain `<pre>` block, so expanding it showed an unorganized wall of text. Each line now renders as a continuation row inside the fold, and an unfinished trailing block uses the same rows.
 - **An open per-archive log keeps its "Hide log" label after a live poll.** A poll that morphed the container restored the open log viewer but only reset `aria-expanded`, letting the server's "Log view" label reappear while the log stayed open. The toggle text is now restored alongside the expanded state.
 - **Configuration Import button no longer stays disabled after an early exit.** Cancelling the import or choosing no backup file left the button stuck with its loading spinner until a page reload. It is now re-enabled on every exit path.

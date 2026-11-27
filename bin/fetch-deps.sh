@@ -63,38 +63,25 @@ fetch_rclonex() {
     log "rclonex: unsupported arch '$arch' — using the image-baked copy"
     return 0
   fi
-  # Latest stable release, falling back to the newest pre-release (all of
-  # rclonex's current releases are pre-releases).
-  json=$(curl -fsSL --max-time 20 https://api.github.com/repos/Nerqiva/rclonex/releases/latest 2>/dev/null) \
-    || json=$(curl -fsSL --max-time 20 "https://api.github.com/repos/Nerqiva/rclonex/releases?per_page=1" 2>/dev/null)
-  if [ -z "$json" ]; then
-    log "rclonex: could not query releases — keeping the previous copy"
-    return 0
-  fi
-  tag=$(printf '%s' "$json" | grep -m1 -o '"tag_name":[^,]*' | cut -d'"' -f4)
-  if [ -z "$tag" ]; then
-    log "rclonex: could not parse the release tag — keeping the previous copy"
-    return 0
-  fi
-  have=$(cat "$BIN_DIR/.rclonex-tag" 2>/dev/null)
-  if [ "$have" = "$tag" ] && [ -x "$BIN_DIR/rclonex" ]; then
-    log "rclonex: up to date ($tag)"
-    return 0
-  fi
-  log "rclonex: fetching $tag (have: ${have:-none})"
-  asset="rclonex_linux_${X_ARCH}.tar.gz"
-  base="https://github.com/Nerqiva/rclonex/releases/download/${tag}"
+  # The release's own installer places the 7-Zip libraries and Codecs beside
+  # the binary, which archive extract needs.
+  script_url="https://raw.githubusercontent.com/Nerqiva/rclonex/main/bin/install-rclonex.sh"
   tmp=$(mktemp -d) || return 0
-  (
-    cd "$tmp" || exit 1
-    curl -fLO --max-time 240 "${base}/${asset}" || exit 1
-    curl -fsSL --max-time 30 "${base}/checksums.txt" -o checksums.txt || exit 1
-    grep "${asset}" checksums.txt | sha256sum -c - || exit 1
-    tar -xzf "$asset" || exit 1
-    install -m 0755 rclonex "$BIN_DIR/rclonex.new" || exit 1
-    mv "$BIN_DIR/rclonex.new" "$BIN_DIR/rclonex" || exit 1
-    printf '%s' "$tag" > "$BIN_DIR/.rclonex-tag"
-  ) && log "rclonex: updated to $tag" || log "rclonex: refresh failed — keeping the previous copy"
+  if ! curl -fsSL --max-time 30 "$script_url" -o "$tmp/install-rclonex.sh"; then
+    log "rclonex: could not download the install script — keeping the previous copy"
+    rm -rf "$tmp"
+    return 0
+  fi
+  if RCLONEX_INSTALL_DIR="$BIN_DIR" bash "$tmp/install-rclonex.sh"; then
+    log "rclonex: updated to $("$BIN_DIR/rclonex" version 2>/dev/null | head -n 1)"
+  else
+    code=$?
+    if [ "$code" = 3 ]; then
+      log "rclonex: up to date"
+    else
+      log "rclonex: refresh failed (exit $code) — keeping the previous copy"
+    fi
+  fi
   rm -rf "$tmp"
 }
 
