@@ -37,6 +37,12 @@ to `main`.
 - `tests/concurrency.test.ts` covers the worker limit, all archives processed,
   failure isolation, run counters, grouped logs, soft stop, hard stop,
   targeted skip, the group rule under load, and the multi-archive views.
+- **`retry_cooldown_seconds` setting** (Configuration → Selection, whole
+  seconds `0`–`86400`, default `60`). A failed extract, promote or trash is
+  retried up to three times with waits of 60s, 120s and 240s at the default;
+  each wait doubles the previous one. `tests/retry.test.ts` covers the attempt
+  count, the doubling waits, the purge before a re-extract, and skip/hard-stop
+  aborts.
 
 ### Changed
 - **History keeps the five newest terminal archives.** Done, failed and
@@ -50,6 +56,15 @@ to `main`.
 - **Group inspection is serialized.** Archives of the same directory and
   family keep their queue order: the first is pre-inspected and later related
   archives depend on its verdict, while different groups run in parallel.
+- **All extraction goes through RcloneX when it is enabled.** The setting
+  still gates which formats are queued (RAR/7Z/ISO and multivolume sets), but
+  ZIP and TAR now use rclonex too. Rclone keeps listing, inspection, promotion,
+  cleanup/purge and trash. The runtime health warning now says all extraction
+  fails when rclonex is not runnable.
+- **Run-level cleanup is purge-only.** The two `rclone rmdir` calls at the end
+  of a run are replaced by one guarded `rclone purge` of that run's temp dir;
+  the shared temp root is never purged. The `rmdir` command and its
+  `rmdir_extra_flags` field are removed.
 
 ### Fixed
 - **Per-archive logs identify the failing command.** Each command that writes
@@ -63,6 +78,11 @@ to `main`.
   misclassified as `unreadable`. Both streams are now stored verbatim and used
   for classification, and the synthetic `skipped (...)` lines are no longer
   written to per-archive logs. `tests/native-log.test.ts` covers this.
+- **Transient command failures no longer fail an archive immediately.**
+  Extract, promote and trash each get up to four attempts. A re-extract purges
+  the stem temp dir first so partial output cannot leak. Password, website/
+  torrent and other skip decisions are never retried, and a skip request or
+  hard stop during a cooldown aborts it and re-queues the archive.
 
 ### Removed
 - **Leftover single-worker progress UI.** The Current/Last archive and

@@ -456,6 +456,17 @@ purge:   rclone purge <TMPDIR>/run_<runid>/<archiveid> (and the run dir)
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
 
+`extract`, `promote` and `trash` are each retried after a failure: four attempts
+in total, with waits of `retry_cooldown_seconds`, twice that and four times
+that (60s, 120s, 240s by default). Listing, inspection, cleanup/purge and
+skipped archives are never retried. Every attempt gets its own `$ <redacted
+command>` marker and raw output block in the archive log, and the run log gets
+one `retry N/3 after Xs: <command> <archive>` line before each wait. A
+re-extract first purges the stem temp dir so partial output cannot leak. A skip
+request or hard stop during a cooldown aborts the wait and re-queues the
+archive; a soft stop waits it out. Password, website/torrent, empty and
+unreadable archives are never resurrected by a retry.
+
 The listing is spawned with `--ignore-case` and one `--include` glob per
 supported archive extension (RAR/7z/ISO and split `name.7z.NNN` volumes only
 when RcloneX is enabled), plus `--min-size`/`--max-size` (bytes, inclusive
@@ -506,7 +517,8 @@ Transfer commands stream single-line stats once per second (`--stats-one-line`);
 the app parses those lines to drive a live byte/percent/speed/ETA bar and
 filters them out of the archive log (they carry no error signal); everything
 else rclone writes is logged. Commands without byte progress (lsf, archive
-list, purge) show an indeterminate bar instead.
+list, purge) show an indeterminate bar instead. Retry waits are announced in
+the run log with the attempt number and cooldown seconds.
 
 Directories matching the app's run layout (`run_<digits>/`, as created
 under `tmp_dir`) are purged automatically at boot, at the start of every run,
