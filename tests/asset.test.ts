@@ -16,9 +16,11 @@ test("asset() busts /public/* caches with the release version", async () => {
   expect(html).not.toContain('href="/public/styles.css"');
 });
 
-test("layout ships the htmx:beforeSwap guard that preserves open info tooltips", async () => {
-  const { layout } = await import("../src/ui");
+test("the shared client runtime ships the htmx:beforeSwap tooltip guard", async () => {
+  const { asset, layout } = await import("../src/ui");
   const html = layout("t", "<p>x</p>", "test");
-  expect(html).toContain("htmx:beforeSwap");
-  expect(html).toContain('querySelector(".info-tip.open")');
+  expect(html).toContain(`src="${asset("app.js")}"`);
+  const app = readFileSync(join(import.meta.dir, "..", "public", "app.js"), "utf8");
+  expect(app).toContain("htmx:beforeSwap");
+  expect(app).toContain('querySelector(".info-tip.open")');
 });

@@ -19,7 +19,7 @@ export const pages = new Hono();
 pages.get("/", async (c) => {
   const confNotice = pendingRcloneConfNotice();
   const noticeScript = confNotice
-    ? `<script>window.addEventListener("load",function(){window.appToast&&window.appToast(${JSON.stringify(confNotice).replace(/</g, "\\u003c")},"err");});</script>`
+    ? `<span data-app-toast="${esc(confNotice)}" data-toast-kind="err" hidden></span>`
     : "";
   const [panel, controls] = await Promise.all([
     progressPanel(),
@@ -104,127 +104,7 @@ pages.get("/config", async (c) => {
     </div>
     <div id="tmp-purge-result"></div>
     <div id="maintenance-result"></div>
-  </div>
-  <script>
-  (function () {
-    var toast = function (message, kind) { window.appToast(message, kind); };
-
-    function setLoading(btn, loading) {
-      if (!btn) return;
-      btn.disabled = loading;
-      btn.classList.toggle("is-loading", loading);
-      if (!loading && window.appUnmark) window.appUnmark(btn);
-      var label = btn.querySelector(".btn-label");
-      if (!label) return;
-      if (!btn.dataset.idleLabel) btn.dataset.idleLabel = label.textContent;
-      label.textContent = loading
-        ? (btn.dataset.loadingLabel || "Working…")
-        : btn.dataset.idleLabel;
-    }
-
-    document.addEventListener("click", function (event) {
-      var edit = event.target.closest("[data-edit]");
-      if (edit) {
-        var setting = edit.closest(".setting");
-        if (setting) {
-          setting.classList.add("editing");
-          var focusable = setting.querySelector("input, textarea, select");
-          if (focusable) focusable.focus();
-        }
-        return;
-      }
-      var cancel = event.target.closest("[data-cancel]");
-      if (cancel) {
-        var editing = cancel.closest(".setting");
-        if (editing) editing.classList.remove("editing");
-      }
-    });
-
-    var exportForm = document.getElementById("export-form");
-    if (exportForm) {
-      exportForm.addEventListener("submit", async function (event) {
-        event.preventDefault();
-        if (exportForm.include_rclone && exportForm.include_rclone.checked &&
-            !window.confirm("The export will contain unencrypted secrets: rclone.conf, database_url and the archive password. Continue?")) {
-          return;
-        }
-        var btn = exportForm.querySelector('button[type="submit"]');
-        setLoading(btn, true);
-        try {
-          var res = await fetch(exportForm.action, {
-            method: "POST",
-            body: new FormData(exportForm),
-            credentials: "same-origin",
-            headers: { "Accept": "application/json" },
-          });
-          var contentType = res.headers.get("content-type") || "";
-          var text = await res.text();
-          if (res.status === 401) {
-            throw new Error("your session expired — reload the page and sign in again");
-          }
-          var parsed = null;
-          try { parsed = JSON.parse(text); } catch (_) { /* not JSON */ }
-          var isPayload = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
-          if (!res.ok || !isPayload) {
-            var why = "HTTP " + res.status +
-              (contentType ? ", " + contentType : "") +
-              (res.redirected ? ", redirected" : "");
-            throw new Error("unexpected response from /export (" + why + ")");
-          }
-          var disposition = res.headers.get("content-disposition") || "";
-          var match = /filename="?([^";]+)"?/.exec(disposition);
-          var filename = match ? match[1] : "export-" + Date.now() + ".json";
-          var blob = new Blob([text], { type: "application/json" });
-          var url = URL.createObjectURL(blob);
-          var link = document.createElement("a");
-          link.href = url;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          link.remove();
-          setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-          toast("Export downloaded.", "ok");
-        } catch (err) {
-          toast("Export failed: " + (err && err.message ? err.message : String(err)), "err");
-        } finally {
-          setLoading(btn, false);
-        }
-      });
-    }
-
-    var importForm = document.getElementById("import-form");
-    if (importForm) {
-      importForm.addEventListener("submit", async function (event) {
-        event.preventDefault();
-        var btn = importForm.querySelector('button[type="submit"]');
-        var fileInput = importForm.querySelector('input[type="file"]');
-        if (fileInput && (!fileInput.files || fileInput.files.length === 0)) {
-          toast("Choose a backup .json file first.", "err");
-          return;
-        }
-        if (!window.confirm("Importing a backup overwrites matching rows in the current database. Continue?")) {
-          return;
-        }
-        setLoading(btn, true);
-        try {
-          var res = await fetch(importForm.action, {
-            method: "POST",
-            body: new FormData(importForm),
-          });
-          var data = await res.json().catch(function () { return null; });
-          if (!data) throw new Error("import failed (HTTP " + res.status + ")");
-          if (!res.ok || !data.ok) throw new Error(data.message || "import failed");
-          toast(data.message || "Import complete.", "ok");
-          importForm.reset();
-        } catch (err) {
-          toast("Import failed: " + (err && err.message ? err.message : String(err)), "err");
-        } finally {
-          setLoading(btn, false);
-        }
-      });
-    }
-  })();
-  </script>`;
+  </div>`;
   return c.html(layout("Configuration", (await configForm()) + extra, "config", csrf, "Settings, secrets, backup and maintenance."));
 });
 
@@ -399,47 +279,10 @@ pages.get("/logs", async (c) => {
     ${summary}
     ${showLog || isArchivesTab ? copyToolbar : ""}
     ${logBlock}
-    ${isArchivesTab ? LOG_TOGGLE_SCRIPT : ""}
     <script src="${asset("copy.js")}" defer></script>`;
   return c.html(layout("Logs", body, "logs", csrfFor(c), "Raw output of each run, newest session first."));
 });
 
-const LOG_TOGGLE_SCRIPT = `<script>
-document.addEventListener("click", async function (event) {
-  var btn = event.target.closest ? event.target.closest("[data-log-toggle]") : null;
-  if (!btn) return;
-  var id = btn.getAttribute("data-log-toggle");
-  var boxId = btn.getAttribute("aria-controls");
-  var box = boxId ? document.getElementById(boxId) : null;
-  if (!box || !id) return;
-  var collapsed = !box.hidden;
-  if (collapsed) {
-    box.hidden = true;
-    btn.textContent = "Log view";
-    btn.setAttribute("aria-expanded", "false");
-    if (window.appUnmark) window.appUnmark(btn);
-    return;
-  }
-  if (!box.dataset.loaded) {
-    box.innerHTML = '<p class="muted" style="padding:10px 14px">Loading…</p>';
-    try {
-      var res = await fetch("/logs/archive/" + encodeURIComponent(id) + "/fragment?limit=300");
-      if (!res.ok) {
-        box.innerHTML = '<p class="muted" style="padding:10px 14px">Could not load the log.</p>';
-        return;
-      }
-      box.innerHTML = await res.text();
-      box.dataset.loaded = "1";
-    } catch (e) {
-      box.innerHTML = '<p class="muted" style="padding:10px 14px">Could not load the log.</p>';
-    }
-  }
-  box.hidden = false;
-  btn.textContent = "Hide log";
-  btn.setAttribute("aria-expanded", "true");
-  if (window.appUnmark) window.appUnmark(btn);
-});
-</script>`;
 
 pages.get("/errors", async (c) => {
   const running = engineState.running && engineState.runId > 0;
@@ -453,7 +296,6 @@ pages.get("/errors", async (c) => {
     <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
     <h2 class="section-title">Password-protected ${info("Skipped during runs: a warning is logged and the run moves on. Delete moves the file to the trash folder; Restore returns it to the queue.", "Password-protected")}</h2>
     ${renderPasswordList(pwRows)}
-    ${LOG_TOGGLE_SCRIPT}
     <script src="${asset("copy.js")}" defer></script>`;
   return c.html(layout("Errors", body, "errors", csrfFor(c), "Archives that need attention: failures and password-protected files."));
 });

@@ -45,6 +45,12 @@ to `main`.
   aborts.
 
 ### Changed
+- **One client runtime.** Toast handling, busy state, CSRF headers, polling,
+  modals, navigation, config editing and log toggles now live in a single
+  `public/app.js` instead of five inline script islands. One registry drives
+  polls and pauses them in hidden tabs, and a busy button stays disabled while
+  its request is still in flight. The tooltip guard moved with the code, and
+  `tests/asset.test.ts` now checks it at its new home.
 - **Interface makeover.** Navigation and controls use system UI typography;
   logs, paths and values keep the monospaced face. Labels read as sentences,
   raw setting keys are de-emphasized, cards use softer corners, and the active

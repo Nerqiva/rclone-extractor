@@ -894,6 +894,7 @@ public/
   favicon.svg      r/ monogram icon
   styles.css       design system
   htmx.min.js      vendored htmx
+  app.js           shared client runtime: toasts, busy state, polling, modals, config editing
   copy.js          clipboard copy + incremental polling with live-preview toggle
   fonts/           self-hosted JetBrains Mono
 ```
