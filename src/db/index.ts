@@ -83,6 +83,7 @@ async function initDbOnce(): Promise<void> {
   await migrateDropSessionsCreatedAt();
   await migrateRclonexArchiveBufferSize();
   await migrateArchivesLastRun();
+  await migrateArchivesStatusIndex();
   await migrateRemoteFlags();
 
   const seen = new Set<string>();
@@ -326,6 +327,10 @@ async function migrateArchivesLastRun(): Promise<void> {
  * then drops the legacy keys. Runs before the defaults are inserted so a
  * legacy value is upgraded instead of silently replaced by the default.
  */
+async function migrateArchivesStatusIndex(): Promise<void> {
+  await store.run("CREATE INDEX IF NOT EXISTS idx_archives_status ON archives(status)");
+}
+
 async function migrateRclonexArchiveBufferSize(): Promise<void> {
   const rows = await store.query<{ key: string; value: string }>(
     "SELECT key, value FROM settings WHERE key IN ('rclonex_window_size_enabled', 'rclonex_window_size', 'rclonex_archive_buffer_size')",

@@ -745,14 +745,17 @@ export async function runEngine(): Promise<void> {
   engineState.activeIds = new Set();
   engineState.concurrency = 1;
 
-  const scanRoot = (await getSetting("scan_root", "")) ?? "";
+  // One settings read at run start. Everything the engine consumes is pinned
+  // to this snapshot; a config edit during the run applies from the next run.
+  const cfg = await allSettings();
+  const scanRoot = cfg["scan_root"] ?? "";
   engineState.currentScanRoot = scanRoot;
   // Validate tmp_dir up front so misconfiguration fails fast instead of
   // producing a half-extracted archive outside the expected tree.
-  const trashRaw = (await getSetting("trash_subdir", TRASH)) ?? TRASH;
+  const trashRaw = cfg["trash_subdir"] ?? TRASH;
   const trashSubdirValidated = parseTrashSubdir(trashRaw);
   const tmpSettings = trashSubdirValidated
-    ? await loadTmpDirSettings(trashSubdirValidated)
+    ? await loadTmpDirSettings(trashSubdirValidated, cfg)
     : null;
   const tmpSpec = tmpSettings?.spec ?? null;
 
@@ -859,7 +862,7 @@ export async function runEngine(): Promise<void> {
   resetCancelCache();
 
   try {
-    const resumeEnabled = (await getSetting("resume", "1")) === "1";
+    const resumeEnabled = (cfg["resume"] ?? "1") === "1";
     const recovered = await recoverStale(resumeEnabled, undefined, runRowId, true);
     if (recovered > 0) {
       console.log(
@@ -920,28 +923,23 @@ export async function runEngine(): Promise<void> {
       setActivity("");
     }
 
-    const queueMax = clampQueueMax(await getSetting("queue_max", "500"));
-    const maxArchiveSize = clampArchiveSize(
-      await getSetting("max_archive_size", "0"),
-    );
-    const minArchiveSize = clampArchiveSize(
-      await getSetting("min_archive_size", "0"),
-    );
+    const queueMax = clampQueueMax(cfg["queue_max"] ?? "500");
+    const maxArchiveSize = clampArchiveSize(cfg["max_archive_size"] ?? "0");
+    const minArchiveSize = clampArchiveSize(cfg["min_archive_size"] ?? "0");
     const cooldownSeconds =
-      parseCooldownSeconds(await getSetting("retry_cooldown_seconds", "60")) ?? 60;
+      parseCooldownSeconds(cfg["retry_cooldown_seconds"] ?? "60") ?? 60;
     const policy: RetryPolicy = { baseMs: cooldownSeconds * 1000, maxRetries: 3 };
     logger.info(`retry cooldown=${cooldownSeconds}s (up to ${policy.maxRetries} retries)`);
-    const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
+    const rclonexEnabled = (cfg["rclonex"] ?? "0") === "1";
     // RcloneX-specific extraction flags (default off). A stored archive
     // password is only passed when its checkbox enabled it.
     const rclonexPasswordEnabled =
-      (await getSetting("rclonex_archive_password_enabled", "0")) === "1";
-    const rclonexPassword =
-      (await getSetting("rclonex_archive_password", "")) ?? "";
+      (cfg["rclonex_archive_password_enabled"] ?? "0") === "1";
+    const rclonexPassword = cfg["rclonex_archive_password"] ?? "";
     // Sliding-window buffer for random-access formats read by rclonex
     // (7Z, ISO) — stored as bytes; 0 disables the override (rclonex keeps
     // its own default).
-    const rawBuffer = await getSetting("rclonex_archive_buffer_size", "16777216");
+    const rawBuffer = cfg["rclonex_archive_buffer_size"] ?? "16777216";
     const rclonexBufferSize = Number(rawBuffer);
     const rclonexFlags: string[] = [];
     if (rclonexPasswordEnabled && rclonexPassword) {
@@ -957,13 +955,12 @@ export async function runEngine(): Promise<void> {
         String(Math.floor(rclonexBufferSize)),
       );
     }
-    const autoSkipKnown = (await getSetting("auto_skip_known", "1")) === "1";
+    const autoSkipKnown = (cfg["auto_skip_known"] ?? "1") === "1";
     const trashSubdir = trashSubdirValidated;
     const trashDir = normalizeRel(trashSubdir);
-    const fingerprint = configFingerprint(await allSettings());
-    const cacheKey = (await getSetting("scan_cache_key", "")) ?? "";
-    const cacheState =
-      (await getSetting("scan_cache_state", "incomplete")) ?? "";
+    const fingerprint = configFingerprint(cfg);
+    const cacheKey = cfg["scan_cache_key"] ?? "";
+    const cacheState = cfg["scan_cache_state"] ?? "incomplete";
     const reuseScan = cacheState === "complete" && cacheKey === fingerprint;
     if (!reuseScan && cacheState === "complete") {
       logger.info("no valid cached scan for these settings; scanning fresh");
@@ -1133,8 +1130,8 @@ export async function runEngine(): Promise<void> {
 
     engineState.stage = "queueing";
     setActivity("Building queue");
-    const sortBy = (await getSetting("sort_by", "path")) === "size" ? "size" : "path";
-    const sortDir = (await getSetting("sort_dir", "asc")) === "desc" ? "DESC" : "ASC";
+    const sortBy = (cfg["sort_by"] ?? "path") === "size" ? "size" : "path";
+    const sortDir = (cfg["sort_dir"] ?? "asc") === "desc" ? "DESC" : "ASC";
     // Exclude pre-existing queued rows that live in the trash subdir (e.g.
     // enqueued by an older version), so they are never processed.
     // Archives outside the configured size window that were queued before the
@@ -1177,7 +1174,7 @@ export async function runEngine(): Promise<void> {
       return { rc, rx };
     };
 
-    engineState.concurrency = clampConcurrency(await getSetting("concurrency", "1"));
+    engineState.concurrency = clampConcurrency(cfg["concurrency"] ?? "1");
     logger.info(`concurrency=${engineState.concurrency}`);
 
     // One entry per (directory, archive family) in this run, shared by every

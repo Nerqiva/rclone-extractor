@@ -16,8 +16,22 @@ export function encryptionEnabled(): boolean {
   return SECRET_KEY.length > 0;
 }
 
+// One salt per stored secret. Deriving it again on every read costs ~23 ms,
+// so keep a small bounded cache keyed by salt. A new salt still pays scrypt.
+const derivedKeys = new Map<string, Buffer>();
+const MAX_CACHED_KEYS = 16;
+
 function deriveKey(salt: Buffer): Buffer {
-  return scryptSync(SECRET_KEY, salt, KEY_LEN);
+  const cacheKey = salt.toString("hex");
+  const cached = derivedKeys.get(cacheKey);
+  if (cached) return cached;
+  const key = scryptSync(SECRET_KEY, salt, KEY_LEN);
+  if (derivedKeys.size >= MAX_CACHED_KEYS) {
+    const oldest = derivedKeys.keys().next().value;
+    if (oldest) derivedKeys.delete(oldest);
+  }
+  derivedKeys.set(cacheKey, key);
+  return key;
 }
 
 export function encrypt(plain: string): string {

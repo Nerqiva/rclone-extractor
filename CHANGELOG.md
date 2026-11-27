@@ -45,6 +45,12 @@ to `main`.
   aborts.
 
 ### Changed
+- **Cold starts and polls do less work.** Derived encryption keys are memoized
+  per salt, each run and rclone construction reads one settings snapshot instead
+  of a dozen queries, and the Errors and Archives poll fragments are reused
+  while their underlying rows are unchanged. An `archives.status` index is
+  created on upgrade, and boot probes and recovery no longer block the first
+  request. `tests/fragmentcache.test.ts` covers fragment reuse and eviction.
 - **One client runtime.** Toast handling, busy state, CSRF headers, polling,
   modals, navigation, config editing and log toggles now live in a single
   `public/app.js` instead of five inline script islands. One registry drives

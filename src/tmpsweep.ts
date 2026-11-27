@@ -14,12 +14,14 @@ export type TmpDirSettings = {
 
 export async function loadTmpDirSettings(
   trashSubdir?: string,
+  settings?: Record<string, string>,
 ): Promise<TmpDirSettings> {
-  const scanRoot = (await getSetting("scan_root", "")) ?? "";
+  const scanRoot = settings?.["scan_root"] ?? ((await getSetting("scan_root", "")) ?? "");
   const trash =
-    trashSubdir ?? ((await getSetting("trash_subdir", TRASH)) ?? TRASH);
-  const raw =
-    ((await getSetting("tmp_dir", TMP_DIR)) ?? TMP_DIR).trim();
+    trashSubdir ??
+    settings?.["trash_subdir"] ??
+    ((await getSetting("trash_subdir", TRASH)) ?? TRASH);
+  const raw = (settings?.["tmp_dir"] ?? ((await getSetting("tmp_dir", TMP_DIR)) ?? TMP_DIR)).trim();
   const spec = raw
     ? parseTmpDir(raw, scanRoot, trash)
     : { kind: "relative" as const, value: TMP_DIR };

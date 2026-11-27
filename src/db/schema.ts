@@ -57,6 +57,8 @@ CREATE INDEX IF NOT EXISTS idx_archives_error
   WHERE error_kind IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_archives_last_run ON archives(last_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_archives_status ON archives(status);
 `;
 
 export const PG_SCHEMA = `
@@ -118,6 +120,8 @@ CREATE INDEX IF NOT EXISTS idx_archives_error
   WHERE error_kind IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_archives_last_run ON archives(last_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_archives_status ON archives(status);
 `;
 
 /**

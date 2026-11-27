@@ -7,6 +7,7 @@ import { liveArchiveStates } from "../live";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 import { readArchiveLogRows, renderArchiveLogRows } from "../archiverows";
 import { Rclone } from "../rclone";
+import { cachedFragment } from "../fragmentcache";
 import { isSafeRel, parseTrashSubdir, normalizeRel, TRASH } from "../archive";
 import {
   tryRegisterDownload,
@@ -82,8 +83,20 @@ logsapi.get("/logs/fragment", async (c) => {
 logsapi.get("/errors/fragment", async (c) => {
   noStore(c);
   c.header("X-Engine-Live", engineState.running ? "1" : "0");
-  const rows = await readErrorRows(store);
-  return c.html(renderErrorCards(rows));
+  const html = await cachedFragment(
+    "errors-fragment",
+    async () => {
+      const row = await store.get1<{ n: number | string; t: string | null; l: number | string }>(
+        `SELECT
+           (SELECT COUNT(*) FROM archives WHERE error_kind IS NOT NULL AND error_kind <> 'password') AS n,
+           (SELECT MAX(updated_at) FROM archives WHERE error_kind IS NOT NULL AND error_kind <> 'password') AS t,
+           (SELECT COALESCE(MAX(id), 0) FROM log_lines WHERE scope = 'archive' AND kind = 'extract') AS l`,
+      );
+      return `${row?.n ?? 0}|${row?.t ?? ""}|${row?.l ?? 0}`;
+    },
+    async () => renderErrorCards(await readErrorRows(store)),
+  );
+  return c.html(html);
 });
 
 logsapi.get("/download/run/:id", async (c) => {
@@ -170,8 +183,27 @@ logsapi.get("/logs/archives-fragment", async (c) => {
   noStore(c);
   const runId = positiveId(c.req.query("run"));
   if (runId === null) return c.text("not found", 404);
+  const live = liveArchiveStates(runId, true);
+  // Live phases change without a database write, so a finished fingerprint
+  // cannot stand in for them while the run is active.
+  if (live) {
+    return c.html(renderArchiveLogRows(await readArchiveLogRows(runId), live));
+  }
   return c.html(
-    renderArchiveLogRows(await readArchiveLogRows(runId), liveArchiveStates(runId, true)),
+    await cachedFragment(
+      `archives-${runId}`,
+      async () => {
+        const row = await store.get1<{ n: number | string; t: string | null; l: number | string }>(
+          `SELECT
+             (SELECT COUNT(*) FROM archives WHERE last_run_id = ?) AS n,
+             (SELECT COALESCE(MAX(updated_at), '') FROM archives WHERE last_run_id = ?) AS t,
+             (SELECT COALESCE(MAX(id), 0) FROM log_lines WHERE scope = 'archive' AND kind = 'extract') AS l`,
+          [runId, runId],
+        );
+        return `${row?.n ?? 0}|${row?.t ?? ""}|${row?.l ?? 0}`;
+      },
+      async () => renderArchiveLogRows(await readArchiveLogRows(runId), undefined),
+    ),
   );
 });
 

@@ -1,6 +1,6 @@
 import { writeFileSync, renameSync, chmodSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { getSetting } from "./db";
+import { getSetting, allSettings } from "./db";
 import { baseNameOf } from "./domain";
 import {
   isSupported,
@@ -553,16 +553,20 @@ export class Rclone {
     runLog?: Logger,
     opts: { rclonex?: boolean; confPath?: string } = {},
   ): Promise<Rclone> {
-    const root = (await getSetting("scan_root", "")) ?? "";
+    // One read of the settings table per runner instead of one query per key.
+    // The snapshot is taken at call time, so a config change between runs still
+    // lands on the next runner built.
+    const cfg = await allSettings();
+    const root = cfg["scan_root"] ?? "";
     // An empty root joins to absolute local paths; never build one.
     if (!root.trim()) {
       throw new Error("scan_root is not configured");
     }
     const extra: Record<string, string[]> = {};
     for (const field of EXTRA_FLAG_FIELDS) {
-      extra[field.key] = parseExtraFlags((await getSetting(field.key, "")) ?? "");
+      extra[field.key] = parseExtraFlags(cfg[field.key] ?? "");
     }
-    const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
+    const rclonexEnabled = (cfg["rclonex"] ?? "0") === "1";
 
     const conf = await resolveConfText();
     if (conf && !opts.confPath) {

@@ -867,7 +867,7 @@ A small SQL dialect layer rewrites the few divergent statements
 
 ```
 src/
-  server.ts        entry: init DB, boot resume, wire routes, listen
+  server.ts        entry: init DB, wire routes, listen, then boot checks
   config.ts        env + paths
   crypto.ts        AES-256-GCM secret encryption
   db/              Store interface + sqlite/postgres backends + schema
@@ -878,6 +878,9 @@ src/
   ui.ts            HTML layout + escaping
   views.ts         UI fragment builders (run controls, Configuration form)
   format.ts        shared byte/duration formatters
+  domain.ts        shared path, status and id helpers
+  live.ts          live archive state for poll views
+  fragmentcache.ts cached poll fragments
   errorrows.ts     error-card rendering (Errors page)
   passwordrows.ts  password-protected rows (Errors page section)
   archiverows.ts   per-run archive rows (Logs page, Archives tab)

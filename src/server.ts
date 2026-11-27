@@ -21,53 +21,60 @@ if (!APP_PASSWORD) {
   console.warn("APP_PASSWORD is not set; login is disabled.");
 }
 
-const rcloneHealth = await checkRclone();
-if (rcloneHealth.ok) {
-  console.log(`rclone ok: ${rcloneHealth.detail} (${rcloneHealth.bin})`);
-} else {
-  console.warn(`rclone not runnable: ${rcloneHealth.detail}`);
-}
-
-if ((await getSetting("rclonex", "0")) === "1") {
-  const rclonexHealth = await checkRclonex();
-  if (rclonexHealth.ok) {
-    console.log(`rclonex ok: ${rclonexHealth.detail} (${rclonexHealth.bin})`);
+/**
+ * Health probes, stale-run recovery and temp sweeping are not needed to accept
+ * the first request. Run them after the module is evaluated so listen is not
+ * blocked on rclone subprocesses or a large recovery.
+ */
+async function bootChecks(): Promise<void> {
+  const rcloneHealth = await checkRclone();
+  if (rcloneHealth.ok) {
+    console.log(`rclone ok: ${rcloneHealth.detail} (${rcloneHealth.bin})`);
   } else {
-    console.warn(
-      `rclonex not runnable: ${rclonexHealth.detail} — RAR/7Z/ISO extraction will fail`,
+    console.warn(`rclone not runnable: ${rcloneHealth.detail}`);
+  }
+
+  if ((await getSetting("rclonex", "0")) === "1") {
+    const rclonexHealth = await checkRclonex();
+    if (rclonexHealth.ok) {
+      console.log(`rclonex ok: ${rclonexHealth.detail} (${rclonexHealth.bin})`);
+    } else {
+      console.warn(
+        `rclonex not runnable: ${rclonexHealth.detail} — RAR/7Z/ISO extraction will fail`,
+      );
+    }
+  }
+
+  const resume = (await getSetting("resume", "1")) === "1";
+  const recovered = await recoverStale(resume, undefined, undefined, true);
+  if (recovered > 0) {
+    console.log(
+      resume
+        ? `boot: recovered ${recovered} stale archive(s)`
+        : `boot: marked ${recovered} killed archive(s) as failed`,
     );
   }
-}
 
-const resume = (await getSetting("resume", "1")) === "1";
-const recovered = await recoverStale(resume, undefined, undefined, true);
-if (recovered > 0) {
-  console.log(
-    resume
-      ? `boot: recovered ${recovered} stale archive(s)`
-      : `boot: marked ${recovered} killed archive(s) as failed`,
-  );
-}
-
-const tmpBoot = await loadTmpDirSettings();
-if (tmpBoot.spec) {
-  try {
-    const rcBoot = await Rclone.fromSettings();
-    const res = await rcBoot.purgeStaleTemp(
-      tmpRootPath(tmpBoot.scanRoot, tmpBoot.spec),
-      await liveRunIds(),
-    );
-    if (res.purged.length) {
-      console.log(`boot: purged ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`);
+  const tmpBoot = await loadTmpDirSettings();
+  if (tmpBoot.spec) {
+    try {
+      const rcBoot = await Rclone.fromSettings();
+      const res = await rcBoot.purgeStaleTemp(
+        tmpRootPath(tmpBoot.scanRoot, tmpBoot.spec),
+        await liveRunIds(),
+      );
+      if (res.purged.length) {
+        console.log(`boot: purged ${res.purged.length} stale temp dir(s): ${res.purged.join(", ")}`);
+      }
+      if (res.failed.length) {
+        console.warn(`boot: could not purge temp dir(s): ${res.failed.join(", ")}`);
+      }
+    } catch (e) {
+      console.warn(`boot: temp sweep failed: ${e}`);
     }
-    if (res.failed.length) {
-      console.warn(`boot: could not purge temp dir(s): ${res.failed.join(", ")}`);
-    }
-  } catch (e) {
-    console.warn(`boot: temp sweep failed: ${e}`);
+  } else {
+    console.warn(`boot: invalid tmp_dir setting (${tmpBoot.raw}); skipping temp sweep`);
   }
-} else {
-  console.warn(`boot: invalid tmp_dir setting (${tmpBoot.raw}); skipping temp sweep`);
 }
 
 const app = new Hono();
@@ -142,6 +149,8 @@ app.route("/", dashboard);
 app.route("/", actions);
 app.route("/", logsapi);
 app.route("/", data);
+
+void bootChecks().catch((e) => console.warn(`boot checks failed: ${String(e)}`));
 
 console.log(`rclone-extractor listening on http://${BIND}:${PORT} (db=${store.backend()})`);
 
