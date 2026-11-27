@@ -44,9 +44,26 @@ test("error() detail block folds and rows survive the round trip", async () => {
   expect(html).toContain("Show full output (2 lines)");
   expect(html).toContain("line one");
   expect(html).toContain("line two");
-  expect(html).toContain("log-detail-pre");
+  expect(html).toContain("log-detail-lines");
+  expect(html).toContain('<span class="log-msg">line one</span>');
+  expect(html).toContain('<span class="log-msg">line two</span>');
+  expect(html).not.toContain("<pre");
   expect(html).toContain("<details");
   expect(html).toContain(" open>");
+});
+
+test("unfinished detail block uses the same compact rows as a folded block", async () => {
+  const ref = { scope: "run" as const, refId: 987004, kind: "main" as const };
+  const { insertLogLines, tailRendered } = await import("../src/log");
+  await insertLogLines(ref, ["-".repeat(72), "tail one", "tail two"]);
+  const { entries } = await tailRendered(ref, 50);
+  const html = entries.map((e) => e.html).join("\n");
+  expect(html).toContain("log-detail-lines");
+  expect(html).toContain("log-entry log-continuation");
+  expect(html).toContain('<span class="log-msg">tail one</span>');
+  expect(html).toContain('<span class="log-msg">tail two</span>');
+  expect(html).not.toContain("<details");
+  expect(html).not.toContain("<pre");
 });
 
 test("staged command markers render a colour-coded stage chip", async () => {

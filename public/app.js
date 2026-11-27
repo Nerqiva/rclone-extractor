@@ -41,15 +41,33 @@
         if (!after[j].innerHTML && saved.html) after[j].innerHTML = saved.html;
         var toggleId = after[j].id.split("-log-").pop();
         var toggle = target.querySelector('[data-log-toggle="' + toggleId + '"]');
-        if (toggle) {
-          toggle.textContent = "Hide log";
-          toggle.setAttribute("aria-expanded", "true");
-        }
+        setLogToggle(toggle, true);
         break;
       }
     }
   }
   window.appMorph = morphInto;
+
+  function fetchText(url) {
+    return fetch(url, { credentials: "same-origin", cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        return response.text();
+      });
+  }
+  window.appFetchText = fetchText;
+
+  function errText(err) {
+    return err && err.message ? err.message : String(err);
+  }
+  window.appErrText = errText;
+
+  function setLogToggle(btn, open) {
+    if (!btn) return;
+    btn.textContent = open ? "Hide log" : "Log view";
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (window.appUnmark) window.appUnmark(btn);
+  }
 
   if (window.htmx) {
     htmx.defineExtension("app-morph", {
@@ -76,31 +94,41 @@
   }
   window.appToast = toast;
 
-  // A single registry replaces the page's separate download and queue timers.
-  // Nothing runs while the tab is hidden, and each task keeps its own cadence.
+  // One timer drives every poll. Each task keeps its own cadence and can be
+  // started or stopped by the page; nothing runs while the tab is hidden.
   var polls = [];
-  function registerPoll(name, fn, interval, enabled) {
+  function createPoll(name, fn, interval, enabled) {
     var poll = {
       name: name,
       fn: fn,
       interval: interval,
       enabled: enabled || function () { return true; },
+      active: true,
       last: 0,
+      run: function () { poll.last = Date.now(); poll.fn(); },
+      start: function () { poll.active = true; if (poll.enabled()) poll.run(); },
+      stop: function () { poll.active = false; },
     };
     polls.push(poll);
-    if (poll.enabled()) poll.fn();
+    return poll;
   }
+  window.appPoll = createPoll;
   window.setInterval(function () {
     if (document.hidden) return;
     var now = Date.now();
     for (var i = 0; i < polls.length; i++) {
       var p = polls[i];
-      if (now - p.last >= p.interval && p.enabled()) {
+      if (p.active && now - p.last >= p.interval && p.enabled()) {
         p.last = now;
         p.fn();
       }
     }
   }, 250);
+  function registerPoll(name, fn, interval, enabled) {
+    var poll = createPoll(name, fn, interval, enabled);
+    if (poll.enabled()) poll.run();
+    return poll;
+  }
 
   function actionButtons(elt) {
     if (!elt || !elt.querySelectorAll) return [];
@@ -334,10 +362,7 @@
     if (!body) return;
     body.setAttribute("data-page", String(page));
     if (!quiet) body.innerHTML = '<p class="muted">Loading…</p>';
-    fetch("/dashboard/queue?page=" + encodeURIComponent(String(page)), {
-      credentials: "same-origin", cache: "no-store",
-    })
-      .then(function (response) { return response.ok ? response.text() : ""; })
+    fetchText("/dashboard/queue?page=" + encodeURIComponent(String(page)))
       .then(function (html) { morphInto(body, html || '<p class="muted">Could not load the queue.</p>'); })
       .catch(function () { morphInto(body, '<p class="muted">Could not load the queue.</p>'); });
   }
@@ -447,22 +472,13 @@
     if (!box || !id) return;
     if (!box.hidden) {
       box.hidden = true;
-      btn.textContent = "Log view";
-      btn.setAttribute("aria-expanded", "false");
-      window.appUnmark(btn);
+      setLogToggle(btn, false);
       return;
     }
     if (!box.dataset.loaded) {
       box.innerHTML = '<p class="muted" style="padding:10px 14px">Loading…</p>';
-      fetch("/logs/archive/" + encodeURIComponent(id) + "/fragment?limit=300", {
-        credentials: "same-origin", cache: "no-store",
-      })
-        .then(function (res) { return res.ok ? res.text() : null; })
+      fetchText("/logs/archive/" + encodeURIComponent(id) + "/fragment?limit=300")
         .then(function (html) {
-          if (html === null) {
-            box.innerHTML = '<p class="muted" style="padding:10px 14px">Could not load the log.</p>';
-            return;
-          }
           box.innerHTML = html;
           box.dataset.loaded = "1";
         })
@@ -471,9 +487,7 @@
         });
     }
     box.hidden = false;
-    btn.textContent = "Hide log";
-    btn.setAttribute("aria-expanded", "true");
-    window.appUnmark(btn);
+    setLogToggle(btn, true);
   }
 
   function setLoading(btn, loading) {
@@ -527,7 +541,7 @@
         window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
         toast("Export downloaded.", "ok");
       } catch (err) {
-        toast("Export failed: " + (err && err.message ? err.message : String(err)), "err");
+        toast("Export failed: " + errText(err), "err");
       } finally {
         setLoading(btn, false);
       }
@@ -554,7 +568,7 @@
         toast(data.message || "Import complete.", "ok");
         importForm.reset();
       } catch (err) {
-        toast("Import failed: " + (err && err.message ? err.message : String(err)), "err");
+        toast("Import failed: " + errText(err), "err");
       } finally {
         setLoading(btn, false);
       }

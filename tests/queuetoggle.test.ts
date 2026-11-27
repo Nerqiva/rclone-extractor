@@ -57,7 +57,8 @@ async function toggle(id: number, skip: boolean): Promise<{ html: string; trigge
 test("queue rows show a bare Queue ID and a skip toggle", async () => {
   engineState.jobs = new Map([[7, queuedJob(7)]]);
   const html = await (await app.request("/dashboard/queue?page=1")).text();
-  expect(html).toContain('class="queue-id">#7</td>');
+  expect(html).toContain("#7</td>");
+  expect(html).toContain('class="queue-id"');
   expect(html).not.toContain("Queue ID #7");
   expect(html).toContain('id="queue-skip-7"');
   expect(html).toContain(">Skip</button>");

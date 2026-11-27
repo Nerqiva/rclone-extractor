@@ -56,15 +56,6 @@
     if (!ok) throw new Error("clipboard unavailable");
   }
 
-  async function fetchText(url) {
-    var response = await fetch(url, {
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-    if (!response.ok) throw new Error("HTTP " + response.status);
-    return response.text();
-  }
-
   function tableAsText(selector) {
     var container = document.querySelector(selector);
     if (!container) return "";
@@ -92,11 +83,11 @@
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     try {
-      var text = await fetchText(url);
+      var text = await window.appFetchText(url);
       await copyText(text);
       toast("Copied " + text.split("\n").length + " line(s)");
     } catch (err) {
-      toast("Copy failed: " + (err && err.message ? err.message : String(err)), "err");
+      toast("Copy failed: " + window.appErrText(err), "err");
     } finally {
       button.disabled = false;
       button.removeAttribute("aria-busy");
@@ -115,7 +106,7 @@
       await copyText(text);
       toast("Copied " + (text.split("\n").length - 1) + " error(s)");
     } catch (err) {
-      toast("Copy failed", "err");
+      toast("Copy failed: " + window.appErrText(err), "err");
     } finally {
       if (window.appUnmark) window.appUnmark(button);
     }
@@ -162,7 +153,6 @@
   if (viewer) {
     var runId = Number(viewer.dataset.run);
     var lastId = Number(viewer.dataset.lastId || "0");
-    var logTimer = null;
 
     function appendEntries(htmlStrings) {
       if (!htmlStrings || !htmlStrings.length) return;
@@ -212,6 +202,9 @@
         });
     };
 
+    var logPoll = window.appPoll("log", pollLog, 2000, function () {
+      return viewer.dataset.live === "1";
+    });
     setLogLive = function (on) {
       viewer.dataset.live = on ? "1" : "0";
       syncToggle("log", on);
@@ -221,13 +214,8 @@
           ? "polling 2s \u2014 scroll up to pause"
           : "paused \u2014 scroll to the bottom to resume";
       }
-      if (on) {
-        if (!logTimer) logTimer = window.setInterval(pollLog, 2000);
-        pollLog();
-      } else if (logTimer) {
-        window.clearInterval(logTimer);
-        logTimer = null;
-      }
+      if (on) logPoll.start();
+      else logPoll.stop();
     };
 
     viewer.addEventListener("scroll", function () {
@@ -244,8 +232,6 @@
 
   var errorCards = document.getElementById("errorCards");
   if (errorCards) {
-    var errorsTimer = null;
-
     var pollErrors = function () {
       if (errorCards.dataset.live !== "1" || document.hidden) return;
       fetch("/errors/fragment", {
@@ -280,6 +266,9 @@
         });
     };
 
+    var errorsPoll = window.appPoll("errors", pollErrors, 3000, function () {
+      return errorCards.dataset.live === "1";
+    });
     setErrorsLive = function (on) {
       errorCards.dataset.live = on ? "1" : "0";
       syncToggle("errors", on);
@@ -288,13 +277,8 @@
         pill.className = on ? "pill warn" : "pill";
         pill.textContent = on ? "live" : "paused";
       }
-      if (on) {
-        if (!errorsTimer) errorsTimer = window.setInterval(pollErrors, 3000);
-        pollErrors();
-      } else if (errorsTimer) {
-        window.clearInterval(errorsTimer);
-        errorsTimer = null;
-      }
+      if (on) errorsPoll.start();
+      else errorsPoll.stop();
     };
 
     errorCards.addEventListener("scroll", function () {

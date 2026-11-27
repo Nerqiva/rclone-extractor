@@ -44,6 +44,12 @@
   --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-data: var(--mono);
   --radius: 12px;
+  --card-radius: 10px;
+  --log-bg: #161c29;
+  --log-row-border: rgba(46, 58, 82, 0.3);
+  --log-max-height: 560px;
+  --stage-fg: #c4b5fd;
+  --stage-bg: rgba(167, 139, 250, 0.16);
   --shadow: 0 12px 30px rgba(5, 9, 18, 0.22);
 }
 
@@ -96,11 +102,6 @@ a {
 }
 a:hover {
   text-decoration: underline;
-}
-
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 .rail {
@@ -521,7 +522,7 @@ textarea {
 .progress-panel {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--card-radius);
   padding: 20px;
   margin-bottom: 16px;
 }
@@ -560,7 +561,7 @@ textarea {
   padding: 12px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--card-radius);
 }
 .job-card.is-running {
   border-color: rgba(111, 155, 255, 0.45);
@@ -1002,7 +1003,7 @@ textarea {
   background: var(--panel);
 }
 .log-viewer {
-  background: #161c29;
+  background: var(--log-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0;
@@ -1010,7 +1011,7 @@ textarea {
   line-height: 1.5;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  max-height: 560px;
+  max-height: var(--log-max-height);
   user-select: text;
   -webkit-user-select: text;
   tab-size: 2;
@@ -1022,7 +1023,7 @@ textarea {
   align-items: baseline;
   gap: 8px;
   padding: 2px 8px;
-  border-bottom: 1px solid rgba(46, 58, 82, 0.3);
+  border-bottom: 1px solid var(--log-row-border);
   min-height: 24px;
 }
 .log-entry:last-child {
@@ -1074,8 +1075,8 @@ textarea {
   line-height: 18px;
   padding: 0 6px;
   border-radius: 4px;
-  background: rgba(167, 139, 250, 0.16);
-  color: #c4b5fd;
+  background: var(--stage-bg);
+  color: var(--stage-fg);
 }
 .log-cmd-stage .log-msg {
   color: var(--text);
@@ -1099,16 +1100,11 @@ textarea {
   font-size: 11px;
   padding: 2px 0;
 }
-.log-detail-pre {
+.log-detail-lines {
   margin: 4px 0 0;
-  padding: 8px 10px;
   background: rgba(0, 0, 0, 0.2);
   border-radius: 4px;
-  font-size: 11px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  color: var(--muted);
+  overflow: hidden;
 }
 
 .session-summary {
@@ -1140,14 +1136,14 @@ textarea {
   gap: 12px;
 }
 #errorCards {
-  max-height: 560px;
+  max-height: var(--log-max-height);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 .error-card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--card-radius);
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -1212,13 +1208,15 @@ textarea {
   gap: 2px;
 }
 .setting-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+  font-weight: 600;
 }
 .setting-value {
-  color: var(--text);
+  color: var(--muted);
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 .setting-value.unset {
@@ -1237,11 +1235,13 @@ textarea {
 }
 .setting-key {
   color: var(--muted);
-  font-size: 11px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0 4px;
+  font-size: 10px;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-left: 4px;
+  opacity: 0.7;
+  white-space: nowrap;
 }
 .setting-toggle {
   display: block;
@@ -1586,7 +1586,7 @@ textarea {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 200;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1694,8 +1694,8 @@ button[disabled] {
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
-  color: #c4b5fd;
-  background: rgba(167, 139, 250, 0.14);
+  color: var(--stage-fg);
+  background: var(--stage-bg);
   border-radius: 999px;
   padding: 1px 7px;
 }
@@ -1745,39 +1745,15 @@ button[disabled] {
 .progress-label,
 .extract-mini-label,
 .stat-label,
-.detail-grid dt,
-.setting-label {
+.detail-grid dt {
   text-transform: none;
   letter-spacing: 0;
   font-size: 12px;
-}
-.setting-label {
-  color: var(--text);
-  font-weight: 600;
-}
-.setting-value {
-  color: var(--muted);
-  font-size: 12px;
-}
-.setting-key {
-  background: none;
-  border: 0;
-  padding: 0;
-  margin-left: 4px;
-  color: var(--muted);
-  font-size: 10px;
-  opacity: 0.7;
-  white-space: nowrap;
 }
 .log-tab,
 .section-title .pill {
   text-transform: none;
   letter-spacing: 0;
-}
-.job-card,
-.error-card,
-.progress-panel {
-  border-radius: 10px;
 }
 .error-group-title {
   font-size: 13px;
@@ -1791,9 +1767,6 @@ button[disabled] {
   justify-content: center;
   gap: 8px;
   margin-top: 14px;
-}
-.modal-overlay {
-  z-index: 200;
 }
 :focus-visible {
   outline: 2px solid var(--accent);

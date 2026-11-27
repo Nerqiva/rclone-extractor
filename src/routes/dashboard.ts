@@ -1,7 +1,16 @@
 import { Hono } from "hono";
-import { engineState, MAX_RETRIES } from "../engine";
+import { engineState } from "../engine";
 import { store, getSetting } from "../db";
 import { esc, toastTriggerHeaders, fmtDisplayTime, info } from "../ui";
+import {
+  emptyState,
+  indeterminateBar,
+  logToggleButton,
+  minibar,
+  pill,
+  retryBadge,
+  statusBadge,
+} from "../cardui";
 import { formatBytes, formatRate, formatDuration } from "../format";
 import { baseNameOf, stageLabel, stateClass, jobStatusClass, jobPillClass } from "../domain";
 import { resolveOutcome } from "../runs";
@@ -224,32 +233,21 @@ function jobBar(job: JobView): string {
     if (job.status !== "active") return "";
     return `<div class="extract-mini">
       <div class="extract-mini-head"><span class="extract-mini-label">${esc(job.phase || "Working")}</span></div>
-      <div class="minibar is-indeterminate" role="progressbar" aria-label="${esc(job.name)} — ${esc(job.phase || "working")}"><span></span></div>
+      ${indeterminateBar(job.name, job.phase || "working")}
     </div>`;
   }
   const pctText = st.percent === null ? "—" : `${Math.round(st.percent)}%`;
-  const width = st.percent === null ? 0 : Math.max(0, Math.min(100, st.percent));
   const eta = st.etaText ? st.etaText : "—";
   return `<div class="extract-mini">
     <div class="extract-mini-head">
       <span class="extract-mini-label">${esc(job.phase || "Transfer")}</span>
       <span class="extract-mini-value">${esc(formatBytes(st.bytesDone))} / ${esc(formatBytes(st.bytesTotal))} · ${esc(pctText)} · ${esc(formatRate(st.speedBytesPerSec))} · ETA ${esc(eta)}</span>
     </div>
-    <div class="minibar" role="progressbar" aria-label="${esc(job.name)} transfer" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(width)}"><span style="width:${width.toFixed(1)}%"></span></div>
+    ${minibar(job.name, st.percent)}
   </div>`;
 }
 
-function retryBadge(attempt: number, cooldownUntil: number): string {
-  if (attempt <= 1) return "";
-  const now = Date.now();
-  const retry = `<span class="retry-info" title="This command is on its ${attempt - 1}${attempt - 1 === 1 ? "st" : "nd"} retry after ${MAX_RETRIES} max">retry ${attempt - 1}/${MAX_RETRIES}</span>`;
-  const cooling = cooldownUntil > now
-    ? `<span class="cooldown-info">cooldown ${Math.ceil((cooldownUntil - now) / 1000)}s</span>`
-    : "";
-  return retry + cooling;
-}
-
-export function jobCards(jobs: JobView[]): string {
+function jobCards(jobs: JobView[]): string {
   if (jobs.length === 0) return "";
   const renderCard = (job: JobView, withSkip: boolean): string => {
     const label = job.phase || stageLabel(job.status);
@@ -257,13 +255,13 @@ export function jobCards(jobs: JobView[]): string {
       withSkip && job.status === "active" && job.phase !== "Moving to trash"
         ? `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive","id":"${job.id}"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>`
         : "";
-    const logToggle = `<button class="btn small ghost" data-log-toggle="${job.id}" aria-controls="job-log-${job.id}" aria-expanded="false">Log view</button>`;
+    const logToggle = logToggleButton(String(job.id), `job-log-${job.id}`, true);
     return `<article class="card job-card ${jobStatusClass(job.status)}">
       <div class="job-card-head">
-        <span class="status-badge ${jobStatusClass(job.status)}"><span class="dot"></span>${esc(label)}</span>
-        <span class="pill ${jobPillClass(job.status)}">${esc(job.status)}</span>
+        ${statusBadge(label, jobStatusClass(job.status))}
+        ${pill(job.status, jobPillClass(job.status))}
         <span class="queue-id">Queue ID #${job.id}</span>
-        ${retryBadge(job.attempt, job.cooldownUntil)}
+        ${retryBadge(job.attempt, job.cooldownUntil, true)}
       </div>
       <div class="error-name" title="${esc(job.path)}">${esc(job.name)}</div>
       <div class="error-path muted">${esc(job.path)}</div>
@@ -290,16 +288,14 @@ export async function progressPanel(): Promise<string> {
 
   if (s.runId === 0 && s.stage !== "error") {
     return `<section class="progress-panel is-idle">
-      <div class="empty-state">
-        <h2>No tasks yet</h2>
+      ${emptyState(`<h2>No tasks yet</h2>
         <p class="muted">Press Start to scan the configured remote and extract archives.</p>
         <p class="muted">Scan root: <code>${esc(s.scanRoot || "not set")}</code></p>
         <div class="empty-actions">
           ${s.scanRoot ? "" : `<a class="btn primary" href="/config">Set scan root</a>`}
           <a class="btn" href="/logs">View logs</a>
           <a class="btn" href="/errors">View errors</a>
-        </div>
-      </div>
+        </div>`)}
     </section>`;
   }
 
@@ -344,7 +340,7 @@ export async function progressPanel(): Promise<string> {
   return `<section class="progress-panel ${cls}">
     <header class="run-header">
       <div class="run-identity">
-        <span class="status-badge ${cls}"><span class="dot"></span>${esc(label)}</span>
+        ${statusBadge(label, cls)}
         ${s.runId > 0 ? `<span class="run-id">Run #${s.runId}</span>` : ""}
         ${s.running ? `<span class="live-pill">Live</span>` : ""}
       </div>

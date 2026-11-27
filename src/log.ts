@@ -54,6 +54,22 @@ export interface RenderedEntry {
 // (each render restarts its local counter), so use one process-wide counter.
 let detailIdSeq = 0;
 
+// Raw command output has no level or timestamp; show it in the same compact
+// rows as other continuation lines instead of a plain-text block.
+function renderDetailLine(line: string): string {
+  return `<div class="log-entry log-continuation"><span class="log-time"></span><span class="log-msg">${esc(line)}</span></div>`;
+}
+
+// A log can end while a command is still writing. Both the folded block and
+// that unfinished tail must use the same rows, so only the fold wrapper varies.
+function renderDetailBlock(lines: string[], time: string, id?: string): string {
+  const content = lines.map(renderDetailLine).join("");
+  const body = id
+    ? `<details id="${id}" open><summary>Show full output (${lines.length} lines)</summary><div class="log-detail-lines">${content}</div></details>`
+    : `<div class="log-detail-lines">${content}</div>`;
+  return `<div class="log-entry log-detail"><span class="log-time">${esc(time)}</span>${body}</div>`;
+}
+
 function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
   const entries: RenderedEntry[] = [];
   let inDetail = false;
@@ -70,10 +86,7 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
         detailLines = [];
       } else {
         const id = `log-det-${detailIdSeq++}`;
-        const content = detailLines.map((l) => esc(l)).join("\n");
-        entries.push({
-          html: `<div class="log-entry log-detail"><span class="log-time">${esc(time)}</span><details id="${id}" open><summary>Show full output (${detailLines.length} lines)</summary><pre class="log-detail-pre">${content}</pre></details></div>`,
-        });
+        entries.push({ html: renderDetailBlock(detailLines, time, id) });
         inDetail = false;
         detailLines = [];
       }
@@ -103,9 +116,7 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
 
     const isContinuation = !level && !isCmd && entries.length > 0;
     if (isContinuation) {
-      entries.push({
-        html: `<div class="log-entry log-continuation"><span class="log-time"></span>${esc(line)}</div>`,
-      });
+      entries.push({ html: renderDetailLine(line) });
       continue;
     }
 
@@ -115,10 +126,7 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
   }
 
   if (inDetail && detailLines.length > 0) {
-    const content = detailLines.map((l) => esc(l)).join("\n");
-    entries.push({
-      html: `<div class="log-entry log-detail"><span class="log-time"></span><pre class="log-detail-pre">${content}</pre></div>`,
-    });
+    entries.push({ html: renderDetailBlock(detailLines, "") });
   }
 
   return entries;

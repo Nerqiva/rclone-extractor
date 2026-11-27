@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
 import { layout, esc, fmtDisplayTime, info, asset, APP_VERSION } from "../ui";
+import { emptyState } from "../cardui";
 import { BOOT_AT } from "../config";
 import { csrfFor } from "./auth";
 import { configForm, controlsFragment } from "../views";
@@ -264,7 +265,7 @@ pages.get("/logs", async (c) => {
       ? `<div class="log-viewer" id="logViewer" data-run="${selected.id}" data-live="${
           isLive ? "1" : "0"
         }" data-last-id="${lastId}">${entriesHtml}</div>`
-      : `<div class="empty-state"><p class="muted">No log lines yet.</p></div>`;
+      : emptyState(`<p class="muted">No log lines yet.</p>`);
 
   const body = `<div class="log-toolbar">
       ${picker}

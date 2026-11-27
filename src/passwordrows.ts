@@ -1,5 +1,6 @@
 import { store } from "./db";
 import { esc } from "./ui";
+import { emptyState, logActions, pill, stageBadge } from "./cardui";
 import { formatBytes } from "./format";
 import { baseNameOf } from "./domain";
 import { relativeTime } from "./errorrows";
@@ -38,7 +39,7 @@ export async function readPasswordRows(): Promise<PasswordRow[]> {
 /** Render the outerHTML-swappable list container for the password section. */
 export function renderPasswordList(rows: PasswordRow[]): string {
   if (rows.length === 0) {
-    return `<div id="pw-list"><div class="empty-state"><p>No password-protected archives.</p></div></div>`;
+    return `<div id="pw-list">${emptyState("<p>No password-protected archives.</p>")}</div>`;
   }
   const cards = rows
     .map((r) => {
@@ -46,31 +47,37 @@ export function renderPasswordList(rows: PasswordRow[]): string {
       const name = baseNameOf(r.path) || r.path;
       const inTrash = r.status === "deleted";
       const pending = engineState.deferredPasswordMoves.some((m) => m.id === id);
-      const pill = pending
-        ? `<span class="pill warn">pending</span>`
+      const pillMarkup = pending
+        ? pill("pending", "warn")
         : inTrash
-          ? `<span class="pill">in trash</span>`
-          : `<span class="pill warn">password</span>`;
+          ? pill("in trash")
+          : pill("password", "warn");
       const idAttr = encodeURIComponent(String(id));
       const disabled = pending ? " disabled" : "";
       const action = inTrash
         ? `<button class="btn small"${disabled} hx-post="/archives/${idAttr}/restore" hx-target="#pw-list" hx-swap="outerHTML">Restore</button>`
         : `<button class="btn small danger"${disabled} hx-post="/archives/${idAttr}/delete" hx-target="#pw-list" hx-swap="outerHTML" data-confirm="Move this archive to the trash folder?|Delete">Delete</button>`;
+      const actions = logActions({
+        id: idAttr,
+        name,
+        logId: `pw-log-${idAttr}`,
+        copyHref: `/download/archive/${idAttr}?kind=extract`,
+        downloadHref: `/download/archive-file/${idAttr}`,
+        copyAria: `Copy log for ${esc(name)}`,
+        downloadAttrs: `data-download-archive data-archive-id="${idAttr}"`,
+      }) + action;
       return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
           <span class="queue-id">Queue ID #${id}</span>
-          ${r.stage ? `<span class="stage-badge">failed at ${esc(r.stage)}</span>` : ""}
-          ${pill}
+          ${r.stage ? stageBadge(r.stage) : ""}
+          ${pillMarkup}
         </div>
         <div class="error-path muted">${esc(r.path)}</div>
         <div class="error-card-foot">
           <span class="muted" title="${esc(r.updated_at)}">${esc(relativeTime(r.updated_at))} · ${esc(formatBytes(Number(r.size)))}</span>
           <span class="error-actions">
-            <button class="btn small" type="button" data-log-toggle="${idAttr}" aria-expanded="false" aria-controls="pw-log-${idAttr}">Log view</button>
-            <button class="btn small" type="button" data-copy-url="/download/archive/${idAttr}?kind=extract" title="Copy the archive log" aria-label="Copy log for ${esc(name)}">Copy log</button>
-            <a class="btn small ghost" href="/download/archive-file/${idAttr}" data-download-archive data-archive-id="${idAttr}">Download</a>
-            ${action}
+            ${actions}
           </span>
         </div>
         <div class="pw-log log-viewer" id="pw-log-${idAttr}" hidden></div>

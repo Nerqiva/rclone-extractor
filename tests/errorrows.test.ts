@@ -9,7 +9,8 @@ delete process.env.DATABASE_URL;
 let store: typeof import("../src/db").store;
 let archiveId: number;
 let readErrorRows: typeof import("../src/errorrows").readErrorRows;
-let renderErrorCards: typeof import("../src/errorrows").renderErrorCards;
+let renderFailureCards: typeof import("../src/errorrows").renderFailureCards;
+let renderSkipCards: typeof import("../src/errorrows").renderSkipCards;
 
 beforeAll(async () => {
   const db = await import("../src/db");
@@ -35,14 +36,21 @@ beforeAll(async () => {
   );
   const rows = await import("../src/errorrows");
   readErrorRows = rows.readErrorRows;
-  renderErrorCards = rows.renderErrorCards;
+  renderFailureCards = rows.renderFailureCards;
+  renderSkipCards = rows.renderSkipCards;
 });
+
+const renderCards = (rows: Awaited<ReturnType<typeof readErrorRows>>): string => {
+  const skips = renderSkipCards(rows);
+  return renderFailureCards(rows) +
+    (skips ? `<h3 class="error-group-title">Informational skips</h3>${skips}` : "");
+};
 
 test("error cards link to the log view instead of inlining raw output", async () => {
   const rows = await readErrorRows(store);
   const row = rows.find((r) => Number(r.id) === archiveId);
   expect(row).toBeDefined();
-  const html = renderErrorCards(rows);
+  const html = renderCards(rows);
   expect(html).not.toContain("ERROR: archive broken.zip: corrupt zip data");
   expect(html).not.toContain("failed to unzip: invalid signature");
   expect(html).not.toContain('class="error-message"');
@@ -57,7 +65,7 @@ test("informational skips are separated from failures", async () => {
     "INSERT INTO archives(path, size, status, error_kind, created_at, updated_at) VALUES('incoming/tiny.zip', 10, 'skipped', 'tiny', ?, ?)",
     [now, now],
   );
-  const html = renderErrorCards(await readErrorRows(store));
+  const html = renderCards(await readErrorRows(store));
   const skipHeading = html.indexOf("Informational skips");
   expect(skipHeading).toBeGreaterThan(-1);
   expect(html).toContain("tiny.zip");
@@ -85,7 +93,7 @@ test("error cards show the failed stage and an inline log view", async () => {
   const row = rows.find((r) => Number(r.id) === id);
   expect(row).toBeDefined();
   expect(row!.stage).toBe("Moving to destination");
-  const html = renderErrorCards(rows);
+  const html = renderCards(rows);
   expect(html).toContain("failed at");
   expect(html).toContain("Moving to destination");
   expect(html).toContain(`data-log-toggle="${id}"`);

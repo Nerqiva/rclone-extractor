@@ -521,9 +521,9 @@ separator, a `$ [<stage>] <redacted command>` line, then that command's native
 output — in that order, for every stage including pre- and post-extraction
 inspection. Stage chips are colour-coded. Failures that produce no binary
 output at all store a single diagnostic line so downloads are never empty 404s
-(see the Errors page note below). Folded detail blocks open expanded. The
-**Errors** page, the **Archives** tab and per-archive downloads show that
-output.
+(see the Errors page note below). Folded detail blocks open expanded and show
+each line in the same compact rows as the rest of the log. The **Errors** page,
+the **Archives** tab and per-archive downloads show that output.
 
 `promote` passes `--exclude /<tmp-top-segment>/**` (only when `tmp_dir` is a
 relative path nested inside the scan root) because `rclone move` refuses to

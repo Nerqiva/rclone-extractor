@@ -9,6 +9,23 @@ delete process.env.DATABASE_URL;
 
 const VERSION = readFileSync(join(import.meta.dir, "..", "VERSION"), "utf8").trim();
 
+function divBlock(html: string, id: string): string {
+  const start = html.indexOf(`<div id="${id}"`);
+  if (start < 0) throw new Error(`missing #${id}`);
+  let depth = 0;
+  for (const match of html.slice(start).matchAll(/<div\b|<\/div>/g)) {
+    if (match[0] === "</div>") {
+      depth -= 1;
+      if (depth === 0) {
+        return html.slice(start, start + (match.index ?? 0) + match[0].length);
+      }
+    } else {
+      depth += 1;
+    }
+  }
+  throw new Error(`unclosed #${id}`);
+}
+
 // Mock rclone so the Configuration page's binary probe (checkRclone) has
 // something to talk to.
 const binDir = join(process.env.DATA_DIR, "bin");
@@ -48,13 +65,14 @@ test("Progress page renders", async () => {
   const body = await res.text();
   expect(body).toContain("<title>Progress · rclone-extractor</title>");
   expect(body).toContain("Start, stop and watch the current task.");
-  expect(body).toContain('data-queue-toggle');
-  expect(body).toContain('hx-swap="morphdom"');
   expect(body).toContain('Show Queue (0)');
   expect(body).toContain('id="queuePanel"');
   expect(body).toContain('id="queuePanelBody"');
-  // The panel sits outside the poll-swapped progress panel.
-  expect(body.indexOf('id="dashboard-panel"')).toBeLessThan(body.indexOf('id="queuePanel"'));
+  const panel = divBlock(body, "dashboard-panel");
+  expect(panel).toContain('hx-get="/dashboard/fragment"');
+  expect(panel).toContain('hx-swap="morphdom"');
+  expect(panel).not.toContain('id="queuePanel"');
+  expect(body.slice(body.indexOf(panel) + panel.length)).toContain('id="queuePanel"');
   expect(body).not.toContain("Current archive");
   expect(body).not.toContain("Active command");
   expect(body).not.toContain("Upcoming archives");

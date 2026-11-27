@@ -1,4 +1,5 @@
-import { esc, info } from "./ui";
+import { esc } from "./ui";
+import { emptyState, logActions, pill, stageBadge } from "./cardui";
 import { baseNameOf } from "./domain";
 import { COMMAND_SEPARATOR, stageOf } from "./log";
 
@@ -32,7 +33,7 @@ const INFO_KINDS = new Set([
   "skip_requested",
 ]);
 
-export function isInformationalKind(kind: string): boolean {
+function isInformationalKind(kind: string): boolean {
   return INFO_KINDS.has(kind);
 }
 
@@ -68,24 +69,29 @@ function errorCard(r: ErrorRow): string {
   const cls = KIND_CLASS[r.error_kind] || "err";
   const name = baseNameOf(r.path) || r.path;
   const idAttr = encodeURIComponent(String(r.id));
-  const stage = r.stage
-    ? `<span class="stage-badge">failed at ${esc(r.stage)}</span>`
-    : "";
+  const stage = r.stage ? stageBadge(r.stage) : "";
+  const actions = logActions({
+    id: idAttr,
+    name,
+    logId: `er-log-${idAttr}`,
+    copyHref: `/download/archive/${idAttr}?kind=extract`,
+    downloadHref: `/download/archive/${idAttr}?kind=extract`,
+    copyLabel: "Copy",
+    copyTitle: "Copy the full error log",
+    copyAria: `Copy error log for ${esc(name)}`,
+    downloadAria: `Download error log for ${esc(name)}`,
+  });
   return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
           <span class="queue-id">Queue ID #${r.id}</span>
-          ${stage}<span class="pill ${cls}">${esc(r.error_kind)}</span>
+          ${stage}${pill(r.error_kind, cls)}
         </div>
         <div class="error-path muted">${esc(r.path)}</div>
         <div class="error-card-foot">
           <span class="muted" title="${esc(r.updated_at)}">${esc(relativeTime(r.updated_at))}</span>
           <span class="error-actions">
-            <button class="btn small" type="button" data-log-toggle="${idAttr}" aria-expanded="false" aria-controls="er-log-${idAttr}">Log view</button>
-            <button class="btn small" data-copy-url="/download/archive/${idAttr}?kind=extract"
-              title="Copy the full error log" aria-label="Copy error log for ${esc(name)}">Copy</button>
-            <a class="btn small ghost" href="/download/archive/${idAttr}?kind=extract"
-              aria-label="Download error log for ${esc(name)}">Download</a>
+            ${actions}
           </span>
         </div>
         <div class="pw-log log-viewer" id="er-log-${idAttr}" hidden></div>
@@ -96,7 +102,7 @@ export function renderFailureCards(rows: ErrorRow[]): string {
   const failures = rows.filter((r) => !isInformationalKind(r.error_kind));
   return failures.length
     ? `<div class="error-grid">${failures.map(errorCard).join("")}</div>`
-    : `<div class="empty-state"><p>No failed archives.</p></div>`;
+    : emptyState("<p>No failed archives.</p>");
 }
 
 export function renderSkipCards(rows: ErrorRow[]): string {
@@ -104,19 +110,6 @@ export function renderSkipCards(rows: ErrorRow[]): string {
   return skips.length
     ? `<div class="error-grid">${skips.map(errorCard).join("")}</div>`
     : "";
-}
-
-export function renderErrorCards(rows: ErrorRow[]): string {
-  const failures = renderFailureCards(rows);
-  const skips = renderSkipCards(rows);
-  return `${failures}${
-    skips
-      ? `<h3 class="error-group-title">Informational skips ${info(
-          "Archives intentionally skipped by the skip rules (tiny, website dump, torrent collection, unreadable). No action needed.",
-          "Informational skips",
-        )}</h3>${skips}`
-      : ""
-  }`;
 }
 
 export async function readErrorRows(

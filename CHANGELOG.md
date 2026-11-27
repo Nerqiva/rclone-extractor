@@ -64,6 +64,9 @@ to `main`.
   **Add** puts it back. The flag lives only in memory for the current run.
 
 ### Changed
+- **Duplicate CSS overrides were consolidated.** Focus rings use the later 3px offset, stage badges share one purple token at 0.16 alpha, and the confirm modal keeps its 200 z-index. The old early rules and trailing overrides are gone.
+- **One poll registry drives queue, downloads, log and errors.** Opening a live view runs its first poll once instead of also allowing an immediate duplicate tick from the timer.
+- **Copy failures include the server's error text.** Both log-copy paths now show the reason in the toast instead of a bare "Copy failed" message.
 - **Removed the ambiguous controls-row Skip archive button.** With more than
   one worker it skipped only the first active archive. Use the per-archive
   **Skip archive** button on a job card instead, which skips exactly that
@@ -161,6 +164,7 @@ to `main`.
   `tests/tmppurge.test.ts` cover the new behavior.
 
 ### Fixed
+- **"Show full output" now uses the same compact log rows as the rest of the page.** Folded command output was rendered as one plain `<pre>` block, so expanding it showed an unorganized wall of text. Each line now renders as a continuation row inside the fold, and an unfinished trailing block uses the same rows.
 - **An open per-archive log keeps its "Hide log" label after a live poll.** A poll that morphed the container restored the open log viewer but only reset `aria-expanded`, letting the server's "Log view" label reappear while the log stayed open. The toggle text is now restored alongside the expanded state.
 - **Configuration Import button no longer stays disabled after an early exit.** Cancelling the import or choosing no backup file left the button stuck with its loading spinner until a page reload. It is now re-enabled on every exit path.
 - **RcloneX extraction flags appear only once on the command line.** Runtime
