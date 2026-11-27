@@ -1,6 +1,7 @@
 import { writeFileSync, renameSync, chmodSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getSetting } from "./db";
+import { baseNameOf } from "./domain";
 import {
   isSupported,
   isSafeRel,
@@ -290,7 +291,7 @@ function parseScanListLine(
 ): { rel: string; size: number } | null {
   const parsed = parseListLineRaw(line);
   if (!parsed) return null;
-  const name = parsed.rel.slice(parsed.rel.lastIndexOf("/") + 1);
+  const name = baseNameOf(parsed.rel);
   if (!isSupported(name, rclonex)) return null;
   return parsed;
 }

@@ -3,6 +3,7 @@ import { engineState } from "../engine";
 import { store, getSetting } from "../db";
 import { esc, toastTriggerHeaders, fmtDisplayTime, info } from "../ui";
 import { formatBytes, formatRate, formatDuration } from "../format";
+import { baseNameOf, stageLabel, stateClass, jobStatusClass, jobPillClass } from "../domain";
 import { resolveOutcome } from "../runs";
 import type { ExtractStats } from "../rclone";
 import { pendingRcloneConfNotice } from "../rclone";
@@ -50,7 +51,7 @@ function jobViews(): JobView[] {
     if (job.status === "queued") continue;
     jobs.push({
       id: job.id,
-      name: job.rel.slice(job.rel.lastIndexOf("/") + 1),
+      name: baseNameOf(job.rel),
       path: job.rel,
       status: job.status,
       phase: job.phase,
@@ -70,30 +71,6 @@ function jobViews(): JobView[] {
     .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt) || b.order - a.order)
     .slice(0, 5);
   return [...active, ...history];
-}
-
-const STAGE_LABEL: Record<string, string> = {
-  idle: "Idle",
-  listing: "Listing archives",
-  queueing: "Building queue",
-  extracting: "Extracting",
-  finished: "Completed",
-  interrupted: "Interrupted",
-  killed: "Killed",
-  error: "Error",
-};
-
-function stageLabel(stage: string): string {
-  return STAGE_LABEL[stage] ?? stage;
-}
-
-function stateClass(stage: string, running: boolean): string {
-  if (stage === "error") return "is-error";
-  if (stage === "killed") return "is-killed";
-  if (stage === "interrupted") return "is-interrupted";
-  if (running) return "is-running";
-  if (stage === "finished") return "is-done";
-  return "is-idle";
 }
 
 function rateLabel(processed: number, elapsedMs: number): string {
@@ -235,21 +212,6 @@ function statCard(
     <strong class="stat-value">${value}</strong>
     <span class="stat-sub">${total > 0 ? `${pct}% of total` : "—"}</span>
   </div>`;
-}
-
-function jobStatusClass(status: string): string {
-  if (status === "done") return "is-done";
-  if (status === "failed") return "is-error";
-  if (status === "skipped") return "is-interrupted";
-  if (status === "active") return "is-running";
-  return "";
-}
-
-function jobPillClass(status: string): string {
-  if (status === "done") return "ok";
-  if (status === "failed") return "err";
-  if (status === "skipped") return "warn";
-  return "";
 }
 
 function jobBar(job: JobView): string {

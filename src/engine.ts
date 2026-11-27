@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { baseNameOf, dirOfRel } from "./domain";
 import { liveRunIds, STALE_MS } from "./runs";
 import { Logger, insertLogLines } from "./log";
 import { store, getSetting, setSetting, allSettings } from "./db";
@@ -53,12 +54,6 @@ export interface JobState {
   skipInspection: boolean;
   groupKey: string | null;
   finishedAt: string;
-}
-
-/** Directory part of a relative archive path ("" for scan-root archives). */
-function dirOfRel(rel: string): string {
-  const i = rel.lastIndexOf("/");
-  return i === -1 ? "" : rel.slice(0, i);
 }
 
 /**
@@ -1195,7 +1190,7 @@ export async function runEngine(): Promise<void> {
     const predecessors = new Map<number, number | null>();
     const lastByGroup = new Map<string, number>();
     rows.forEach((row, order) => {
-      const baseName = row.path.slice(row.path.lastIndexOf("/") + 1);
+      const baseName = baseNameOf(row.path);
       const family = archiveFamily(baseName);
       const groupKey = family === null ? null : `${dirOfRel(row.path)}|${family}`;
       let predecessor: number | null = null;
@@ -1301,7 +1296,7 @@ export async function runEngine(): Promise<void> {
       );
       await markRunTouch(Number(row.id), runRowId);
 
-      const baseName = rel.slice(rel.lastIndexOf("/") + 1);
+      const baseName = baseNameOf(rel);
       // Family of the rclone-handled archive this archive is; null for
       // RcloneX formats (they keep their existing always-extract-first
       // behavior). The group key is the exact parent directory — not

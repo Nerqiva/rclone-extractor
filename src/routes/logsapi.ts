@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { store, getSetting } from "../db";
 import { tailRendered, readAll, insertLogLines, LOG_TAIL_LIMIT, LOG_EXPORT_LIMIT } from "../log";
 import { engineState } from "../engine";
+import { baseNameOf, positiveId } from "../domain";
+import { liveArchiveStates } from "../live";
 import { readErrorRows, renderErrorCards } from "../errorrows";
 import { readArchiveLogRows, renderArchiveLogRows } from "../archiverows";
 import { Rclone } from "../rclone";
@@ -85,9 +87,9 @@ logsapi.get("/errors/fragment", async (c) => {
 });
 
 logsapi.get("/download/run/:id", async (c) => {
-  const id = Number(c.req.param("id"));
+  const id = positiveId(c.req.param("id"));
   const kind = kindOf(c.req.query("kind"));
-  if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  if (id === null) return c.text("not found", 404);
   const lines = await readAll({ scope: "run", refId: id, kind });
   if (lines.length === 0) return c.text("not found", 404);
   const suffix = kind === "errors" ? "-errors" : "";
@@ -113,8 +115,8 @@ function limitParam(raw: string | undefined, fallback: number): number {
  */
 logsapi.get("/download/run/:id/all", async (c) => {
   noStore(c);
-  const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const id = positiveId(c.req.param("id"));
+  if (id === null) return c.text("not found", 404);
   const run = await store.get1<{ id: number | string }>(
     "SELECT id FROM runs WHERE id = ?",
     [id],
@@ -147,8 +149,8 @@ logsapi.get("/download/run/:id/all", async (c) => {
 
 logsapi.get("/logs/archive/:id/fragment", async (c) => {
   noStore(c);
-  const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const id = positiveId(c.req.param("id"));
+  if (id === null) return c.text("not found", 404);
   const limit = limitParam(c.req.query("limit"), LOG_EXPORT_LIMIT);
   const { entries } = await tailRendered(
     { scope: "archive", refId: id, kind: "extract" },
@@ -166,23 +168,16 @@ logsapi.get("/logs/archive/:id/fragment", async (c) => {
 
 logsapi.get("/logs/archives-fragment", async (c) => {
   noStore(c);
-  const runId = Number(c.req.query("run"));
-  if (!Number.isInteger(runId) || runId <= 0) return c.text("not found", 404);
-  const live =
-    engineState.running && engineState.runId === runId
-      ? new Map(
-          [...engineState.jobs.values()].map((job) => [
-            job.id,
-            { phase: job.phase, status: job.status, stats: job.stats },
-          ]),
-        )
-      : undefined;
-  return c.html(renderArchiveLogRows(await readArchiveLogRows(runId), live));
+  const runId = positiveId(c.req.query("run"));
+  if (runId === null) return c.text("not found", 404);
+  return c.html(
+    renderArchiveLogRows(await readArchiveLogRows(runId), liveArchiveStates(runId, true)),
+  );
 });
 
 logsapi.get("/download/archive/:id", async (c) => {
-  const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const id = positiveId(c.req.param("id"));
+  if (id === null) return c.text("not found", 404);
   const kind = "extract" as const;
   const lines = await readAll({ scope: "archive", refId: id, kind });
   if (lines.length === 0) return c.text("not found", 404);
@@ -251,8 +246,8 @@ logsapi.get("/download/archive-file/active", (c) => {
  */
 logsapi.get("/download/archive-file/:id", async (c) => {
   noStore(c);
-  const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id) || id <= 0) return c.text("not found", 404);
+  const id = positiveId(c.req.param("id"));
+  if (id === null) return c.text("not found", 404);
   const row = await store.get1<{ path: string; status: string; size: number | string }>(
     "SELECT path, status, size FROM archives WHERE id = ?",
     [id],
@@ -348,7 +343,7 @@ logsapi.get("/download/archive-file/:id", async (c) => {
         ]).catch(() => {});
       }
     });
-    const base = srcRel.slice(srcRel.lastIndexOf("/") + 1);
+    const base = baseNameOf(srcRel);
     const fallback = base.replace(/[^A-Za-z0-9._ -]/g, "_").replace(/"/g, "_") || "archive";
     const headers: Record<string, string> = {
       "Content-Type": "application/octet-stream",

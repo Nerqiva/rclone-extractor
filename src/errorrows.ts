@@ -1,4 +1,5 @@
 import { esc } from "./ui";
+import { baseNameOf } from "./domain";
 import { COMMAND_SEPARATOR } from "./log";
 
 export interface ErrorRow {
@@ -54,7 +55,7 @@ export function renderErrorCards(rows: ErrorRow[]): string {
   return `<div class="error-grid">${rows
     .map((r) => {
       const cls = KIND_CLASS[r.error_kind] || "err";
-      const name = r.path.split("/").pop() || r.path;
+      const name = baseNameOf(r.path) || r.path;
       return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>

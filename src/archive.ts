@@ -1,3 +1,5 @@
+import { baseNameOf } from "./domain";
+
 /** Default trash subdirectory (override with the trash_subdir setting). */
 export const TRASH = ".Trash";
 
@@ -199,7 +201,7 @@ function stemSuffixOf(base: string): number {
 }
 
 export function stem(name: string): string {
-  const base = name.slice(name.lastIndexOf("/") + 1);
+  const base = baseNameOf(name);
   const suffix = stemSuffixOf(base);
   if (suffix > 0) {
     return sanitizeStem(base.slice(0, base.length - suffix));
@@ -290,11 +292,6 @@ export function parseTrashSubdir(raw: string): string | null {
   return t;
 }
 
-function baseName(p: string): string {
-  const idx = p.lastIndexOf("/");
-  return idx === -1 ? p : p.slice(idx + 1);
-}
-
 /** Escape `\`, `%`, and `_` so `value` can be used inside a SQL LIKE pattern. */
 export function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (m) => `\\${m}`);
@@ -337,7 +334,7 @@ export function addArchiveEntry(
   path: string,
   size: number,
 ): void {
-  const base = baseName(path).toLowerCase();
+  const base = baseNameOf(path).toLowerCase();
   stats.total++;
   if (base.endsWith(".torrent")) stats.torrent++;
   if (size < TINY_BYTES) stats.tiny++;

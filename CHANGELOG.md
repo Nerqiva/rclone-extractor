@@ -45,6 +45,10 @@ to `main`.
   aborts.
 
 ### Changed
+- **Shared status and path helpers.** Stage labels, state classes, archive
+  basenames and route id parsing now live in one module instead of being
+  redefined in each view, so the Progress, Logs and Errors pages cannot drift
+  apart. `tests/domain.test.ts` covers the shared vocabulary.
 - **History keeps the five newest terminal archives.** Done, failed and
   skipped archives are ranked by finish time and shown under **History** below
   the in-flight cards. Older archives stay in the run data but no longer

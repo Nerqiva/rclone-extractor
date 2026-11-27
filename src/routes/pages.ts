@@ -6,6 +6,7 @@ import { configForm, controlsFragment } from "../views";
 import { resolveOutcome } from "../runs";
 import { encryptionEnabled } from "../crypto";
 import { engineState } from "../engine";
+import { liveArchiveStates } from "../live";
 import { checkRclone, checkRclonex, pendingRcloneConfNotice } from "../rclone";
 import { tailRendered, LOG_TAIL_LIMIT } from "../log";
 import { readErrorRows, renderErrorCards } from "../errorrows";
@@ -291,15 +292,7 @@ pages.get("/logs", async (c) => {
   const archiveRows = isArchivesTab
     ? await readArchiveLogRows(Number(selected.id))
     : [];
-  const liveArchiveJobs =
-    isArchivesTab && isLive
-      ? new Map(
-          [...engineState.jobs.values()].map((job) => [
-            job.id,
-            { phase: job.phase, status: job.status, stats: job.stats },
-          ]),
-        )
-      : undefined;
+  const liveArchiveJobs = liveArchiveStates(Number(selected.id), isArchivesTab && isLive);
   const hasLog = lastId > 0;
   const showLog = isLive || hasLog;
 

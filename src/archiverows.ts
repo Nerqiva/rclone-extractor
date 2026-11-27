@@ -1,6 +1,7 @@
 import { store } from "./db";
 import { esc } from "./ui";
 import { formatBytes } from "./format";
+import { baseNameOf } from "./domain";
 import { relativeTime } from "./errorrows";
 import type { ExtractStats } from "./rclone";
 
@@ -47,7 +48,7 @@ export function renderArchiveLogRows(
     .map((r) => {
       const id = Number(r.id);
       const idAttr = encodeURIComponent(String(id));
-      const name = r.path.split("/").pop() || r.path;
+      const name = baseNameOf(r.path) || r.path;
       const [pillCls, basePill] = PILL[r.status] ?? ["", r.status];
       const pill = r.error_kind
         ? `<span class="pill ${pillCls || "err"}">${esc(r.error_kind)}</span>`

@@ -1,6 +1,7 @@
 import { store } from "./db";
 import { esc } from "./ui";
 import { formatBytes } from "./format";
+import { baseNameOf } from "./domain";
 import { relativeTime } from "./errorrows";
 import { engineState } from "./engine";
 
@@ -27,7 +28,7 @@ export function renderPasswordList(rows: PasswordRow[]): string {
   const cards = rows
     .map((r) => {
       const id = Number(r.id);
-      const name = r.path.split("/").pop() || r.path;
+      const name = baseNameOf(r.path) || r.path;
       const inTrash = r.status === "deleted";
       const pending = engineState.deferredPasswordMoves.some((m) => m.id === id);
       const pill = pending
