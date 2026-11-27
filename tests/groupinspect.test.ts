@@ -26,6 +26,7 @@ let runEngine: typeof import("../src/engine").runEngine;
 let setSetting: typeof import("../src/db").setSetting;
 let engineState: typeof import("../src/engine").engineState;
 let rcloneLog: string;
+let scanRoot: string;
 
 function readLog(): string {
   return existsSync(rcloneLog) ? readFileSync(rcloneLog, "utf8") : "";
@@ -36,6 +37,10 @@ function resetLogs() {
 function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
+function postInspectLines(stem: string): string[] {
+  const prefix = `lsf ${scanRoot}/.Rclone-Extractor-tmp/run_`;
+  return readLog().split("\n").filter((l) => l.includes(prefix) && l.includes(`/${stem} `));
+}
 
 beforeAll(async () => {
   const base = mkdtempSync(join(tmpdir(), "rx-group-"));
@@ -45,7 +50,7 @@ beforeAll(async () => {
 
   const binDir = join(base, "bin");
   mkdirSync(binDir, { recursive: true });
-  const scanRoot = join(base, "scan");
+  scanRoot = join(base, "scan");
   mkdirSync(scanRoot, { recursive: true });
 
   // Scan listing comes from RCLONE_STUB_SCAN (as printf-escaped lines).
@@ -128,13 +133,13 @@ test("first archive is pre-inspected; similar series are inspected post-extracti
   const log = readLog();
   // Only the series anchor was pre-inspected...
   expect(countOccurrences(log, "archive list")).toBe(1);
-  expect(log).toContain("archive list /tmp");
+  expect(log).toContain(`archive list ${scanRoot}`);
   expect(log).toContain("set/pack1.zip");
   expect(log).not.toContain("pack2.zip --files-only");
   expect(log).not.toContain("pack3.zip --files-only");
   // ...and the two deferred archives were listed on their extracted tree.
-  expect(log).toMatch(/lsf \/tmp[^\n]*Rclone-Extractor-tmp[^\n]*run_\d+\/\d+\/pack2 /);
-  expect(log).toMatch(/lsf \/tmp[^\n]*Rclone-Extractor-tmp[^\n]*run_\d+\/\d+\/pack3 /);
+  expect(postInspectLines("pack2")).toHaveLength(1);
+  expect(postInspectLines("pack3")).toHaveLength(1);
 }, 10_000);
 
 test("first archive classified as website closes the gate for the whole group", async () => {
@@ -186,7 +191,7 @@ test("grouping is per archive family inside one directory", async () => {
   expect(log).toContain("pack1.zip --files-only");
   expect(log).toContain("pack2.tar.gz --files-only");
   expect(log).not.toContain("pack3.zip --files-only");
-  expect(log).toMatch(/lsf \/tmp[^\n]*Rclone-Extractor-tmp[^\n]*\/pack3 /);
+  expect(postInspectLines("pack3")).toHaveLength(1);
 }, 10_000);
 
 test("alias extensions of one family (.tgz / .tar.gz) group together", async () => {
@@ -202,7 +207,7 @@ test("alias extensions of one family (.tgz / .tar.gz) group together", async () 
   expect(countOccurrences(log, "archive list")).toBe(1);
   expect(log).toContain("pack1.tgz --files-only");
   expect(log).not.toContain("pack2.tar.gz --files-only");
-  expect(log).toMatch(/lsf \/tmp[^\n]*Rclone-Extractor-tmp[^\n]*\/pack2 /);
+  expect(postInspectLines("pack2")).toHaveLength(1);
 }, 10_000);
 
 test("post-extraction inspection skips a website dump among the rest of the series", async () => {
