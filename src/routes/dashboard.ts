@@ -249,7 +249,7 @@ function retryBadge(attempt: number, cooldownUntil: number): string {
   return retry + cooling;
 }
 
-function jobCards(jobs: JobView[]): string {
+export function jobCards(jobs: JobView[]): string {
   if (jobs.length === 0) return "";
   const renderCard = (job: JobView, withSkip: boolean): string => {
     const label = job.phase || stageLabel(job.status);
@@ -257,6 +257,7 @@ function jobCards(jobs: JobView[]): string {
       withSkip && job.status === "active" && job.phase !== "Moving to trash"
         ? `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive","id":"${job.id}"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>`
         : "";
+    const logToggle = `<button class="btn small ghost" data-log-toggle="${job.id}" aria-controls="job-log-${job.id}" aria-expanded="false">Log view</button>`;
     return `<article class="card job-card ${jobStatusClass(job.status)}">
       <div class="job-card-head">
         <span class="status-badge ${jobStatusClass(job.status)}"><span class="dot"></span>${esc(label)}</span>
@@ -267,7 +268,8 @@ function jobCards(jobs: JobView[]): string {
       <div class="error-name" title="${esc(job.path)}">${esc(job.name)}</div>
       <div class="error-path muted">${esc(job.path)}</div>
       ${jobBar(job)}
-      ${skip ? `<div class="job-card-foot">${skip}</div>` : ""}
+      <div class="job-card-foot">${logToggle}${skip}</div>
+      <div class="pw-log log-viewer" id="job-log-${job.id}" hidden></div>
     </article>`;
   };
   const section = (title: string, list: JobView[], withSkip: boolean): string =>
