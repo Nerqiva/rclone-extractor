@@ -167,6 +167,14 @@ test("rclonex flags land on the extraction command line", async () => {
   const rxLog = readLog(rclonexLog);
   expect(rxLog).toContain("--archive-window-size 4194304");
   expect(rxLog).toContain("--archive-password hunter2");
+  // Each flag must appear once per extraction command. A previous version
+  // appended runtime rclonex flags twice, once in args and once as extra.
+  const extracts = rxLog.split("\n").filter((l) => l.includes("archive extract"));
+  expect(extracts.length).toBeGreaterThan(0);
+  for (const line of extracts) {
+    expect(line.split("--archive-window-size").length - 1).toBe(1);
+    expect(line.split("--archive-password").length - 1).toBe(1);
+  }
   const rcLog = readLog(rcloneLog);
   expect(rcLog).not.toContain("--archive-password");
   await setSetting("rclonex_archive_buffer_size", "0");

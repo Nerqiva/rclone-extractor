@@ -67,6 +67,11 @@ to `main`.
   `rmdir_extra_flags` field are removed.
 
 ### Fixed
+- **RcloneX extraction flags appear only once on the command line.** Runtime
+  password and buffer flags were appended twice, once with the command arguments
+  and once with the configured extra flags. The recorded `$ command` line and
+  the raw rclonex argv now match. `tests/rclonex.test.ts` asserts each flag
+  occurs once per extraction.
 - **Per-archive logs identify the failing command.** Each command that writes
   to an archive log prepends a `---` separator and the redacted `$ command`,
   so output from several commands is separated and the program that caused an

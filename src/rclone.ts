@@ -943,7 +943,6 @@ export class Rclone {
       "extract",
       `${this.root}/${rel}`,
       this.fullPath(tmp),
-      ...extraFlags,
       "--stats",
       "1s",
       "--stats-one-line",
