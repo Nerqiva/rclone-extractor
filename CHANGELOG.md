@@ -41,8 +41,8 @@ to `main`.
   seconds `0`–`86400`, default `60`). A failed extract, promote or trash is
   retried up to three times with waits of 60s, 120s and 240s at the default;
   each wait doubles the previous one. `tests/retry.test.ts` covers the attempt
-  count, the doubling waits, the purge before a re-extract, and skip/hard-stop
-  aborts.
+  count, the doubling waits, resume data kept across retries and runs, and
+  skip/hard-stop aborts.
 - **App version and boot time on the Configuration page.** The Runtime card
   shows the running build's `VERSION` and the process start time in `APP_TZ`.
 
@@ -97,6 +97,14 @@ to `main`.
   of a run are replaced by one guarded `rclone purge` of that run's temp dir;
   the shared temp root is never purged. The `rmdir` command and its
   `rmdir_extra_flags` field are removed.
+- **Extraction output survives retries and runs.** Temporary files now live at
+  `<tmp_dir>/resume/<queue-id>/<stem>` instead of under the run directory. A
+  failed extract no longer purges them before a retry or at the end of a failed
+  run. RcloneX commands add `--archive-skip-existing`, so a retry does not
+  re-upload files already at the destination with the same size. A startup
+  sweep drops resume dirs older than 24 hours or tied to archives that are no
+  longer eligible for retry. `tests/retry.test.ts`, `tests/rclonex.test.ts` and
+  `tests/tmppurge.test.ts` cover the new behavior.
 
 ### Fixed
 - **RcloneX extraction flags appear only once on the command line.** Runtime

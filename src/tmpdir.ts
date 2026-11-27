@@ -3,6 +3,12 @@ export const TMP_DIR = ".Rclone-Extractor-tmp";
 /** Matches app-owned run directories inside TMP_DIR; everything else is left alone. */
 export const TMP_RUN_DIR_RE = /^run_(\d+)$/;
 
+/** Directory holding extraction data that survives across runs. */
+export const RESUME_DIR = "resume";
+
+/** How long a failed archive's extracted data is kept for a later retry. */
+export const RESUME_TTL_MS = 24 * 60 * 60 * 1000;
+
 export type TmpDirSpec =
   | { kind: "relative"; value: string } // resolved against the scan root
   | { kind: "absolute"; value: string }; // remote:path/to/tmp or /abs/local/tmp
@@ -103,6 +109,20 @@ export function tmpStemDir(
   stem: string,
 ): string {
   return `${tmpArchiveDir(tmpRoot, runId, archiveId)}/${stem}`;
+}
+
+/** Directory holding resume data for one archive across runs. */
+export function tmpResumeDir(tmpRoot: string, archiveId: number): string {
+  return `${tmpRoot}/${RESUME_DIR}/${archiveId}`;
+}
+
+/** Extraction destination for one archive, retained after a failed attempt. */
+export function tmpResumeStemDir(
+  tmpRoot: string,
+  archiveId: number,
+  stem: string,
+): string {
+  return `${tmpResumeDir(tmpRoot, archiveId)}/${stem}`;
 }
 
 export type SweepResult = {

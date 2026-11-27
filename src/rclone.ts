@@ -8,7 +8,7 @@ import {
   parseTrashSubdir,
   archiveIncludePatterns,
 } from "./archive";
-import { isAbsoluteTmpPath, type SweepResult, TMP_RUN_DIR_RE } from "./tmpdir";
+import { isAbsoluteTmpPath, type SweepResult, TMP_RUN_DIR_RE, RESUME_DIR } from "./tmpdir";
 import {
   RCLONE_CONF,
   RCLONE_CONF_PATH,
@@ -1052,6 +1052,26 @@ export class Rclone {
         continue;
       }
       const res = await this.purge(`${tmpRoot}/${name}`);
+      if (res.code === 0) result.purged.push(name);
+      else result.failed.push(name);
+    }
+    return result;
+  }
+
+  /**
+   * Delete resume data whose archive is no longer eligible for a retry.
+   * `keep` holds the archive ids whose extracted files must survive.
+   */
+  async purgeStaleResume(tmpRoot: string, keep: Set<number>): Promise<SweepResult> {
+    const root = `${tmpRoot}/${RESUME_DIR}`;
+    const tops = await this.listTopDirs(root);
+    const result: SweepResult = { purged: [], skipped: [], failed: [] };
+    for (const name of tops) {
+      if (!/^\d+$/.test(name) || keep.has(Number(name))) {
+        result.skipped.push(name);
+        continue;
+      }
+      const res = await this.purge(`${root}/${name}`);
       if (res.code === 0) result.purged.push(name);
       else result.failed.push(name);
     }

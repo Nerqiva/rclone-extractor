@@ -359,7 +359,7 @@ re-queues every in-flight archive.
 | `rclonex_archive_buffer_size` | RcloneX flag `--archive-window-size` (how much of the archive is buffered in memory while rclonex reads random-access formats such as 7Z/ISO). Bytes; `0` keeps rclonex's own default. The Configuration page asks for MB/GB. |
 | `sort_by` / `sort_dir` | Process order — `path` or `size`, `asc` or `desc`. |
 | `trash_subdir` | Folder the processed archive is moved into (default `.Trash`). |
-| `tmp_dir` | Where rclone extracts archives temporarily (default `.Rclone-Extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. |
+| `tmp_dir` | Where rclone extracts archives temporarily (default `.Rclone-Extractor-tmp`). A relative path resolves inside `scan_root`; use `remote:path/to/dir` or `/abs/local/path` to extract elsewhere. Extraction output that may be resumed lives under `<tmp_dir>/resume/<queue-id>/<stem>`. |
 | `resume` | **Continue previous task.** Re-queue interrupted archives on boot/start; when off, they are marked `failed`/`killed`. |
 | `rclone_conf` | Base64-encoded rclone config (encrypted at rest). Falls back to the `RCLONE_CONF` environment variable when empty. When set, it is written to `/app/data/rclone.conf` before rclone runs — if that path is not writable for any reason, it is written to `/tmp/app/data/rclone.conf` instead (warning in the server log and a toast). Otherwise the file at `/app/data/rclone.conf` (e.g. a mounted rclone.conf) is used as-is. |
 
@@ -455,11 +455,11 @@ For each archive at `<ROOT>/<REL>`:
 ```
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";" --ignore-case --include "<each supported archive extension glob>" [--min-size <bytes>B] [--max-size <bytes>B]
 inspect: rclone archive list <ROOT>/<REL> --files-only (skipped for RcloneX formats by default, always for ISO)
-extract: rclonex archive extract <ROOT>/<REL> <TMPDIR>/run_<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
-         (with the configured --archive-* flags; rclone's native `archive extract` is used only when RcloneX is disabled)
-promote: rclone move <TMPDIR>/run_<runid>/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
-cleanup: rclone purge <TMPDIR>/run_<runid>/<archiveid>/<stem>
-purge:   rclone purge <TMPDIR>/run_<runid>/<archiveid> (and the run dir)
+extract: rclonex archive extract <ROOT>/<REL> <TMPDIR>/resume/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
+         (with the configured --archive-* flags and --archive-skip-existing; rclone's native `archive extract` is used only when RcloneX is disabled)
+promote: rclone move <TMPDIR>/resume/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
+cleanup: rclone purge <TMPDIR>/resume/<archiveid>
+purge:   rclone purge <TMPDIR>/run_<runid>
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
 
@@ -468,11 +468,15 @@ in total, with waits of `retry_cooldown_seconds`, twice that and four times
 that (60s, 120s, 240s by default). Listing, inspection, cleanup/purge and
 skipped archives are never retried. Every attempt gets its own `$ <redacted
 command>` marker and raw output block in the archive log, and the run log gets
-one `retry N/3 after Xs: <command> <archive>` line before each wait. A
-re-extract first purges the stem temp dir so partial output cannot leak. A skip
-request or hard stop during a cooldown aborts the wait and re-queues the
-archive; a soft stop waits it out. Password, website/torrent, empty and
-unreadable archives are never resurrected by a retry.
+one `retry N/3 after Xs: <command> <archive>` line before each wait. A re-extract
+reuses the stem temp dir instead of purging it. RcloneX extraction passes
+`--archive-skip-existing`, so files already at the destination with the same
+size are not uploaded again. A failed extract keeps the resume dir for a later
+run. A startup sweep removes resume dirs older than 24 hours or tied to
+archives that are no longer eligible for retry. A skip request or hard stop
+during a cooldown aborts the wait and re-queues the archive; a soft stop waits
+it out. Password, website/torrent, empty and unreadable archives are never
+resurrected by a retry.
 
 The listing is spawned with `--ignore-case` and one `--include` glob per
 supported archive extension (RAR/7z/ISO and split `name.7z.NNN` volumes only

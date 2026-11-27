@@ -107,6 +107,10 @@ test("all extraction uses rclonex when enabled; only first multivolume volume is
   for (const name of ["big.rar", "big.7z", "big.iso", "big.zip", "set.part1.rar"]) {
     expect(rxExtracts.some((l) => l.includes(name))).toBe(true);
   }
+  expect(rxExtracts.length).toBeGreaterThan(0);
+  for (const line of rxExtracts) {
+    expect(line).toContain("--archive-skip-existing");
+  }
 
   const rcLog = readLog(rcloneLog);
   // Rclone still lists, inspects, promotes, cleans up and trashes — it never extracts.

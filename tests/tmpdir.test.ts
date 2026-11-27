@@ -6,6 +6,9 @@ import {
   tmpStemDir,
   tmpRunDir,
   tmpArchiveDir,
+  tmpResumeDir,
+  tmpResumeStemDir,
+  RESUME_DIR,
   TMP_DIR,
   TMP_RUN_DIR_RE,
 } from "../src/tmpdir";
@@ -92,6 +95,14 @@ test("run/archive/stem path layout", () => {
   expect(tmpRunDir("root/tmp", 42)).toBe("root/tmp/run_42");
   expect(tmpArchiveDir("root/tmp", 42, 7)).toBe("root/tmp/run_42/7");
   expect(tmpStemDir("root/tmp", 42, 7, "archive")).toBe("root/tmp/run_42/7/archive");
+});
+
+test("resume paths are keyed by archive and independent of the run", () => {
+  expect(RESUME_DIR).toBe("resume");
+  expect(tmpResumeDir("root/tmp", 7)).toBe("root/tmp/resume/7");
+  expect(tmpResumeStemDir("root/tmp", 7, "archive")).toBe(
+    "root/tmp/resume/7/archive",
+  );
 });
 
 test("TMP_RUN_DIR_RE matches only app-owned run dirs", () => {

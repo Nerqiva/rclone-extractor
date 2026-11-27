@@ -239,7 +239,7 @@ test("a website skip after extraction is not retried", async () => {
   expect(await runLogText()).not.toContain("retry 1/3");
 });
 
-test("the stem temp dir is purged before a re-extract", async () => {
+test("a failed extract keeps resume data for the retry and purges it after success", async () => {
   await setSetting("retry_cooldown_seconds", "0");
   writeMark("fail_extract", "1");
   await runEngine();
@@ -250,11 +250,37 @@ test("the stem temp dir is purged before a re-extract", async () => {
     .filter((l) => l.includes("archive extract") || l.includes(" purge "));
   const extracts = lines.flatMap((l, i) => (l.includes("archive extract") ? [i] : []));
   expect(extracts.length).toBe(2);
-  const between = lines
-    .flatMap((l, i) => (l.includes(" purge ") ? [i] : []))
-    .filter((i) => i > extracts[0] && i < extracts[1]);
-  expect(between.length).toBe(1);
-  expect(lines[between[0]]).toContain("/one");
+  const resumePurges = lines.flatMap((l, i) =>
+    l.includes(" purge ") && l.includes("/resume/") ? [i] : [],
+  );
+  expect(resumePurges.length).toBe(1);
+  expect(resumePurges[0]).toBeGreaterThan(extracts[1]);
+});
+
+test("resume data survives a failed run and is reused on the next run", async () => {
+  await setSetting("retry_cooldown_seconds", "0");
+  writeMark("fail_extract", "99");
+  await runEngine();
+
+  expect(await archiveRow("one.zip")).toEqual({ status: "failed", errorKind: "extract" });
+  const firstLog = readLog(rcloneLog).split("\n");
+  const firstExtract = firstLog.find((l) => l.includes("archive extract")) ?? "";
+  expect(firstExtract).toContain("/resume/");
+  expect(
+    firstLog.some((l) => l.includes(" purge ") && l.includes("/resume/")),
+  ).toBe(false);
+
+  await store.run(
+    "UPDATE archives SET status='queued', error_kind=NULL, updated_at=? WHERE path=?",
+    [new Date().toISOString(), "one.zip"],
+  );
+  rmMark("fail_extract");
+  resetLogs();
+  await runEngine();
+
+  expect(await archiveRow("one.zip")).toEqual({ status: "done", errorKind: null });
+  const secondExtract = readLog(rcloneLog).split("\n").find((l) => l.includes("archive extract")) ?? "";
+  expect(secondExtract).toBe(firstExtract);
 });
 
 test("promote and trash failures are retried too", async () => {

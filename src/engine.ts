@@ -8,9 +8,10 @@ import { validateStoredExtraFlags } from "./extraflags";
 import {
   tmpRootPath,
   tmpRunDir,
-  tmpArchiveDir,
-  tmpStemDir,
+  tmpResumeDir,
+  tmpResumeStemDir,
   tmpTopSegment,
+  RESUME_TTL_MS,
 } from "./tmpdir";
 import { loadTmpDirSettings } from "./tmpsweep";
 import { isArchiveDownloading } from "./downloads";
@@ -923,6 +924,32 @@ export async function runEngine(): Promise<void> {
       setActivity("");
     }
 
+    // Resume data is keyed by archive, not by run, so a later run can finish
+    // an archive that only partly extracted. Drop data for archives that are
+    // terminal or too old to be worth resuming.
+    setActivity("Purging stale resume data");
+    try {
+      const cutoff = new Date(Date.now() - RESUME_TTL_MS).toISOString();
+      const rows = await store.query<{ id: number | string }>(
+        "SELECT id FROM archives WHERE status IN ('extracting','queued','failed') AND updated_at >= ?",
+        [cutoff],
+      );
+      const keep = new Set(rows.map((r) => Number(r.id)));
+      const res = await rc.purgeStaleResume(tmpRoot, keep);
+      if (res.purged.length) {
+        logger.info(
+          `purged ${res.purged.length} stale resume dir(s): ${res.purged.join(", ")}`,
+        );
+      }
+      if (res.failed.length) {
+        logger.warn(`could not purge resume dir(s): ${res.failed.join(", ")}`);
+      }
+    } catch (e) {
+      logger.warn(`resume sweep failed: ${e}`);
+    } finally {
+      setActivity("");
+    }
+
     const queueMax = clampQueueMax(cfg["queue_max"] ?? "500");
     const maxArchiveSize = clampArchiveSize(cfg["max_archive_size"] ?? "0");
     const minArchiveSize = clampArchiveSize(cfg["min_archive_size"] ?? "0");
@@ -941,7 +968,7 @@ export async function runEngine(): Promise<void> {
     // its own default).
     const rawBuffer = cfg["rclonex_archive_buffer_size"] ?? "16777216";
     const rclonexBufferSize = Number(rawBuffer);
-    const rclonexFlags: string[] = [];
+    const rclonexFlags: string[] = ["--archive-skip-existing"];
     if (rclonexPasswordEnabled && rclonexPassword) {
       rclonexFlags.push("--archive-password", rclonexPassword);
     }
@@ -1328,11 +1355,10 @@ export async function runEngine(): Promise<void> {
       // listing, inspection, promotion, cleanup and trash.
       const useRclonex = rclonexEnabled && isRclonexFormat(baseName);
       const extractor = rclonexRc ?? rc;
-      const tmp = tmpStemDir(tmpRoot, runRowId, row.id, stem(baseName));
-      const archiveTmpDir = tmpArchiveDir(tmpRoot, runRowId, row.id);
+      const tmp = tmpResumeStemDir(tmpRoot, row.id, stem(baseName));
+      const archiveTmpDir = tmpResumeDir(tmpRoot, row.id);
       const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
       let result: "done" | "failed" | "skipped" = "failed";
-      let tmpAttempted = false;
 
       try {
         // Inspect the archive before any extraction happens. Archives that
@@ -1417,7 +1443,6 @@ export async function runEngine(): Promise<void> {
           warn(`skipped (${skipReason}): ${rel} [${detail}]`);
           result = "skipped";
         } else {
-        tmpAttempted = true;
         setActivity("Extracting", job);
         const ex = await withRetries(
           job,
@@ -1436,10 +1461,6 @@ export async function runEngine(): Promise<void> {
             // A password failure is a terminal skip, not a transient error.
             retryable: (outcome) =>
               !PASSWORD_ERROR.test(`${outcome.tail.join("\n")}\n${outcome.stderr}`),
-            // Partial output from a failed attempt must not feed the next one.
-            beforeRetry: async () => {
-              await rc.purge(tmp, ref);
-            },
           },
         );
         setActivity("", job);
@@ -1448,6 +1469,9 @@ export async function runEngine(): Promise<void> {
         if (ex.code !== 0) {
           const all = `${ex.tail.join("\n")}\n${ex.stderr}`;
           if (PASSWORD_ERROR.test(all)) {
+            setActivity("Cleaning up", job);
+            await rc.purge(archiveTmpDir, ref);
+            setActivity("", job);
             await store.run(
               "UPDATE archives SET status='skipped', error_kind='password', updated_at=? WHERE id=?",
               [now(), row.id],
@@ -1456,9 +1480,6 @@ export async function runEngine(): Promise<void> {
             warn(`skipped (password): ${rel} [$ ${ex.command}]`);
             result = "skipped";
           } else {
-            setActivity("Cleaning up", job);
-            await rc.cleanup(tmp, ref);
-            setActivity("", job);
             throwIfSkipArchive(job);
             await store.run(
               "UPDATE archives SET status='failed', error_kind='extract', updated_at=? WHERE id=?",
@@ -1529,9 +1550,6 @@ export async function runEngine(): Promise<void> {
           setActivity("", job);
           throwIfSkipArchive(job);
           if (promoted.code !== 0) {
-            setActivity("Cleaning up", job);
-            await rc.cleanup(tmp, ref);
-            setActivity("", job);
             throwIfSkipArchive(job);
             await store.run(
               "UPDATE archives SET status='failed', error_kind='promote', updated_at=? WHERE id=?",
@@ -1544,7 +1562,7 @@ export async function runEngine(): Promise<void> {
             );
           } else {
             setActivity("Cleaning up", job);
-            const cleaned = await rc.cleanup(tmp, ref);
+            const cleaned = await rc.purge(archiveTmpDir, ref);
             setActivity("", job);
             if (cleaned.code !== 0) {
               warn(
@@ -1646,18 +1664,6 @@ export async function runEngine(): Promise<void> {
           job.stats = null;
           job.phase = "";
           await recordOutcome(job, result);
-        }
-        // Best effort: purge the per-archive temp dir with whatever is left
-        // in it. Only ever called on the app-owned archive dir.
-        if (tmpAttempted) {
-          setActivity("Cleaning up", job);
-          const purged = await rc.purge(archiveTmpDir, ref);
-          setActivity("", job);
-          if (purged.code !== 0) {
-            warn(
-              `temp purge failed: ${archiveTmpDir} [$ ${purged.command}] ${purged.stderr.trim() || "unknown error"}`,
-            );
-          }
         }
       }
     };

@@ -38,7 +38,7 @@ function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 function postInspectLines(stem: string): string[] {
-  const prefix = `lsf ${scanRoot}/.Rclone-Extractor-tmp/run_`;
+  const prefix = `lsf ${scanRoot}/.Rclone-Extractor-tmp/resume/`;
   return readLog().split("\n").filter((l) => l.includes(prefix) && l.includes(`/${stem} `));
 }
 
