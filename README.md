@@ -101,15 +101,15 @@ scan  →  extract  →  promote  →  trash
 - **Task-first interface** — self-hosted Inter for navigation and controls,
   monospaced data for logs and values, sentence-case labels, and direct links
   from the empty Progress page to configuration, logs and errors. Help tips use
-  a small superscript `?` marker, and tip bubbles use the same Inter face and
-  weight on every page, including Errors. The active nav item is marked by an
-  underline rather than a filled box.
+  a tiny superscript SVG question-mark symbol, and tip bubbles use the same
+  Inter face and weight on every page, including Errors. The active nav item
+  is marked by an underline rather than a filled box.
 - **Continue previous task** — resumable runs. If the app crashes or is
   restarted mid-job, archives stuck in *extracting* are automatically re-queued.
   Runs have an explicit outcome: a **user stop** ends as **Interrupted**, a
   **host/process stop** (deploy `SIGTERM`, SIGKILL, OOM, crash) ends as
   **Killed**, and an **app-caused error** ends as **Error** with an error code
-  (see the Logs page, Errors tab, and the run log). The finished/ended time is
+  (see the Errors page and the run log). The finished/ended time is
   shown on the progress page when a run is not running, and the cause and time
   appear alongside the badge.
 - **Choose your database** — SQLite by default, or a remote **PostgreSQL**
@@ -252,7 +252,7 @@ RCLONEX_BIN=rclonex                    # full path to the rclonex binary (Docker
 # --- http ---
 BIND=0.0.0.0                           # bind address
 PORT=8080                              # listen port
-APP_TZ=Asia/Omsk                       # timezone used for every time shown in the UI (DB and backups stay UTC)
+APP_TZ=                                # timezone for UI times (defaults to the host timezone; DB and backups stay UTC)
 ```
 
 > The remaining settings (`scan_root`, the per-command `*_extra_flags` fields,
@@ -313,10 +313,13 @@ shows its **Queue ID** — the archive's database id, also used on the Logs and
 Errors pages and for downloads.
 
 The queue is hidden by default. **Show Queue (N)** next to Start/Stop opens it
-and lists up to 20 archives per page with Prev/Next controls. The **Skip
-archive** button on an in-flight card targets only that archive. **Stop** lets
-in-flight archives finish; **Force stop** kills all active processes and
-re-queues every in-flight archive.
+and lists up to 20 archives per page with Prev/Next controls. Each row shows
+just its bare `#Queue ID` and a **Skip** / **Add** toggle: **Skip** keeps that
+archive queued in the database but makes workers pass it over for the rest of
+this run, and **Add** puts it back. The choice is in memory only and is cleared
+when the run ends. The **Skip archive** button on an in-flight card targets only
+that archive. **Stop** lets in-flight archives finish; **Force stop** kills all
+active processes and re-queues every in-flight archive.
 
 ### Environment variables
 
@@ -334,7 +337,7 @@ re-queues every in-flight archive.
 | `DATA_DIR` | `/app/data` | Directory for the SQLite file and the transient `rclone.conf` working copy (falls back to `/tmp/app/data` if not writable for any reason). Only needed when using SQLite or a stored `rclone_conf`. |
 | `BIND` | `0.0.0.0` | HTTP bind address. |
 | `PORT` | `8080` | HTTP port. |
-| `APP_TZ` | `Asia/Omsk` | IANA timezone used for every time shown in the UI (e.g. `Europe/Berlin`). The database and backups stay in UTC. Invalid values warn at boot and fall back to `Asia/Omsk`. |
+| `APP_TZ` | *(host timezone)* | IANA timezone used for every time shown in the UI (e.g. `Europe/Berlin`). Defaults to the host's timezone; set it to override. The Docker image sets `TZ=Asia/Omsk`. The database and backups stay in UTC. Invalid values warn at boot and fall back to the host timezone. |
 
 ### Settings (Configuration page)
 
@@ -809,15 +812,15 @@ button is not possible.
 The **Logs** page opens on the current (latest) session. While a task is
 running, only that live session is shown. When the app is idle, the same log
 window has a session picker so older runs can be viewed without leaving the
-page, plus tabs for the run log, the errors log, and the per-archive logs.
+page, plus tabs for the run log and the per-archive logs.
 
 - The **Archives** tab lists every archive that run processed — done, failed,
   skipped, or still in progress — with an inline **Log view** (most recent
   300 lines; a link downloads the full extraction log), a **Copy log**
   button and a **Download** button for that archive's raw output. Live
   sessions refresh the list every 2 seconds. **Download all** exports one
-  text file with the run log, the errors log and every per-archive log of
-  the session, delimited by section headers.
+  text file with the run log, the errors log and every per-archive log of the
+  session, delimited by section headers.
 
 - Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
   and appended. Finishing a run updates the pill but keeps polling available,
@@ -828,9 +831,10 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   Scrolling away from the bottom pauses polling temporarily; switching back
   resumes from the last fetched line, so lines already on screen are kept.
   An open **Log view** stays open across polled updates.
-- The log view is **mobile-friendly and selectable**: every line is real text,
-  you can tap and hold to select parts of it, or use the toolbar buttons
-  **Copy all**, **Copy selection**, **Select all** and **Download**.
+- The log view is **mobile-friendly and selectable**: every line is real text
+  with a compact left gutter, you can tap and hold to select parts of it, or
+  use the toolbar buttons **Copy all**, **Copy selection**, **Select all** and
+  **Download**.
 - **Copy all**/**Download** export the session and tab; **Copy selection**
   copies whatever you have selected; **Select all** selects the whole log for
   partial manual copying. Clipboard fallbacks work on plain-HTTP self-hosted
@@ -839,9 +843,10 @@ page, plus tabs for the run log, the errors log, and the per-archive logs.
   archives** section covering password-protected, website/torrent dump, tiny
   and other informational skips. It has a **Copy all** button for a
   tab-separated summary. Every card shows its Queue ID and the stage where it
-  stopped, and has an inline **Log view** with the same staged command output
-  as the Archives tab, plus **Copy** / **Download** for the full archive log.
-  The run error log also records the redacted command that failed.
+  stopped; no error lines are inlined. The inline **Log view** opens the same
+  staged command output as the Archives tab, alongside **Copy** / **Download**
+  for the full archive log. The run error log also records the redacted
+  command that failed.
 - The **Skipped archives** section lists every archive that reached a run but
   needs a password (a warning is logged and the run moves
   to the next archive; they are never extracted without one). Each row shows
@@ -906,7 +911,7 @@ src/
     pages.ts       GET /  /config  /logs  /errors
     auth.ts        login/logout, DB sessions, CSRF middleware
     dashboard.ts   GET /dashboard/fragment (progress panel poll target)
-    actions.ts     POST /run/start  /run/stop  /run/skip  /config  /config/rclonex-clear
+    actions.ts     POST /run/start  /run/stop  /run/skip  /run/queue-toggle  /config  /config/rclonex-clear
     logsapi.ts     GET /logs/fragment  /errors/fragment  /logs/archives-fragment  + downloads
     data.ts        POST /export  POST /import
 public/
@@ -933,7 +938,7 @@ GET  /logs/fragment        incremental log tail  (auth)
 GET  /errors/fragment      error rows           (auth)
 GET  /logs/archives-fragment                    (auth, per-run archive rows for the Archives tab)
 GET  /download/run/:id/all                       (auth, run log + errors + every archive log as one .txt)
-POST /run/start  /run/stop  /run/skip               (auth)
+POST /run/start  /run/stop  /run/skip  /run/queue-toggle  (auth)
 POST /config  /config/rclone-clear  /config/rclonex-clear  (auth)
 POST /maintenance/queues  /maintenance/logs  /maintenance/all  /maintenance/tmp-purge  (auth)
 GET  /download/run/:id  /download/archive/:id  (auth)

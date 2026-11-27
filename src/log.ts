@@ -42,7 +42,7 @@ function formatRow(row: LogRow): string {
 
 function fmtTime(ts: string): string {
   // Log lines are stored in UTC; show them in the display timezone (APP_TZ,
-  // default Asia/Omsk). Downloads keep the raw ISO value.
+  // defaulting to the host zone). Downloads keep the raw ISO value.
   return fmtDisplayTime(ts);
 }
 

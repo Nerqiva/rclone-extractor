@@ -57,6 +57,9 @@ export interface JobState {
   cooldownUntil: number;
   skipArchive: boolean;
   skipInspection: boolean;
+  // Set from the queue panel only. Claiming passes this archive over for the
+  // rest of the run; the flag dies with the run, so the DB row stays queued.
+  queueSkipped: boolean;
   groupKey: string | null;
   finishedAt: string;
 }
@@ -345,6 +348,14 @@ export function requestSkipArchive(id?: number): boolean {
   if (!job || NO_SKIP_PHASES.includes(job.phase)) return false;
   job.skipArchive = true;
   killActiveProcs(job.id);
+  return true;
+}
+
+/** Toggle a queued archive from the queue panel. Never persisted. */
+export function setQueuedSkip(id: number, skipped: boolean): boolean {
+  const job = engineState.jobs.get(id);
+  if (!job || job.status !== "queued") return false;
+  job.queueSkipped = skipped;
   return true;
 }
 
@@ -1278,6 +1289,7 @@ export async function runEngine(): Promise<void> {
         cooldownUntil: 0,
         skipArchive: false,
         skipInspection: false,
+        queueSkipped: false,
         groupKey,
         finishedAt: "",
       });
@@ -1288,7 +1300,7 @@ export async function runEngine(): Promise<void> {
 
     const claimNext = (): JobState | undefined => {
       for (const job of engineState.jobs.values()) {
-        if (job.status !== "queued") continue;
+        if (job.status !== "queued" || job.queueSkipped) continue;
         const pred = predecessors.get(job.id) ?? null;
         if (pred !== null && !isTerminal(engineState.jobs.get(pred)?.status ?? "queued")) {
           continue;

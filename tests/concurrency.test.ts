@@ -368,7 +368,7 @@ test("the polled fragment renders active and History cards with Queue IDs", asyn
           }
         : null,
     skipArchive: false,
-    skipInspection: false,
+    skipInspection: false, queueSkipped: false,
     groupKey: null,
     finishedAt: "",
   });
@@ -419,7 +419,7 @@ test("only the five newest terminal archives appear in History", async () => {
     command: "",
     stats: null,
     skipArchive: false,
-    skipInspection: false,
+    skipInspection: false, queueSkipped: false,
     groupKey: null,
     finishedAt: status === "failed" ? new Date(base + offset).toISOString() : "",
   });
@@ -466,7 +466,7 @@ test("the queue page caps at 20 rows per page and shows Queue IDs", async () => 
         command: "",
         stats: null,
         skipArchive: false,
-        skipInspection: false,
+        skipInspection: false, queueSkipped: false,
         groupKey: null,
             finishedAt: "",
       },
@@ -479,23 +479,23 @@ test("the queue page caps at 20 rows per page and shows Queue IDs", async () => 
 
   const first = await (await app.request("/dashboard/queue?page=1")).text();
   expect(count(first, 'class="queue-id"')).toBe(20);
-  expect(first).toContain("Queue ID #100");
+  expect(first).toContain('class="queue-id">#100</td>');
   expect(first).toContain("q0/archive0.zip");
-  expect(first).toContain("Queue ID #119");
-  expect(first).not.toContain("Queue ID #120");
+  expect(first).toContain('class="queue-id">#119</td>');
+  expect(first).not.toContain('class="queue-id">#120</td>');
   expect(first).toContain("Page 1 of 2");
   expect(first).toContain('data-queue-page="2"');
 
   const second = await (await app.request("/dashboard/queue?page=2")).text();
   expect(count(second, 'class="queue-id"')).toBe(1);
-  expect(second).toContain("Queue ID #120");
+  expect(second).toContain('class="queue-id">#120</td>');
   expect(second).toContain("q20/archive20.zip");
   expect(second).toContain("Page 2 of 2");
   expect(second).toContain('data-queue-page="1"');
   expect(second).toContain('data-queue-page="3" disabled');
 
   const clamped = await (await app.request("/dashboard/queue?page=99")).text();
-  expect(clamped).toContain("Queue ID #120");
+  expect(clamped).toContain('class="queue-id">#120</td>');
   expect(clamped).toContain("Page 2 of 2");
 });
 

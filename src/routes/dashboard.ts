@@ -7,7 +7,7 @@ import { baseNameOf, stageLabel, stateClass, jobStatusClass, jobPillClass } from
 import { resolveOutcome } from "../runs";
 import type { ExtractStats } from "../rclone";
 import { pendingRcloneConfNotice } from "../rclone";
-import { controlsFragment } from "../views";
+import { controlsFragment, queueSkipButton } from "../views";
 
 export const dashboard = new Hono();
 
@@ -339,7 +339,7 @@ export async function progressPanel(): Promise<string> {
       : s.outcome === "killed"
         ? `<p class="warn-line">Killed${code} — ${esc(reason || "previous process exited mid-run")}${timeSuffix}. In-progress archives resume on the next start when resume is enabled.</p>`
         : s.outcome === "error"
-          ? `<p class="warn-line">Error — ${esc(s.errorKind || "engine_error")}${reason ? `: ${esc(reason)}` : ""}${timeSuffix}. See the Logs page (Errors tab) for details.</p>`
+          ? `<p class="warn-line">Error — ${esc(s.errorKind || "engine_error")}${reason ? `: ${esc(reason)}` : ""}${timeSuffix}. See the Errors page for details.</p>`
           : "";
   return `<section class="progress-panel ${cls}">
     <header class="run-header">
@@ -424,11 +424,11 @@ dashboard.get("/dashboard/queue", (c) => {
     rows.length === 0
       ? `<p class="muted">No archives in the queue.</p>`
       : `<div class="queue-scroll"><table class="queue-table">
-    <thead><tr><th scope="col">Queue ID</th><th scope="col">#</th><th scope="col">Archive</th></tr></thead>
+    <thead><tr><th scope="col">Queue ID</th><th scope="col">#</th><th scope="col">Archive</th><th scope="col">Action</th></tr></thead>
     <tbody>${rows
       .map(
         (r) =>
-          `<tr><td class="queue-id">Queue ID #${r.id}</td><td class="queue-order">${r.order + 1}</td><td title="${esc(r.rel)}">${esc(r.rel)}</td></tr>`,
+          `<tr><td class="queue-id">#${r.id}</td><td class="queue-order">${r.order + 1}</td><td title="${esc(r.rel)}">${esc(r.rel)}</td><td>${queueSkipButton(r.id, r.rel, r.queueSkipped)}</td></tr>`,
       )
       .join("")}</tbody>
   </table></div>`;

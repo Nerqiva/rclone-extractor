@@ -27,15 +27,26 @@ export const PG_POOL_MAX =
   Number.isFinite(pgPoolMax) && pgPoolMax >= 1 ? Math.min(Math.floor(pgPoolMax), 32) : 4;
 export const TRUST_PROXY = process.env.TRUST_PROXY === "1";
 export const COOKIE_SECURE = process.env.COOKIE_SECURE !== "0";
-export const APP_TZ = (() => {
-  const raw = (process.env.APP_TZ ?? "").trim() || "Asia/Omsk";
+const validZone = (zone: string): boolean => {
   try {
-    new Intl.DateTimeFormat("en-GB", { timeZone: raw });
-    return raw;
+    new Intl.DateTimeFormat("en-GB", { timeZone: zone });
+    return true;
   } catch {
-    console.warn(`invalid APP_TZ "${raw}" — falling back to Asia/Omsk`);
-    return "Asia/Omsk";
+    return false;
   }
+};
+
+// Default to the host zone so every displayed timestamp follows the machine's
+// clock; APP_TZ stays as an explicit override for hosts with a different UI zone.
+const HOST_TZ = (() => {
+  const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return detected && validZone(detected) ? detected : "UTC";
+})();
+export const APP_TZ = (() => {
+  const raw = (process.env.APP_TZ ?? "").trim() || HOST_TZ;
+  if (validZone(raw)) return raw;
+  console.warn(`invalid APP_TZ "${raw}" — falling back to ${HOST_TZ}`);
+  return HOST_TZ;
 })();
 
 // The local filesystem is only needed for the SQLite database and the

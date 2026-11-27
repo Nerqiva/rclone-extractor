@@ -70,14 +70,17 @@ export function fmtDisplayTime(iso: string, withDate = false): string {
 let infoTipSeq = 0;
 
 /**
- * Small superscript help indicator rendered with its tooltip bubble. Hover or
- * keyboard focus reveals it (CSS), tapping toggles it (global script in
- * layout()). `tip` is the full description shown to mouse/touch users;
- * `label` names the thing for screen readers ("More info: <label>").
+ * Tiny superscript help indicator rendered as an SVG question mark with its
+ * tooltip bubble. Hover or keyboard focus reveals it (CSS), tapping toggles it
+ * (global script in layout()). `tip` is the full description shown to
+ * mouse/touch users; `label` names the thing for screen readers.
  */
+const INFO_GLYPH =
+  '<svg viewBox="0 0 10 10" aria-hidden="true" focusable="false"><path d="M3.4 3.6a1.7 1.7 0 1 1 2.7 1.4c-.7.5-1.1.8-1.1 1.7" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><circle cx="5" cy="8.3" r="0.7" fill="currentColor"/></svg>';
+
 export function info(tip: string, label: string): string {
   const id = `info-tip-${++infoTipSeq}`;
-  return `<span class="info-tip"><button type="button" class="info-i" aria-expanded="false" aria-describedby="${id}" aria-label="More info: ${esc(label)}">?</button><span class="info-tip-bubble" role="tooltip" id="${id}">${esc(tip)}</span></span>`;
+  return `<span class="info-tip"><button type="button" class="info-i" aria-expanded="false" aria-describedby="${id}" aria-label="More info: ${esc(label)}">${INFO_GLYPH}</button><span class="info-tip-bubble" role="tooltip" id="${id}">${esc(tip)}</span></span>`;
 }
 
 const MODALS = `<div class="modal-overlay" id="stop-modal" hidden role="dialog" aria-modal="true" aria-label="Stop">

@@ -35,7 +35,6 @@ function noStore(c: { header: (name: string, value: string) => void }): void {
 }
 
 logsapi.get("/logs/fragment", async (c) => {
-  const kind = kindOf(c.req.query("kind"));
   noStore(c);
 
   let runId = Number(c.req.query("run") ?? "");
@@ -58,7 +57,7 @@ logsapi.get("/logs/fragment", async (c) => {
   }
 
   const { entries, lastId } = await tailRendered(
-    { scope: "run", refId: runId, kind },
+    { scope: "run", refId: runId, kind: "main" },
     LOG_TAIL_LIMIT,
     cursor,
   );

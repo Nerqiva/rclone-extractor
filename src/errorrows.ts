@@ -7,7 +7,6 @@ export interface ErrorRow {
   path: string;
   error_kind: string;
   updated_at: string;
-  message: string;
   stage: string;
 }
 
@@ -79,7 +78,6 @@ function errorCard(r: ErrorRow): string {
           ${stage}<span class="pill ${cls}">${esc(r.error_kind)}</span>
         </div>
         <div class="error-path muted">${esc(r.path)}</div>
-        ${r.message ? `<pre class="error-message">${esc(r.message)}</pre>` : ""}
         <div class="error-card-foot">
           <span class="muted" title="${esc(r.updated_at)}">${esc(relativeTime(r.updated_at))}</span>
           <span class="error-actions">
@@ -149,11 +147,10 @@ export async function readErrorRows(
       if (line.startsWith("$ ")) groups.push({ command: line, output: [] });
       else if (groups.length > 0) groups[groups.length - 1].output.push(line);
     }
-    // Logs written before command markers have no groups; show the raw tail.
+    // Logs written before command markers have no groups; scan the raw tail.
     if (groups.length === 0) {
       return {
         ...r,
-        message: chronological.slice(-8).join("\n"),
         stage: chronological.map(stageOf).filter(Boolean).pop() ?? "",
       };
     }
@@ -165,7 +162,6 @@ export async function readErrorRows(
       newestFirst[0];
     return {
       ...r,
-      message: [group.command, ...group.output.slice(-8)].filter(Boolean).join("\n"),
       stage: stageOf(group.command),
     };
   });

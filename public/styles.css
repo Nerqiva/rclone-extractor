@@ -78,7 +78,6 @@ body {
 .queue-id,
 .queue-order,
 .extract-mini-value,
-.error-message,
 .detail-grid dd.cmd,
 code,
 pre,
@@ -617,6 +616,10 @@ textarea {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.queue-table .queue-skip {
+  padding: 2px 7px;
+  font-size: 10px;
+}
 
 .run-header {
   display: flex;
@@ -1017,7 +1020,7 @@ textarea {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 2px 14px;
+  padding: 2px 8px;
   border-bottom: 1px solid rgba(46, 58, 82, 0.3);
   min-height: 24px;
 }
@@ -1027,7 +1030,7 @@ textarea {
 .log-time {
   color: var(--muted);
   font-size: 11px;
-  flex: 0 0 64px;
+  flex: 0 0 48px;
   opacity: 0.7;
 }
 .log-chip {
@@ -1078,7 +1081,7 @@ textarea {
   font-weight: 500;
 }
 .log-continuation {
-  padding-left: 90px;
+  padding-left: 8px;
   color: var(--muted);
   font-size: 11px;
 }
@@ -1165,18 +1168,6 @@ textarea {
 }
 .error-path {
   font-size: 11px;
-  overflow-wrap: anywhere;
-}
-.error-message {
-  margin: 2px 0;
-  padding: 8px;
-  max-height: 140px;
-  overflow: auto;
-  background: var(--panel-alt, rgba(0, 0, 0, 0.2));
-  border-radius: 4px;
-  font-family: var(--mono, monospace);
-  font-size: 11px;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .error-card-foot {
@@ -1309,6 +1300,11 @@ textarea {
   cursor: pointer;
   vertical-align: super;
   padding: 2px 3px;
+}
+.info-i svg {
+  display: block;
+  width: 9px;
+  height: 9px;
 }
 .info-i:hover,
 .info-i:focus-visible,

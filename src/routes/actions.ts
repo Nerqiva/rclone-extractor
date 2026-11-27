@@ -8,6 +8,7 @@ import {
   requestSkipListing,
   requestSkipInspection,
   requestSkipArchive,
+  setQueuedSkip,
   performPasswordMove,
   queuePasswordMove,
   parseConcurrency,
@@ -21,7 +22,7 @@ import { parseTmpDir, tmpRootPath, TMP_DIR } from "../tmpdir";
 import { loadTmpDirSettings } from "../tmpsweep";
 import { parseTrashSubdir, TRASH } from "../archive";
 import { readPasswordRows, renderPasswordList } from "../passwordrows";
-import { controlsFragment, configForm } from "../views";
+import { controlsFragment, configForm, queueSkipButton } from "../views";
 import { EXTRA_FLAG_FIELDS, validateExtraFlags } from "../extraflags";
 
 const MAX_CONF_BYTES = 5 * 1024 * 1024;
@@ -111,6 +112,28 @@ actions.post("/run/skip", async (c) => {
         ? "Inspection skipped — extracting this archive."
         : "Archive skipped — it stays queued for the next run.";
   return c.html(controlsFragment(), 200, toastTriggerHeaders(msg));
+});
+
+actions.post("/run/queue-toggle", async (c) => {
+  const form = await c.req.formData().catch(() => null);
+  const raw = form?.get("id");
+  const id = raw === null || raw === undefined ? NaN : Number(raw);
+  const skip = String(form?.get("skip") ?? "") === "1";
+  const job = Number.isInteger(id) && id > 0 ? engineState.jobs.get(id) : undefined;
+  if (!job || job.status !== "queued" || !setQueuedSkip(id, skip)) {
+    return c.html(
+      queueSkipButton(Number.isInteger(id) ? id : 0, "", false),
+      200,
+      toastTriggerHeaders("That archive is no longer in the queue.", "err"),
+    );
+  }
+  return c.html(
+    queueSkipButton(id, job.rel, job.queueSkipped),
+    200,
+    toastTriggerHeaders(
+      skip ? "Archive skipped for this run." : "Archive added back to the queue.",
+    ),
+  );
 });
 
 const SETTING_KEYS = [

@@ -161,7 +161,6 @@
   var viewer = document.getElementById("logViewer");
   if (viewer) {
     var runId = Number(viewer.dataset.run);
-    var kind = viewer.dataset.kind;
     var lastId = Number(viewer.dataset.lastId || "0");
     var logTimer = null;
 
@@ -197,13 +196,7 @@
 
     var pollLog = function () {
       if (viewer.dataset.live !== "1" || document.hidden) return;
-      var url =
-        "/logs/fragment?run=" +
-        runId +
-        "&kind=" +
-        kind +
-        "&after=" +
-        lastId;
+      var url = "/logs/fragment?run=" + runId + "&after=" + lastId;
       fetch(url, { credentials: "same-origin", cache: "no-store" })
         .then(function (response) { return response.ok ? response.json() : null; })
         .then(function (data) {

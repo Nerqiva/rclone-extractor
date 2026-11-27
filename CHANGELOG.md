@@ -58,16 +58,33 @@ to `main`.
   password-protected ones, now share one per-archive **Log view** with the
   Archives tab, under *Failed archives* and a single *Skipped archives*
   section.
+- **Per-row queue skip toggle.** The queue panel shows each row as a bare
+  `#N` with a small **Skip** / **Add** button. **Skip** keeps the archive in
+  the database queue but makes workers pass it over for the rest of the run;
+  **Add** puts it back. The flag lives only in memory for the current run.
 
 ### Changed
 - **Removed the ambiguous controls-row Skip archive button.** With more than
   one worker it skipped only the first active archive. Use the per-archive
   **Skip archive** button on a job card instead, which skips exactly that
   archive. Skip listing and Skip inspection stay in the controls row.
-- **Help markers are tiny superscripts.** The `?` beside labels and headings is
-  a plain raised glyph instead of a circled badge. Tooltip bubbles use the same
-  Inter face and regular weight on every page, including the Errors page, so
-  bold headings no longer make their tips look different.
+- **Help markers are tiny SVG superscripts.** The `?` beside labels and headings
+  is a minimal SVG question mark raised like a superscript instead of a circled
+  badge. Tooltip bubbles use the same Inter face and regular weight on every
+  page, including the Errors page, so bold headings no longer make their tips
+  look different.
+- **Times use the host timezone by default.** `APP_TZ` now defaults to the
+  host's timezone and still accepts an IANA override. An invalid value warns at
+  boot and falls back to the host. Database values and backups stay in UTC.
+- **Run-log polling no longer sends the removed Errors-tab `kind` query.** The
+  run log always reads the main log, so the leftover `data-kind` attribute and
+  `?kind=` parameter are gone.
+- **Log rows use a compact left gutter.** Entry padding, the time column and
+  continuation alignment are tightened in the Logs page and every inline
+  **Log view**, leaving more room for the actual output.
+- **Error cards keep only the essentials.** Each card shows its Queue ID, stage
+  and actions instead of inlining native error lines. **Log view** opens the
+  same per-archive output as the Archives tab.
 - **Polling patches only changed values.** Progress, controls, archive rows,
   the queue and the Errors page merge new fragments into the existing DOM with
   vendored `morphdom` instead of replacing whole containers, so text selected
@@ -153,7 +170,8 @@ to `main`.
 - **Per-archive logs identify the failing command.** Each command that writes
   to an archive log prepends a `---` separator and the redacted `$ command`,
   so output from several commands is separated and the program that caused an
-  error is visible. Error cards show that command with the native error lines.
+  error is visible in **Log view**. Error cards stay compact and open that log
+  on demand.
 - **Per-archive logs keep native binary errors.** `rclone archive list` can
   print its error on stdout as well as stderr. Only stderr was being saved to
   the archive log, so a failed inspection showed the app's `skipped (...)`
@@ -168,6 +186,8 @@ to `main`.
   hard stop during a cooldown aborts it and re-queues the archive.
 
 ### Removed
+- **The Errors tab on the Logs page.** Failed and skipped archives have their
+  own Errors page; the Logs page now offers only **Run log** and **Archives**.
 - **Leftover single-worker progress UI.** The Current/Last archive and
   Active/Last command rows, the single-command progress block and the inline
   upcoming-archive table are gone. In-flight cards and the paginated queue
@@ -190,10 +210,11 @@ to `main`.
   falls back to a fresh scan.
 
 ### Changed
-- **Error cards show the raw binary error.** Each card on the Errors page now
-  includes the last native rclone/rclonex lines from that archive's log.
-  App-written diagnostics are filtered out, so the message is native output
-  only. The full log is still available through Copy and Download.
+- **Error cards point to the raw binary error.** Each card on the Errors page
+  stays compact: it shows the Queue ID, stage and actions, and **Log view**
+  opens the last native rclone/rclonex lines from that archive's log.
+  App-written diagnostics are filtered out, so the log is native output only.
+  The full log is still available through Copy and Download.
 - **Error logs include the failing command.** A failed command is now recorded
   with its redacted `$ <binary> ...` line in the run error log, including
   spawn failures that produce no binary output. Secrets stay masked.

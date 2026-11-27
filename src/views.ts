@@ -13,6 +13,12 @@ function queueToggleButton(): string {
   return `<button class="btn small ghost" type="button" data-queue-toggle data-queue-count="${queued}" aria-expanded="false" aria-controls="queuePanel">Show Queue (${queued})</button>`;
 }
 
+export function queueSkipButton(id: number, rel: string, skipped: boolean): string {
+  const target = `queue-skip-${id}`;
+  const label = skipped ? "Add" : "Skip";
+  return `<button id="${target}" class="btn small ghost queue-skip" type="button" hx-post="/run/queue-toggle" hx-vals='{"id":"${id}","skip":"${skipped ? "0" : "1"}"}' hx-target="#${target}" hx-swap="outerHTML" aria-label="${label} ${esc(rel)} for this run">${label}</button>`;
+}
+
 export function controlsFragment(): string {
   const running = engineState.running;
   if (!running) {

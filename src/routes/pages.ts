@@ -125,10 +125,7 @@ pages.get("/logs", async (c) => {
     "SELECT id, started_at, finished_at, total, done, failed, skipped, interrupted, interrupted_reason, outcome, error_kind FROM runs ORDER BY id DESC LIMIT 50",
   );
 
-  const tabParam = c.req.query("tab");
-  const tab = tabParam === "errors" ? "errors" : tabParam === "archives" ? "archives" : "main";
-  const isArchivesTab = tab === "archives";
-  const kind = tab === "errors" ? "errors" : "main";
+  const isArchivesTab = c.req.query("tab") === "archives";
 
   const running = engineState.running && engineState.runId > 0;
   const asked = Number(c.req.query("run") ?? "");
@@ -142,9 +139,8 @@ pages.get("/logs", async (c) => {
   }
 
   const tabs = `<div class="log-tabs">
-    <a class="log-tab${tab === "main" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=main">Run log</a>
-    <a class="log-tab${tab === "errors" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=errors">Errors</a>
-    <a class="log-tab${tab === "archives" ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=archives">Archives</a>
+    <a class="log-tab${isArchivesTab ? "" : " active"}" href="/logs?run=${selectedId}&amp;tab=main">Run log</a>
+    <a class="log-tab${isArchivesTab ? " active" : ""}" href="/logs?run=${selectedId}&amp;tab=archives">Archives</a>
   </div>`;
 
   if (runs.length === 0) {
@@ -166,7 +162,7 @@ pages.get("/logs", async (c) => {
   const { entries, lastId } = isArchivesTab
     ? { entries: [], lastId: 0 }
     : await tailRendered(
-        { scope: "run", refId: Number(selected.id), kind },
+        { scope: "run", refId: Number(selected.id), kind: "main" },
         LOG_TAIL_LIMIT,
       );
   const archiveRows = isArchivesTab
@@ -197,7 +193,7 @@ pages.get("/logs", async (c) => {
           <span>Session</span>
           <select name="run">${options}</select>
         </label>
-        <input type="hidden" name="tab" value="${tab}">
+        <input type="hidden" name="tab" value="${isArchivesTab ? "archives" : "main"}">
         <button class="btn small" type="submit">View</button>
       </form>`;
 
@@ -242,7 +238,7 @@ pages.get("/logs", async (c) => {
     ${outcomeDetail ? `<span class="warn-line">${outcomeDetail}</span>` : ""}
   </div>`;
 
-  const downloadHref = `/download/run/${selected.id}?kind=${kind}`;
+  const downloadHref = `/download/run/${selected.id}?kind=main`;
   const copyToolbar = isArchivesTab
     ? `<div class="log-actions" role="toolbar" aria-label="Archive log actions">
       <span class="log-actions-right">
@@ -253,7 +249,7 @@ pages.get("/logs", async (c) => {
       ${isLive ? `<button class="btn small" type="button" data-live-toggle="log" aria-pressed="true" title="Toggle live preview">Live preview</button>` : ""}
       <span class="log-actions-right">
         <button class="btn small" type="button" data-copy-url="${esc(downloadHref)}">Copy all</button>
-        <a class="btn small ghost" href="${esc(downloadHref)}">Download ${kind === "errors" ? "errors" : "log"}</a>
+        <a class="btn small ghost" href="${esc(downloadHref)}">Download log</a>
       </span>
     </div>`;
 
@@ -265,12 +261,10 @@ pages.get("/logs", async (c) => {
   const logBlock = isArchivesTab
     ? `<div id="ar-list"${pollAttr}>${renderArchiveLogRows(archiveRows ?? [], liveArchiveJobs)}</div>`
     : showLog
-      ? `<div class="log-viewer" id="logViewer" data-run="${selected.id}" data-kind="${kind}" data-live="${
+      ? `<div class="log-viewer" id="logViewer" data-run="${selected.id}" data-live="${
           isLive ? "1" : "0"
         }" data-last-id="${lastId}">${entriesHtml}</div>`
-      : `<div class="empty-state"><p class="muted">${
-          kind === "errors" ? "No errors in this session." : "No log lines yet."
-        }</p></div>`;
+      : `<div class="empty-state"><p class="muted">No log lines yet.</p></div>`;
 
   const body = `<div class="log-toolbar">
       ${picker}
@@ -287,7 +281,7 @@ pages.get("/logs", async (c) => {
 pages.get("/errors", async (c) => {
   const running = engineState.running && engineState.runId > 0;
   const [rows, pwRows] = await Promise.all([readErrorRows(store), readPasswordRows()]);
-  const body = `<h2 class="section-title" style="margin-top:0">Failed archives ${info("Archives that failed in this run, newest first. Each card shows the stage and command that failed; Log view opens the per-archive output with stage markers.", "Failed archives")}</h2>
+  const body = `<h2 class="section-title" style="margin-top:0">Failed archives ${info("Archives that failed in this run, newest first. Each card shows the failed stage; Log view opens the per-archive output with stage markers.", "Failed archives")}</h2>
     <div class="log-actions" role="toolbar" aria-label="Error actions">
       ${running ? `<span class="pill warn" id="livePill">live</span>` : ""}
       ${running ? `<button class="btn small" type="button" data-live-toggle="errors" aria-pressed="true" title="Toggle live preview">Live preview</button>` : ""}

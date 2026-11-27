@@ -26,17 +26,26 @@ test("the shared client runtime ships the htmx:beforeSwap tooltip guard", async 
   expect(app).toContain("htmx:beforeSwap");
   expect(app).toContain('querySelector(".info-tip.open")');
   expect(app).toContain('htmx.defineExtension("app-morph"');
+  const copy = readFileSync(join(import.meta.dir, "..", "public", "copy.js"), "utf8");
+  expect(copy).toContain("/logs/fragment?run=");
+  expect(copy).not.toContain("dataset.kind");
+  expect(copy).not.toContain("&kind=");
 });
 
-test("the help indicator is a question mark and the nav uses a slim active marker", async () => {
+test("the help indicator is a tiny SVG question mark and the nav uses a slim active marker", async () => {
   const { info } = await import("../src/ui");
   expect(info("tip", "thing")).toContain('class="info-i"');
-  expect(info("tip", "thing")).toContain(">?</button>");
+  expect(info("tip", "thing")).toContain("<svg");
+  expect(info("tip", "thing")).toContain('stroke="currentColor"');
+  expect(info("tip", "thing")).not.toContain(">?</button>");
   const css = readFileSync(join(import.meta.dir, "..", "public", "styles.css"), "utf8");
-  const marker = css.slice(css.indexOf(".info-i {"), css.indexOf(".info-tip-bubble {"));
+  const marker = css.slice(css.indexOf(".info-i {"), css.indexOf(".info-i svg {"));
   expect(marker).toContain("vertical-align: super");
   expect(marker).not.toContain("border-radius");
   expect(marker).not.toContain("width:");
+  const glyph = css.slice(css.indexOf(".info-i svg {"), css.indexOf(".info-i:hover"));
+  expect(glyph).toContain("width: 9px");
+  expect(glyph).toContain("height: 9px");
   const bubble = css.slice(css.indexOf(".info-tip-bubble {"), css.indexOf(".info-tip:hover"));
   expect(bubble).toContain("font-family: var(--font-ui)");
   expect(bubble).toContain("font-weight: 400");
@@ -44,6 +53,16 @@ test("the help indicator is a question mark and the nav uses a slim active marke
   expect(nav).toContain("-webkit-tap-highlight-color: transparent");
   expect(nav).not.toContain("background: rgba(");
   expect(nav).toContain("box-shadow: inset 2px 0 0 var(--accent)");
+});
+
+test("log rows keep a minimal left gutter", async () => {
+  const css = readFileSync(join(import.meta.dir, "..", "public", "styles.css"), "utf8");
+  const entry = css.slice(css.indexOf(".log-entry {"), css.indexOf(".log-entry:last-child"));
+  expect(entry).toContain("padding: 2px 8px");
+  const time = css.slice(css.indexOf(".log-time {"), css.indexOf(".log-chip {"));
+  expect(time).toContain("flex: 0 0 48px");
+  const continuation = css.slice(css.indexOf(".log-continuation {"), css.indexOf(".log-detail {"));
+  expect(continuation).toContain("padding-left: 8px");
 });
 
 test("archive cards keep their header inline and show retry and cooldown chips", async () => {

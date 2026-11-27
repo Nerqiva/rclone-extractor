@@ -38,22 +38,17 @@ beforeAll(async () => {
   renderErrorCards = rows.renderErrorCards;
 });
 
-test("error cards show the failing command with raw native output", async () => {
+test("error cards link to the log view instead of inlining raw output", async () => {
   const rows = await readErrorRows(store);
   const row = rows.find((r) => Number(r.id) === archiveId);
   expect(row).toBeDefined();
-  expect(row!.message).toContain("ERROR: archive broken.zip: corrupt zip data");
-  expect(row!.message).toContain("failed to unzip: invalid signature");
-  expect(row!.message).toContain("$ rclone");
-  expect(row!.message).toContain("archive extract");
-  expect(row!.message).not.toContain("purge");
-  expect(row!.message).not.toContain("cleanup failed");
-  expect(row!.message).not.toContain("---");
-  expect(row!.message).not.toContain("skipped (tiny)");
   const html = renderErrorCards(rows);
-  expect(html).toContain("ERROR: archive broken.zip: corrupt zip data");
-  expect(html).toContain('class="error-message"');
+  expect(html).not.toContain("ERROR: archive broken.zip: corrupt zip data");
+  expect(html).not.toContain("failed to unzip: invalid signature");
+  expect(html).not.toContain('class="error-message"');
   expect(html).toContain(`Queue ID #${archiveId}`);
+  expect(html).toContain(`data-log-toggle="${archiveId}"`);
+  expect(html).toContain(`id="er-log-${archiveId}"`);
 });
 
 test("informational skips are separated from failures", async () => {
