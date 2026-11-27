@@ -33,7 +33,7 @@ export function controlsFragment(): string {
   }
   if (engineState.forceStop) {
     return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="morphdom">
-    <span class="controls-note warn-line stop-note">Stopping immediately — in-flight archives were aborted…</span>
+    <span class="controls-note warn-line stop-note">Stopping immediately. In-flight archives were aborted…</span>
     ${queueToggleButton()}
     <button class="btn danger solid is-loading btn-stop" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
   </div>`;
@@ -65,14 +65,14 @@ export function controlsFragment(): string {
       ? `<span class="pill">${engineState.activeIds.size}/${engineState.concurrency} workers</span> `
       : "";
   const note = engineState.stopRequested
-    ? `<span class="controls-note warn-line stop-note">Stop requested — finishing in-flight archives…</span>`
+    ? `<span class="controls-note warn-line stop-note">Stop requested. Finishing in-flight archives…</span>`
     : `<span class="controls-note muted">${workers}run in progress…</span>`;
   return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="morphdom">
     ${note}
     ${skipCluster}
     ${queueToggleButton()}
     <button class="btn danger btn-stop" data-modal-open="stop-modal">Stop</button>${info(
-      "Soft stop: in-flight archives finish, then the run stops. Hard stop: all in-flight archives are aborted immediately.",
+      "Soft stop. In-flight archives finish, then the run stops. Hard stop. All in-flight archives are aborted immediately.",
       "Stop",
     )}
   </div>`;
@@ -162,14 +162,14 @@ export async function configForm(note = ""): Promise<string> {
   const running = engineState.running;
   return `<form id="config-form" hx-post="/config" hx-encoding="multipart/form-data" hx-target="#config-form" hx-swap="outerHTML">
   ${note}
-  ${running ? `<p class="muted">Task running — changes apply from the next run. The run in progress is not affected.</p>` : ""}
+  ${running ? `<p class="muted">Task running. Changes apply from the next run. The run in progress is not affected.</p>` : ""}
   <p class="muted">
     Backend: <strong>${esc(backend)}</strong>
     &middot; Encryption: <strong>${enc ? "on" : "off"}</strong>
     <span class="pill ${pwWorks === "not set" ? "err" : "ok"}">APP_PASSWORD ${esc(pwWorks)}</span>
   </p>
   <fieldset class="bare-fieldset">
-  ${maxSizeTooHigh ? `<p class="note warn-line">Largest archive is smaller than Smallest archive — every archive is excluded.</p>` : ""}
+  ${maxSizeTooHigh ? `<p class="note warn-line">Largest archive is smaller than Smallest archive. Every archive is excluded.</p>` : ""}
   ${section(
     "Connection",
     settingRow(
@@ -219,7 +219,7 @@ export async function configForm(note = ""): Promise<string> {
       `<label class="field"><input type="number" name="concurrency" min="1" max="${MAX_CONCURRENCY}" step="1" value="${esc(s.concurrency ?? "1")}" aria-label="concurrency"></label>`,
       {
         key: "concurrency",
-        desc: `Archives processed at the same time (1–${MAX_CONCURRENCY}). The scan and queue stay serial. Applies from the next run.`,
+        desc: `Archives processed at the same time (1 to ${MAX_CONCURRENCY}). The scan and queue stay serial. Applies from the next run.`,
       },
     ) +
     settingRow(

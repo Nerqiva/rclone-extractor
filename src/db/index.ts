@@ -60,7 +60,7 @@ export async function initDb(): Promise<void> {
       if (attempt === INIT_ATTEMPTS) break;
       const delayMs = Math.min(1000 * 2 ** (attempt - 1), 8000);
       console.warn(
-        `db init attempt ${attempt}/${INIT_ATTEMPTS} failed: ${String(e)} — retrying in ${delayMs}ms`,
+        `db init attempt ${attempt}/${INIT_ATTEMPTS} failed: ${String(e)}. Retrying in ${delayMs}ms`,
       );
       await sleep(delayMs);
     }
@@ -112,7 +112,7 @@ async function initDbOnce(): Promise<void> {
     }
     if (unreadable.length) {
       console.error(
-        `settings unreadable (SECRET_KEY changed or lost): ${unreadable.join(", ")} — ` +
+        `settings unreadable (SECRET_KEY changed or lost): ${unreadable.join(", ")}. ` +
           "re-enter them on the Configuration page",
       );
     }
@@ -213,7 +213,7 @@ async function migrateRunsLastState(): Promise<void> {
 /**
  * Backfill outcome for runs closed before the outcome column existed. Every
  * historical interrupted=1 row was a host/process death (SIGTERM at shutdown
- * or crash/kill detected at boot) — never a user stop — so they read as
+ * or crash/kill detected at boot), never a user stop, so they read as
  * killed. Rows with a finish time and no interrupted flag read as finished.
  */
 async function migrateBackfillRunOutcome(): Promise<void> {
@@ -285,7 +285,7 @@ async function removeLegacyPassword(): Promise<void> {
  * Add the `runs.last_touch_at` heartbeat: the engine bumps it while a run
  * is alive; recoverStale only reclaims runs whose heartbeat is stale, so a
  * second instance (rolling deploy / replicas) never closes a live peer's
- * run. NULL for legacy rows — recovery falls back to started_at.
+ * run. NULL for legacy rows. Recovery falls back to started_at.
  */
 async function migrateRunsLastTouch(): Promise<void> {
   if (await columnExists("runs", "last_touch_at")) return;

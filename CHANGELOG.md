@@ -207,7 +207,7 @@ to `main`.
   `run`/`extract`/`promote`/`trash`/`moveto`/`purge`/`rmdir`/`purgeStaleTemp`
   (and everything the flag enabled: the boot/start temp sweep in "would
   purge" mode, the dry-run-aware re-queue rule, the "Dry run" notes) are
-  removed. Every run now performs the real moves — deleting or restoring
+  removed. Every run now performs the real moves. Deleting or restoring
   through the app is likewise no longer subject to a stored dry-run flag.
 - **The "Reuse Previous Scan Results" checkbox is gone.** Cached scan results
   are now reused automatically when the stored configuration is unchanged
@@ -244,8 +244,8 @@ to `main`.
   files), so the run now applies a directory-level, per-archive-family,
   per-run rule: the first archive of one family per directory, in queue
   order, keeps the usual pre-extraction inspection. The remaining archives
-  whose filenames are related — same digit-free skeleton (e.g. `pack1.zip`,
-  `pack02.zip`, `movie.2020.zip`) or Levenshtein similarity ≥ 0.8 — are
+  whose filenames are related. Same digit-free skeleton (e.g. `pack1.zip`,
+  `pack02.zip`, `movie.2020.zip`) or Levenshtein similarity ≥ 0.8. Are
   extracted into the temporary tree first and inspected there, mirroring the
   RcloneX path: website dumps and torrent collections are purged from the
   temporary tree and the archive stays in place (never promoted, never
@@ -256,7 +256,7 @@ to `main`.
   recursive. Alias extensions of one format share a family (`.tgz` =
   `.tar.gz`, `.tbz2` = `.tar.bz2`, …). An empty extracted tree is promoted
   as usual, and the grouping
-  lives in memory only — it never affects the next run. RcloneX behavior is
+  lives in memory only. It never affects the next run. RcloneX behavior is
   unchanged.
 - **The scan listing (`rclone lsf`) now filters at the rclone layer.** The
   listing is spawned with `--ignore-case`, one `--include` glob per
@@ -295,7 +295,7 @@ to `main`.
   a missing or unreadable binary warns and still allows the save. Stored and
   imported values are checked again at run start and reported as one clear
   `invalid_extra_flags` error.
-- **Runtime refresh of rclone and rclonex at container start** — at every
+- **Runtime refresh of rclone and rclonex at container start**. At every
   boot the entrypoint fetches the latest release of **both** binaries into
   `/app/data/bin` (checksum-verified: rclone against the signed
   `SHA256SUMS` on downloads.rclone.org, rclonex against the release's
@@ -306,18 +306,18 @@ to `main`.
   image keeps build-time copies at `/usr/local/bin` as an offline floor.
   `RCLONE_BIN` / `RCLONEX_BIN` set by the operator win over the refreshed
   binaries.
-- **Password-protected archives tab** on the Logs page (third tab, layout Next to Run log and Errors): lists every archive that was skipped as
+- **Password-protected archives tab** on the Logs page (third tab, next to Run log and Errors): lists every archive that was skipped as
   `password` (a warning is logged and the run moves to the next archive).
   Each row shows the name, path and size; an inline **Log view**; **Copy
-  log**; **Download** — streaming the archive itself from the remote through
+  log**; **Download**. Streaming the archive itself from the remote through
   the app (`rclone cat`, nothing buffered); and **Delete**, which moves the
-  file into the configured `trash_subdir` (with the usual confirmation — an
+  file into the configured `trash_subdir` (with the usual confirmation. An
   accidental click is not one target) and refuses to overwrite anything
   already in the trash. A deleted archive stays on the tab with an **in
   trash** pill and a **Restore** button that moves it back into the queue
   and clears the error kind. Both moves block while a task is running and
   honor `dry_run`. Password rows no longer appear on the Errors page.
-- **Archive downloads are resumable and one at a time** — the Errors page's
+- **Archive downloads are resumable and one at a time**. The Errors page's
   archive **Download** now answers HTTP `Range` requests (`206` with
   `Content-Range`, byte window sliced out of the remote with
   `rclone cat --offset/--count`; the size comes from one `lsjson` call so a
@@ -332,7 +332,7 @@ to `main`.
   deleting/restoring that same file is refused. A client that disconnects
   kills the child `rclone` process. New route: `GET
   /download/archive-file/active` (`{"active": n}`).
-- **Logs page: Archives tab** — every archive a run processed (done, failed,
+- **Logs page: Archives tab**. Every archive a run processed (done, failed,
   skipped, or still in progress) listed with its raw extraction log one tap
   away (**Log view**, most recent 300 lines; **Copy log** and **Download**
   per row). Processing is recorded in `archives.last_run_id` (idempotent
@@ -343,23 +343,23 @@ to `main`.
   /download/run/:id/all`. The Errors page password rows now load 300 lines
   into the inline **Log view** (with a link to the full log) instead of
   up to 50,000.
-- **Every action button shows a busy state on click** — htmx and plain
+- **Every action button shows a busy state on click**. Htmx and plain
   buttons alike (a spinner is injected automatically when one is missing),
   with completion hooks from the htmx/fetch paths and a 60 s safety
   timeout. Error toasts now stay for 8 s (ok toasts still 3.2 s), so a
   failed action is no longer invisible.
-- **Screenshots in the README** — the four main pages (Progress,
+- **Screenshots in the README**. The four main pages (Progress,
   Configuration, Logs, Errors) are now embedded, captured from a seeded
   demo instance (finished run, realistic error and password-protected
   rows; nothing from a real install).
-- **`runs.last_archive` / `runs.last_command`** — the archive and the rclone
+- **`runs.last_archive` / `runs.last_command`**. The archive and the rclone
   command in flight when a run stops are persisted on the run (including
   across crashes, via a write at archive start and on every command
   dispatch). The Progress page shows them in the "Current archive" /
   "Active command" slots, relabelled "Last archive" / "Last command" when
   the run is not live; the Errors page and the banner show a specific
   outcome code next to the reason.
-- **Interruption error codes** — user stops are now recorded as
+- **Interruption error codes**. User stops are now recorded as
   `interrupted_soft` (soft stop), `interrupted_hard` (hard stop) or
   `interrupted_cancel` (external cancel), written to both the run's main log
   and its `errors` log, and stored on the run as `error_kind`. Crash/kill
@@ -371,21 +371,21 @@ to `main`.
   while the listing binary is actually running (never during the temp purge
   or cached-scan reuse); **Skip archive** can no longer be applied across
   the gap between archives.
-- **Boot-time RcloneX probe** — when RcloneX is enabled, `rclonex` is
+- **Boot-time RcloneX probe**. When RcloneX is enabled, `rclonex` is
   probed at boot (like rclone) so a missing or wrong-arch binary is visible
   in the deploy log instead of surfacing as per-archive spawn failures.
 
-- **Type checking in CI** — new `tsconfig.json` (strict, noEmit) and a
+- **Type checking in CI**. New `tsconfig.json` (strict, noEmit) and a
   `bunx tsc --noEmit` step in the test job. CI runs are also
   cancellation-gated per ref, and the Docker build job alone carries
   `packages: write`.
 - New shared modules: `src/views.ts` (run-control and Configuration-form
   HTML builders, extracted from the route modules so routes no longer
   import each other for markup), `src/format.ts` (one byte format and one
-  duration format — replaces three byte formatters and two duration
+  duration format. Replaces three byte formatters and two duration
   formatters), `src/runs.ts` (`resolveOutcome`, shared by the Logs and
   Progress pages).
-- `docs/testing.md` — local end-to-end testing with a throwaway rclone
+- `docs/testing.md`. Local end-to-end testing with a throwaway rclone
   local remote and seeded archives.
 - Tests: `tests/format.test.ts`, `tests/runs.test.ts`,
   `tests/pages.test.ts` (smoke tests for all four pages).
@@ -393,13 +393,13 @@ to `main`.
   SECURITY.md, Dependabot (bun, GitHub Actions, Docker), and package.json
   `description`/`license`/`repository`/`homepage`/`bugs` metadata.
 
-- **Post-extraction inspection for RcloneX-handled archives** — after a
+- **Post-extraction inspection for RcloneX-handled archives**. After a
   successful extraction of RAR/7Z/ISO/multivolume archives, the rclone
   binary lists the extracted tree (`lsf --recursive --files-only`);
   website dumps and torrent collections are skipped right there: the
   extracted data is removed and the archive stays in place (no promote,
   no trash). Anything else continues as a normal extraction.
-- `tests/postexinspect.test.ts` — covers the post-extraction website/torrent
+- `tests/postexinspect.test.ts`. Covers the post-extraction website/torrent
   skip path (including "archive kept in place") and dry-run behavior.
 
 ### Fixed
@@ -432,25 +432,25 @@ to `main`.
   edge; the whole row wraps on narrow screens. Both binaries' skip flows
   share the same "nothing in flight" refusal.
 - **Interrupted run banner** on the Progress page now includes the
-  outcome code (e.g. `interrupted_hard (stopped by user (hard stop))`) —
+  outcome code (e.g. `interrupted_hard (stopped by user (hard stop))`).
   "Killed" codes show likewise, and the logs page summary shows the code
   for interrupted/killed runs too.
 - **Inspection for RcloneX-handled archives runs through rclone** (was:
   through rclonex). Upstream's `archive list` reads RAR/7Z (full-stream
   read; skip stays the default), and **ISO archives always skip inspection**
-  (not listable — previously they were marked `unreadable` and never
+  (not listable. Previously they were marked `unreadable` and never
   extracted).
-- **Password-detection narrowed** — only known phrases (`password required`,
+- **Password-detection narrowed**. Only known phrases (`password required`,
   `incorrect password`, `wrong password`, `archive is encrypted`) mark a
   skip as `password`; an ISO flagging `--archive-password`, or an entry name
   containing "password", no longer parks the archive as a skipped password
   case.
 - **`remote_flags` with `--archive-*` flags** are stripped (with a warning)
-  for the rclone binary — they would make every rclone command fail — and
+  for the rclone binary. They would make every rclone command fail. And
   are kept for rclonex. The archive buffer setting (`rclonex_archive_buffer_size`)
   is validated at flag build time: an invalid value logs a warning instead
   of silently dropping the override.
-- **`scan_cache_key` fingerprint now includes `rclonex`** — toggling RcloneX
+- **`scan_cache_key` fingerprint now includes `rclonex`**. Toggling RcloneX
   no longer silently reuses a cached listing that was built without it.
 - **Extractor selection consistent with queueing**: non-first multivolume
   volumes resolve to rclone (they can never be queued anyway).
@@ -459,7 +459,7 @@ to `main`.
   the archive with a cleared `error_kind` (was: stale `extract` error rows
   on the Errors page).
 
-- **Configuration page is now plain English** — every setting has a
+- **Configuration page is now plain English**. Every setting has a
   human label and one short description line; the stored key is shown next
   to it in muted code (keys unchanged, no migration). Settings are grouped
   into Connection / Selection / Extract / Behaviour / RcloneX / Advanced
@@ -470,14 +470,14 @@ to `main`.
 - **Every page has a one-line subtitle**, and page titles match the nav
   ("Progress", was "Task progress"). The `?kind=` legacy alias on `/logs` is
   gone.
-- **The "Clear History" maintenance button is gone** — it ran the same
+- **The "Clear History" maintenance button is gone**. It ran the same
   wipe as "Clear everything" (same code path, different wording). Use
   **Clear everything**.
 
 - **Temp directories now live at `{tmp_dir}/run_<runId>/<archiveId>/`**
   (was `{tmp_dir}/<runId>/<archiveId>/`); the layout is built only through
-  `tmpdir.ts` (`TMP_RUN_PREFIX`/`TMP_RUN_DIR_RE`) — no hardcoded layout
-  strings elsewhere — and the boot/run sweep purges only `run_<digits>`
+  `tmpdir.ts` (`TMP_RUN_PREFIX`/`TMP_RUN_DIR_RE`). No hardcoded layout
+  strings elsewhere. And the boot/run sweep purges only `run_<digits>`
   directories, leaving anything else in `tmp_dir` untouched. `tmp_dir`
   default is `.Rclone-Extractor-tmp` (was `.rclone-extractor-tmp`).
 - **`trash_subdir` default is `.Trash`** (was `trash`).
@@ -493,17 +493,17 @@ to `main`.
   production-ready: real `role="tooltip"` spans with `aria-describedby`
   and `aria-expanded`, they flip above the control when there is no room
   below, and they close on Escape, tap-outside and scroll.
-- **Session expiry is sliding** — an authenticated request within 24 h of a
+- **Session expiry is sliding**. An authenticated request within 24 h of a
   session's expiry renews it by 7 days, so active users are not logged out
   mid-use; idle sessions still expire on schedule.
 
 ### Removed
-- **`--archive-continue-on-error` (no such flag in rclonex)** — enabling
+- **`--archive-continue-on-error` (no such flag in rclonex)**. Enabling
   "Continue on entry errors" made every RAR/7Z/ISO extraction fail with
   `unknown flag`. The checkbox, the `rclonex_continue_on_error` setting and
   the flag are gone.
 
-- **Maintenance route `/maintenance/runs`** removed — its wipe was
+- **Maintenance route `/maintenance/runs`** removed. Its wipe was
   identical to `/maintenance/all` (`wipeEverything`), just with different
   toast wording.
 - Dead `cancelled` run-state handling (the engine never set it) and its
@@ -514,29 +514,29 @@ to `main`.
   `s3.test.ts` renamed to `archive.test.ts` and `engine-flow.test.ts`.
 
 ### Security
-- **Archive-extraction trash moves can no longer overwrite** — a *new* file
+- **Archive-extraction trash moves can no longer overwrite**. A *new* file
   at the same trash path as an older archive is refused instead of silently
   destroyed: `moveto` carries `--immutable` (promote gets it too, so stem
-  contents never overwrite an unrelated same-named file). Refusals surface
+  contents never overwrite an unrelated same-named file). Refusals are recorded
   as `error_kind='trash'`/`'promote'`, not silent data loss.
-- **Shutdown no longer orphans rclone/rclonex processes** — the SIGTERM/SIGINT
+- **Shutdown no longer orphans rclone/rclonex processes**. The SIGTERM/SIGINT
   handler SIGKILLs every in-flight child before the database is closed, so a
   deploy with a run in flight cannot leave an extract/promote racing the next
   boot (double-move risk).
-- **Import confinement** — imported backup rows whose `archives.path` is not a
+- **Import confinement**. Imported backup rows whose `archives.path` is not a
   safe relative path are rejected (400, nothing written); `Rclone` construction
   refuses an empty `scan_root` outright, instead of joining `${root}/${rel}`
   onto an absolute local path for file operations; import also caps
   archive/run/log-line counts and requires `size`/`ref_id` ≥ 0.
-- **Error pages can no longer render stored XSS** — `relativeTime()`'s raw
+- **Error pages can no longer render stored XSS**. `relativeTime()`'s raw
   output is escaped like everywhere else; hostile backups can no longer inject
   markup into the Errors page.
-- **Sessions are hashed at rest** — the database stores `sha256(id)`, not the
+- **Sessions are hashed at rest**. The database stores `sha256(id)`, not the
   raw session id (existing sessions are invalidated once; sign in again).
   Cross-site login is closed too: `/login` now requires a double-submit
   nonce (cross-site POSTs can no longer sign you in) and mutating routes
   without a session fail closed with 403.
-- **Secrets never reach child processes** — rclone/rclonex spawn with a
+- **Secrets never reach child processes**. Rclone/rclonex spawn with a
   minimal environment instead of the full process env (`APP_PASSWORD`,
   `SECRET_KEY`, `DATABASE_URL` no longer leak into them); sensitive-flag
   values that start with `-` are redacted from logs; `SECRET_KEY` changes
@@ -544,18 +544,18 @@ to `main`.
   of silently emptying the Configuration and aborting runs with
   `no_scan_root`. `RCLONE_*` env vars pass through, so env-configured
   remotes keep working.
-- **Security headers** — every response carries a Content-Security-Policy
+- **Security headers**. Every response carries a Content-Security-Policy
   (`default-src 'self'`, inline scripts/styles allowed, `frame-ancestors
   'none'`) and `X-Content-Type-Options: nosniff`. The login throttle's
   `TRUST_PROXY=1` bypass is now spelled out in the README.
-- **Postgres placeholders** — `?` inside SQL string literals is no longer
+- **Postgres placeholders**. `?` inside SQL string literals is no longer
   renumbered into bind variables.
-- **Old-SQLite boot crash fixed** — `DROP COLUMN` privileges are checked via
+- **Old-SQLite boot crash fixed**. `DROP COLUMN` privileges are checked via
   `PRAGMA table_info` (or `information_schema`) instead of error-message
-  sniffing, which misfired on SQLite < 3.35 and wedged the boot.
+  sniffing, which misfired on SQLite < 3.35 and blocked boot.
 
 ### Fixed
-- **The tooltip help text rendered permanently on the page** — `/public/*`
+- **The tooltip help text rendered permanently on the page**. `/public/*`
   assets kept browser heuristic caching, so a redeploy could pair fresh
   (no-store) HTML with a pre-tooltip stylesheet: every `role="tooltip"`
   span printed its text inline, never hiding. Stylesheet/script/icon
@@ -563,63 +563,63 @@ to `main`.
   answers with `Cache-Control: public, max-age=0, must-revalidate`
   (304s keep it cheap). The info `(i)` glyph is also a touch bigger and
   stronger next to option labels.
-- **Polled fragments wiped tooltips, focus and open log views mid-read** —
+- **Polled fragments wiped tooltips, focus and open log views mid-read**.
   `#dashboard-panel` and `#controls` re-render every second (and the Archives
   tab every 2 s). Polled swaps are now skipped when the fragment re-renders
   to the exact bytes it already shows, and whenever an info tooltip is open
   inside the fragment; both resume once the condition clears. Live fragments
   (elapsed timers) still swap as before.
-- **Modal dialogs put keyboard focus on the destructive action** —
+- **Modal dialogs put keyboard focus on the destructive action**.
   Soft/Hard stop and the confirm dialog focused their first button (and
   Tab walked out of the dialog onto the page behind it; Escape left a stale
   pending confirmation and lost the invoking control). Both dialogs now
   focus the benign Cancel, trap Tab, restore focus to the invoker on close,
   and clear pending confirmations.
-- **The Errors page showed an error block as one unreadable paragraph** —
+- **The Errors page showed an error block as one unreadable paragraph**.
   `Logger.error` embedded the detail block as a single multi-line store
   line, which the folder never recognized; detail blocks now write one row
   per line, so the "Show full output" fold works.
-- **Stop / Edit / Cancel buttons were disabled for 60 s on one click** —
+- **Stop / Edit / Cancel buttons were disabled for 60 s on one click**.
   the busy-state hook marked every `.btn` without an `hx-trigger=every…`
   busy for a minute with no completion path; modal-openers, inline editor
   buttons and other non-request buttons are now exempt.
-- **Chatty remotes could deadlock a run at listing stage** — `lsf`/`lsl`/
+- **Chatty remotes could deadlock a run at listing stage**. `lsf`/`lsl`/
   `lsjson` spawned with an undrained stderr pipe could fill the 64 KB buffer
-  and wedge the run; their stderr is now ignored.
-- **Soft stop reported as a listing failure** — a listing non-zero exit
+  and stall the run; their stderr is now ignored.
+- **Soft stop reported as a listing failure**. A listing non-zero exit
   while a stop was pending was recorded as `error_kind='listing_failed'`;
   `stopRequested` now counts as a user cancel alongside `forceStop`.
-- **Crashed runs could re-queue an archive that was already in trash** —
+- **Crashed runs could re-queue an archive that was already in trash**.
   recovery now finalizes archives whose trash copy exists as `done` instead
   of re-queueing them into a permanent extract failure.
-- **Invalid `rclonex_archive_buffer_size` silently ignored** — an
+- **Invalid `rclonex_archive_buffer_size` silently ignored**. An
   unparseable override used to disable itself with no warning; it now logs one.
 - **Archive logs quoted `"` and the Logs tab showed a raw error body on a
-  failed load** — log-toggle failures now show a message instead of the
+  failed load**. Log-toggle failures now show a message instead of the
   response text; archive log panels honor non-200 responses.
-- **The Progress page rendered empty on every page load and refresh** — the
+- **The Progress page rendered empty on every page load and refresh**. The
   shell shipped two lazy `hx-get` placeholders and the controls popped in
   before the (DB-backed) progress panel; both are now rendered inline by
   the first paint, and polling (`every 1s`) swaps the panel in place. The
   boot-time `rclone.conf` fallback warning is inlined as well, so it is
   no longer missed on full page loads.
-- **Restore offered for archives whose trash copy was gone** — with the
+- **Restore offered for archives whose trash copy was gone**. With the
   file removed from the trash (by hand, say), **Restore** could only fail,
   forever. Restore now detects the missing source, drops the stale entry
   and its logs, and says so in the toast; `dry_run` leaves everything in
   place.
 - **Skip during the cleanup before trash** could move the archive to trash
-  and then re-queue it (next run failed on the missing source) — a guard
+  and then re-queue it (next run failed on the missing source). A guard
   now unwinds the archive before the trash move, for both skip and hard
   stop. Skipping never trashes.
 - **Skip-archive landing while a password failure was committed** could
   commit the archive as terminal `skipped (password)` instead of
   re-queuing; the pending skip now wins.
-- **Crash/kill recovery wrote nothing to any log** — a killed run left a
+- **Crash/kill recovery wrote nothing to any log**. A killed run left a
   pill but no entries; both the run log and the errors log now receive the
   `[killed] <cause>` line, and the interrupted/finalized run always gets a
   `[interrupted_*] <reason>` line there too.
-- **Hard-stop leaves bogus Errors entries** — archives re-queued after a
+- **Hard-stop leaves bogus Errors entries**. Archives re-queued after a
   hard stop now clear `error_kind`, and the terminal commits that raced
   with the stop are unreachable.
 - **Password-protected archives** skip to the next archive and leave a
@@ -638,12 +638,12 @@ to `main`.
   shared temp root is still removed only when empty).
 - **`Skip listing` is now honored when requested during the listing stage's
   start-up** (temp purge, cached-scan reuse), not only while the listing
-  binary is in flight — the engine already short-circuited the listing
+  binary is in flight. The engine already short-circuited the listing
   entirely in that window, but the request was refused. The UI only showed
   the button mid-binary, so this is an API-guard fix (and fixes a flaky
   `skipflow` failure on slow CI runners).
 
-- **Crash recovery was dangerous on a second instance** — `recoverStale`
+- **Crash recovery was dangerous on a second instance**. `recoverStale`
   used to close *every* unfinished run and re-queue *every* `extracting`
   archive, so a rolling deploy or a sibling replica on the same Postgres
   could steal a live run. Runs now carry a heartbeat (`runs.last_touch_at`,
@@ -652,45 +652,45 @@ to `main`.
   in-flight archives are left completely alone. Boot recovery also settles
   archives whose trash copy already exists as `done` instead of re-queueing
   them into a guaranteed extract failure.
-- **Post-extraction inspection trusted partial listings** — a non-zero exit
+- **Post-extraction inspection trusted partial listings**. A non-zero exit
   or stream error with some entries already streamed still led to
   website/torrent classification, which purged the extracted tree; partial
   listings are now treated as inconclusive.
-- **Login throttle defeated by randomizing `X-Forwarded-For`** — behind
+- **Login throttle defeated by randomizing `X-Forwarded-For`**. Behind
   `TRUST_PROXY=1` the per-IP lockout could be bypassed entirely; the whole
   process now pays a fixed 400 ms delay on every login attempt once the
   global failure budget (20 in 10 minutes) is exhausted.
-- **Archive-download `Content-Length` could lie** — the streamed (>32 MB)
+- **Archive-download `Content-Length` could lie**. The streamed (>32 MB)
   path kept the stat-time length even when the remote file changed
   mid-download; the header is now only sent for buffered downloads
   (chunked transfer otherwise).
-- **Backups dropped the run heartbeat** — import restores `last_touch_at`
+- **Backups dropped the run heartbeat**. Import restores `last_touch_at`
   alongside the other run columns.
 
 ### Added
 - **RcloneX integration** (off by default): when **Enable RcloneX** is set on
   the Configuration page, archives whose formats upstream rclone cannot handle
-  — RAR/RAR5, multivolume RAR (`x.partN.rar`/`x.rNN`), 7Z and split 7Z
-  (`x.7z.NNN`), and ISO9660 — are queued and extracted with
+ . RAR/RAR5, multivolume RAR (`x.partN.rar`/`x.rNN`), 7Z and split 7Z
+  (`x.7z.NNN`), and ISO9660. Are queued and extracted with
   [Nerqiva/rclonex](https://github.com/Nerqiva/rclonex), including multivolume
   sets (only the first volume is queued: `part1.rar`/`.7z.001`/plain `.rar`).
   Everything else (ZIP, TAR family, …) keeps using rclone's native
   `archive extract`. A `RCLONEX_BIN` env var (default `rclonex`) selects the
   binary; the Configuration page shows a version probe when the feature is
   enabled. When disabled, these formats are not queued at all.
-- **RcloneX archive inspection** — RcloneX-handled formats are not inspected
+- **RcloneX archive inspection**. RcloneX-handled formats are not inspected
   before extraction anymore (`rclonex_skip_inspection` removed). Inspection now
   runs after extraction on the extracted tree, and website/torrent dumps are
   purged there with the archive left in place; ZIP/TAR always inspect as before.
 - **RcloneX flags** on the Configuration page (all unchecked by default):
-  `--archive-password` (encrypted at rest; write-only — blank field keeps
+  `--archive-password` (encrypted at rest; write-only. Blank field keeps
   the stored value, Clear removes it) and `--archive-window-size` (via the
   **Archive buffer** setting, `rclonex_archive_buffer_size`; `0` keeps rclonex's
   own default).
 - **Skip controls** on the Progress page: **Skip listing** (stop the scan and
   go straight to the queue), **Skip inspection** (treat the current archive's
   inspection as passed), and **Skip archive** (stop the current archive,
-  re-queue it, count it as skipped for the run). All are temporary — never
+  re-queue it, count it as skipped for the run). All are temporary. Never
   persisted, never affect subsequent archives or runs.
 - **Reuse Previous Scan Results** checkbox on the Progress page (unchecked by
   default, not remembered between runs): reuse the cached archive list from
@@ -700,33 +700,33 @@ to `main`.
 - **`min_archive_size` setting** alongside the existing `max_archive_size`
   (same MB/GB UI, bytes in the database, `0` = no limit; enforced both at
   listing time and when the queue is selected).
-- **Dedicated info tooltip indicators** (superscript “i”) beside every
+- **Dedicated info tooltip indicators** (superscript "i") beside every
   configuration option and the new controls; tap/hover/keyboard accessible,
-  following the existing design language.
-- **RcloneX installation in Docker** — the image installs the latest rclonex
+  matching the existing design.
+- **RcloneX installation in Docker**. The image installs the latest rclonex
   release via the official install script (falls back to the newest
   pre-release; sha256-verified; `/usr/local/bin/rclonex`; fails the build
   clearly on error).
-- **Interruption cause and time** — `runs.interrupted_reason` records why a
+- **Interruption cause and time**. `runs.interrupted_reason` records why a
   run was marked interrupted (e.g. `received SIGTERM (deploy or restart)` at
   the moment the app handles the signal, or `previous process exited mid-run
   (crash or kill)` detected at the next boot) and is shown on the progress
   and logs pages. Existing databases are migrated automatically.
-- **`auto_skip_known` setting** — reappearing archives previously classified
+- **`auto_skip_known` setting**. Reappearing archives previously classified
   as torrent/website dumps stay skipped without re-inspection (default on,
   preserving prior behavior). Uncheck to re-inspect such reappearing archives.
-- **Run outcome and app-error codes** — `runs` gained `outcome`
+- **Run outcome and app-error codes**. `runs` gained `outcome`
   (`finished` | `interrupted` | `killed` | `error`) and `error_kind`. A run
   the user stops ends as **Interrupted** (`stopped by user (soft|hard stop)`);
   a run the host stops (crash, SIGKILL/OOM, `SIGTERM`/`SIGINT` at shutdown)
   ends as **Killed**; a run the app itself fails ends as **Error** with an
   `error_kind` code (`no_scan_root`, `invalid_trash_subdir`, `invalid_tmp_dir`,
-  `listing_failed`, `engine_error`) plus error-log lines — never as Completed
+  `listing_failed`, `engine_error`) plus error-log lines. Never as Completed
   or Interrupted. Pre-flight failures (e.g. missing `scan_root`) now create a
   run row with the same treatment, so they persist across reloads. Backup
   export/import round-trips both fields; existing databases migrate
   automatically (legacy crashed runs backfill to `outcome = killed`).
-- **`APP_TZ`** (default `Asia/Omsk`) — IANA timezone used for every time
+- **`APP_TZ`** (default `Asia/Omsk`). IANA timezone used for every time
   shown in the UI (progress page, Logs page, log line times). The database
   and backups stay in UTC.
 
@@ -751,13 +751,13 @@ to `main`.
   the last item of the controls row with a fixed width, so clicking it (or
   the note/skip controls appearing and disappearing) no longer shifts it.
 - HTML responses are served with `Cache-Control: no-store`, and a page
-  restored from the back-forward cache reloads itself — Back/Forward in the
+  restored from the back-forward cache reloads itself. Back/Forward in the
   URL bar can no longer resurrect a stale progress view or a stale Stop
   button. Navigating with the URL bar has no effect on a running task.
 
 
 ### Removed
-- The "Warnings & Errors" filter chips on the Logs page — redundant with the
+- The "Warnings & Errors" filter chips on the Logs page. Redundant with the
   dedicated Errors tab and the per-run Errors log view.
 - Dropped the long-dead `logs` table (only a no-longer-read stub registry);
   log output lives in `log_lines`. Existing databases are migrated
@@ -778,7 +778,7 @@ to `main`.
 ### Security
 - Session cookies are now `Secure` (HTTPS-only) by default (`COOKIE_SECURE=0`
   opts out for plain-HTTP deployments), login sessions expire after 7 days
-  (expiry is verified server-side, not just via cookie max age), and `POST
+  (expiry is verified server-side as well as via cookie max age), and `POST
   /login` is rate-limited per source IP (5 failures → 10-minute lockout,
   HTTP 429 + `Retry-After`).
 - `database_url` on the Configuration page is rendered with credentials
@@ -833,7 +833,7 @@ to `main`.
   "seq" does not exist`, `ComputeIndexAttrs`): `CREATE INDEX` statements
   during boot are best-effort (a failing index is logged and skipped), and
   the critical tables (`settings`, `archives`, `runs`, `log_lines`,
-  `sessions`) are verified after schema install — a table that is missing or
+  `sessions`) are verified after schema install. A table that is missing or
   unreadable fails with a clear error naming it instead of a raw Postgres
   exception and 5 retries.
 - **Errors page**: error rows whose failure produced no rclone-binary output
@@ -859,33 +859,33 @@ to `main`.
   `/tmp/app/data/rclone.conf` when the primary path is not writable for any
   reason. Any `--config` in `remote_flags` is ignored (existing behavior).
 - **Stop moved to the bottom of the progress page** and now asks for
-  confirmation first — **Soft stop** (the current archive finishes, then the
+  confirmation first. **Soft stop** (the current archive finishes, then the
   run stops) or **Hard stop** (the in-flight rclone process is killed
   immediately). The buttons carry no explanation text; the panel keeps its
   persistent "Stop requested" note.
 - **Archive logs now hold the raw output of the rclone binary only.** The
   `$ command` announcement and app-written skip/failure notes are gone from
   per-archive logs (raw stderr/stdout is kept verbatim, stats lines excluded)
-  — with one exception: failures that produce no binary output at all
+. With one exception: failures that produce no binary output at all
   (webapp-made classifications and silent non-zero exits) store a single
   diagnostic line so the Errors page never serves an empty 404 download.
   The dedicated **Errors** tab and its Copy/Download show that raw output
   instead of app-generated log lines.
-- **Configuration page greys out while a task is running** — every option
+- **Configuration page greys out while a task is running**. Every option
   except **Clear queues** is disabled (config form, backup/import, maintenance,
-  Save/Edit buttons), with a single "Task running — options are disabled."
+  Save/Edit buttons), with a single "Task running. Options are disabled."
   line. Field descriptions were reduced to the bare minimum.
 - **Maintenance rework.** **Clear archives** is now **Clear queues** (allowed
   while a task is running; the engine skips rows that are no longer queued;
   run count is kept). **Clear runs** is now **Clear History** (wipes queue,
   run count and the archive cache plus logs; temp purge kept). New **Clear
-  logs** (logs and errors only — log lines, logs registry and the `/errors`
+  logs** (logs and errors only. Log lines, logs registry and the `/errors`
   failure index). **Purge temp directory** is now **Clear tmp directory**.
   **Clear everything** now also wipes errors and the tmp directory. All
   destructive actions ask for confirmation via a shared modal dialog.
 - **Stop is no longer a two-click toggle.** `/run/stop` accepts a `mode`
   field (`soft`/`hard`); the controls fragment no longer flips into a "Force
-  stop" button — hard stop is reached through the confirmation modal (or by
+  stop" button. Hard stop is reached through the confirmation modal (or by
   re-pressing Stop while a soft stop is pending).
 
 ### Added
@@ -952,8 +952,8 @@ to `main`.
   run selects queued rows, preventing re-processing of already-trashed files.
 - **`max_archive_size` setting on the Configuration page.** A per-archive size
   limit, entered in MB or GB (stored in bytes, `0` = no limit). Archives
-  larger than the limit are ignored while listing — never queued, not
-  stored — and are re-evaluated on every run, so raising the limit takes
+  larger than the limit are ignored while listing. Never queued, not
+  stored. And are re-evaluated on every run, so raising the limit takes
   effect immediately. Rows queued before the limit was set are also skipped
   when a run selects its queue.
 - After each processed archive the now-empty per-archive temp directory is
@@ -1039,7 +1039,7 @@ to `main`.
 - **Configuration page copy is minimal.** Each option now carries a single
   terse, on-point line (description, warning, or example) under its value; the
   long explanatory paragraphs below the form were removed, and the `database_url`
-  row was dropped entirely — the active backend type is shown once in the
+  row was dropped entirely. The active backend type is shown once in the
   `Backend:` header line instead.
 - **Archive completion is strict.** A row is marked `done` only when extract,
   promote, cleanup, and trash succeed; cleanup failures are warnings. Cancelled

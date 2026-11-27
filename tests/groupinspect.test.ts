@@ -16,7 +16,7 @@ import { join } from "node:path";
  *   unreadable/password) the whole group keeps pre-inspection.
  * - Unrelated names or a different family in the same directory are
  *   pre-inspected individually; grouping is not recursive.
- * - Group state is per run — nothing is persisted.
+ * - Group state is per run. Nothing is persisted.
  */
 
 let db:
@@ -224,7 +224,7 @@ test("post-extraction inspection skips a website dump among the rest of the seri
     ["set/dump2.zip", "skipped", "website"],
   ]);
   const log = readLog();
-  // The skipped archive stays in place: never promoted/trashed.
+  // The skipped archive stays in place. It is never promoted or trashed.
   expect(log).not.toMatch(/moveto[^\n]*dump2\.zip/);
   expect(log).toContain("purge");
 }, 10_000);

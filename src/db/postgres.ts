@@ -17,7 +17,7 @@ import { PG_POOL_MAX } from "../config";
  * The pool is deliberately small and idle connections are recycled: the
  * remote Postgres service (Neon/Supabase/Aiven/Render/…) enforces a hard
  * connection cap and reserves a few slots for superusers, so exhausting it
- * surfaces as `53300 remaining connection slots are reserved for roles with
+ * reports `53300 remaining connection slots are reserved for roles with
  * the SUPERUSER attribute`. Never open more than a handful of connections
  * per process.
  */
@@ -50,7 +50,7 @@ export class PostgresStore implements Store {
     // PG_SCHEMA must not contain semicolons inside string literals.
     // Index statements are best-effort: a partially migrated database must
     // not crash the process (42703: column does not exist). Table statements
-    // stay strict — a missing table is fatal and reported clearly.
+    // stay strict. A missing table is fatal and reported clearly.
     for (const stmt of splitSchemaStatements(PG_SCHEMA)) {
       try {
         await this.sql.unsafe(stmt);

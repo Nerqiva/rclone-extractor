@@ -5,8 +5,8 @@
     if (typeof window.appToast === "function") window.appToast(message, kind);
   }
 
-  // Live preview state is shared by the run-log viewer and the Errors page:
-  // both pause on scroll-up and resume from the last fetched position.
+  // Live preview state is shared by the run-log viewer and the Errors page.
+  // Both pause on scroll-up and resume from the last fetched position.
   var setLogLive = function () {};
   var setErrorsLive = function () {};
   var manualPause = { log: false, errors: false };
@@ -181,7 +181,7 @@
         pill.textContent = "Finished";
       }
       var note = document.getElementById("liveNote");
-      if (note) note.textContent = "session finished \u2014 log is complete";
+      if (note) note.textContent = "session finished. Log is complete";
     }
 
     var pollLog = function () {
@@ -211,8 +211,8 @@
       var note = document.getElementById("liveNote");
       if (note) {
         note.textContent = on
-          ? "polling 2s \u2014 scroll up to pause"
-          : "paused \u2014 scroll to the bottom to resume";
+          ? "polling 2s. Scroll up to pause"
+          : "paused. Scroll to the bottom to resume";
       }
       if (on) logPoll.start();
       else logPoll.stop();

@@ -39,7 +39,7 @@ async function bootChecks(): Promise<void> {
     console.log(`rclonex ok: ${rclonexHealth.detail} (${rclonexHealth.bin})`);
   } else {
     console.warn(
-      `rclonex not runnable: ${rclonexHealth.detail} — RAR/7Z/ISO extraction will fail`,
+      `rclonex not runnable: ${rclonexHealth.detail}. RAR/7Z/ISO extraction will fail`,
     );
   }
 

@@ -112,7 +112,7 @@ test("all extraction uses rclonex when enabled; only first multivolume volume is
   }
 
   const rcLog = readLog(rcloneLog);
-  // Rclone still lists, inspects, promotes, cleans up and trashes — it never extracts.
+  // Rclone still lists, inspects, promotes, cleans up and trashes. It never extracts.
   expect(rcLog).toContain("archive list");
   expect(rcLog).toContain("big.zip");
   const rcExtracts = rcLog
@@ -147,7 +147,7 @@ test("RAR/7Z are never pre-inspected through rclone (inspection is post-extracti
   expect(rcLog).toContain("big.zip");
 });
 
-test("ISO archives are never pre-inspected — extraction proceeds normally", async () => {
+test("ISO archives are never pre-inspected. Extraction proceeds normally", async () => {
   resetLogs();
   await runEngine();
   const isoLists = readLog(rcloneLog)
@@ -157,7 +157,7 @@ test("ISO archives are never pre-inspected — extraction proceeds normally", as
   const rows = await db!.store.query<{ status: string }>(
     "SELECT status FROM archives WHERE path = 'big.iso'",
   );
-  // Not "skipped (unreadable)" — extraction proceeds normally.
+  // Not "skipped (unreadable)". Extraction proceeds normally.
   expect(rows[0]?.status).toBe("done");
 });
 

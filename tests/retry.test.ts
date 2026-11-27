@@ -211,7 +211,7 @@ test("extract is attempted four times with a doubling cooldown", async () => {
   expect(log).toContain("retry 1/3 after 1s: extract one.zip");
   expect(log).toContain("retry 2/3 after 2s: extract one.zip");
   expect(log).toContain("retry 3/3 after 4s: extract one.zip");
-  // The waits really happened, not just the log lines describing them.
+  // The waits really happened. The log lines only describe them.
   expect(elapsed).toBeGreaterThan(6500);
 }, 20_000);
 

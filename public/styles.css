@@ -444,7 +444,7 @@ textarea {
   align-items: center;
   flex-wrap: wrap;
 }
-/* Controls row on the progress page: note left, skip cluster and Stop
+/* Controls row on the progress page. Note left, skip cluster and Stop
    grouped right. Wraps on narrow screens instead of squeezing. */
 .controls-row {
   flex-wrap: wrap;
@@ -1735,7 +1735,7 @@ button[disabled] {
   max-height: 320px;
 }
 
-/* Design system: labels read as sentences, values stay monospaced. */
+/* Design system. Labels read as sentences; values stay monospaced. */
 .rail-status,
 .field > span,
 .job-section-title,

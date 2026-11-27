@@ -321,8 +321,8 @@ export async function progressPanel(): Promise<string> {
   const stopNote =
     s.running && engineState.stopRequested
       ? engineState.forceStop
-        ? `<p class="warn-line">Stopping immediately — all in-flight archives were aborted.</p>`
-        : `<p class="warn-line">Stop requested — in-flight archives finish first, then the task stops. Click <strong>Force stop</strong> to stop immediately.</p>`
+        ? `<p class="warn-line">Stopping immediately. All in-flight archives were aborted.</p>`
+        : `<p class="warn-line">Stop requested. In-flight archives finish first, then the task stops. Click <strong>Force stop</strong> to stop immediately.</p>`
       : "";
   const reason = s.interruptReason;
   const timeSuffix = s.finishedAt
@@ -331,11 +331,11 @@ export async function progressPanel(): Promise<string> {
   const code = s.errorKind && s.errorKind !== s.outcome ? ` (${esc(s.errorKind)})` : "";
   const outcomeNote =
     s.outcome === "interrupted"
-      ? `<p class="warn-line">Interrupted${code} — ${esc(reason || "stopped by user")}${timeSuffix}.</p>`
+      ? `<p class="warn-line">Interrupted${code}. ${esc(reason || "stopped by user")}${timeSuffix}.</p>`
       : s.outcome === "killed"
-        ? `<p class="warn-line">Killed${code} — ${esc(reason || "previous process exited mid-run")}${timeSuffix}. In-progress archives resume on the next start when resume is enabled.</p>`
+        ? `<p class="warn-line">Killed${code}. ${esc(reason || "previous process exited mid-run")}${timeSuffix}. In-progress archives resume on the next start when resume is enabled.</p>`
         : s.outcome === "error"
-          ? `<p class="warn-line">Error — ${esc(s.errorKind || "engine_error")}${reason ? `: ${esc(reason)}` : ""}${timeSuffix}. See the Errors page for details.</p>`
+          ? `<p class="warn-line">Error. ${esc(s.errorKind || "engine_error")}${reason ? `: ${esc(reason)}` : ""}${timeSuffix}. See the Errors page for details.</p>`
           : "";
   return `<section class="progress-panel ${cls}">
     <header class="run-header">

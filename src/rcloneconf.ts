@@ -44,7 +44,7 @@ export function normalizeRcloneConf(input: string): RcloneConfResult {
     }
   }
 
-  // Backwards compatibility: older releases stored the config as plain INI.
+  // Older releases stored the config as plain INI.
   if (looksLikeIni(value)) {
     return { ok: true, text: value, base64: Buffer.from(value, "utf8").toString("base64") };
   }

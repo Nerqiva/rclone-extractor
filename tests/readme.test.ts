@@ -5,7 +5,7 @@ import { join } from "node:path";
 /**
  * Documentation drift guard.
  *
- * Asserts that the surfaces a user interacts with are mentioned in README.md:
+ * Asserts that every route, environment variable, and user-facing setting is mentioned in README.md:
  *   - every HTTP route registered by the app
  *   - every environment variable read by config.ts
  *   - every user-facing setting exposed by the config form

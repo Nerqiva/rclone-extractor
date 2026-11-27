@@ -173,7 +173,7 @@ logsapi.get("/logs/archive/:id/fragment", async (c) => {
   }
   const tail =
     limit < LOG_EXPORT_LIMIT
-      ? `<p class="muted">Most recent ${limit} lines — <a href="/download/archive/${id}">download the full log</a>.</p>`
+      ? `<p class="muted">Most recent ${limit} lines. <a href="/download/archive/${id}">download the full log</a>.</p>`
       : "";
   return c.html(`${tail}${entries.map((e) => e.html).join("")}`);
 });
@@ -259,7 +259,7 @@ logsapi.get("/download/archive-file/active", (c) => {
 
 /**
  * Download the archive file itself (not its log). Streams `rclone cat`
- * straight to the client — the archive can be huge, so nothing is buffered.
+ * straight to the client. The archive can be huge, so nothing is buffered.
  * Files already moved to trash (status='deleted') are served from there.
  *
  * Resumable: `Range` requests are answered with 206 + Content-Range (byte
@@ -310,7 +310,7 @@ logsapi.get("/download/archive-file/:id", async (c) => {
   const lastModified =
     mtime && !Number.isNaN(mtime.getTime()) ? mtime.toUTCString() : undefined;
 
-  // If-Range is only trusted when it matches the Last-Modified we emit —
+  // If-Range is only trusted when it matches the Last-Modified we emit.
   // anything else means "the file may have changed", so serve it fully
   // instead of resuming against bytes that are no longer there.
   let rangeHeader = c.req.header("Range");
@@ -338,7 +338,7 @@ logsapi.get("/download/archive-file/:id", async (c) => {
     return c.text("Another archive download is already in flight", 409);
   }
   let killedByClient = false;
-  // Bun keeps an explicit Content-Length only for plain (in-memory) bodies —
+  // Bun keeps an explicit Content-Length only for plain (in-memory) bodies.
   // a pipe-backed stream through Hono is re-framed as chunked. Buffer
   // ordinary archives so downloads resume reliably; huge ones stream, with
   // the range still conveyed by Content-Range.

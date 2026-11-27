@@ -64,7 +64,7 @@ function describeSpawnError(
 
 // Children get a minimal env: the app's own secrets (APP_PASSWORD,
 // SECRET_KEY, DATABASE_URL) must never leak into rclone/rclonex processes.
-// RCLONE_* is passed through — users may configure rclone entirely through
+// RCLONE_* is passed through. Users may configure rclone entirely through
 // the environment (RCLONE_CONFIG_<remote>_*).
 function minimalEnv(): Record<string, string> {
   const keep = [
@@ -373,7 +373,7 @@ async function probe(
 let effectiveConfPath = RCLONE_CONF_PATH;
 let fallbackActive = false;
 // Set when the fallback (or a total failure) is used; HTTP handlers consume
-// it to show a toast. Boot-time fallbacks surface on the next dashboard poll.
+// it to show a toast. Boot-time fallbacks appear on the next dashboard poll.
 let pendingConfNotice: string | null = null;
 
 /** Return (and clear) the pending rclone.conf notice, sanitized for a toast. */
@@ -432,7 +432,7 @@ export async function syncConfWorkingCopy(): Promise<string | null> {
  * return its path, or null when nothing is configured or the write fails.
  * The file is never swept by pattern: a run deletes its own snapshot when
  * it ends (see deleteRunConfSnapshot); a hard-crashed run may leave one
- * behind — delete it manually.
+ * behind. Delete it manually.
  */
 export async function writeRunConfSnapshot(runId: number): Promise<string | null> {
   const conf = await resolveConfText();
@@ -570,7 +570,7 @@ export class Rclone {
       // truncated config, and never leave credentials world-readable. When
       // the primary path under DATA_DIR is not writable for any reason, the
       // working copy falls back to /tmp/app/data; a failure there is only a
-      // warning — rclone itself will report the unreadable/missing file.
+      // warning. Rclone itself will report the unreadable/missing file.
       const notice = syncConfFile(conf);
       if (notice) runLog?.warn(notice);
     }
@@ -705,7 +705,7 @@ export class Rclone {
         if (buffer && !(await consume(buffer))) stopped = true;
       }
     } catch (e) {
-      // This is not an intentional early stop (queue limit/cancel): surface it
+      // This is not an intentional early stop (queue limit/cancel). Report it
       // as a real listing failure instead of silently reporting success.
       streamError = String(e);
       console.warn("listing stream failed:", streamError);
@@ -803,7 +803,7 @@ export class Rclone {
     // Marker and output go in one batch so concurrent writers keep their order.
     const logLines = commandMarker(command, this.stage);
     if (failed) {
-      // Raw binary output only — except a completely silent failure, where a
+      // Raw binary output only, except a completely silent failure, where a
       // neutral one-liner keeps Copy/Download from being an empty 404.
       const raw = [nativeOutput, streamError ?? ""].filter(Boolean).join("\n");
       logLines.push(...(raw || `listing failed (exit ${code})`).split("\n"));
@@ -1158,7 +1158,7 @@ export class Rclone {
   }
 
   /**
-   * Stream a single remote file (`rclone cat`) without buffering it — the
+   * Stream a single remote file (`rclone cat`) without buffering it. The
    * route pipes `stdout` straight into its own response. `exited` resolves
    * after EOF; on a non-zero exit the caller should log `stderr`. `range`
    * streams only that byte window (used to answer HTTP Range resumes);
@@ -1202,7 +1202,7 @@ export class Rclone {
   }
 
   /**
-   * One cheap metadata call (size + remote mtime) — the size needed to
+   * One cheap metadata call (size + remote mtime). The size needed to
    * answer Range requests honestly. Null when the remote cannot tell us
    * (callers fall back to the stored size, then to a plain 200).
    */

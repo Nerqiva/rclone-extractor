@@ -37,7 +37,7 @@ import {
 // pre-inspection; the rest of a similar series are extracted first" rule.
 // `ref` is the first archive's base name in the group (set once its
 // inspection produced a verdict); `open` is true when it passed. Created
-// fresh each run — never persisted.
+// fresh each run. Never persisted.
 type GroupState = { ref: string | null; open: boolean };
 
 export type JobStatus = "queued" | "active" | "done" | "failed" | "skipped";
@@ -130,7 +130,7 @@ export const engineState = {
   archiveInFlight: false,
   // Password-archive Delete/Restore accepted while a run is active. Applied
   // at the next per-archive boundary, discarded on hard stop or app error.
-  // Per-run and in-memory only — never persisted.
+  // Per-run and in-memory only. Never persisted.
   deferredPasswordMoves: [] as DeferredPasswordMove[],
   // One entry per queued archive, in queue order. The single source of truth
   // for live per-job progress; the scalar fields above mirror the primary
@@ -203,8 +203,8 @@ export async function performPasswordMove(
     return {
       kind: "rejected",
       message: del
-        ? `The trash already contains ${destRel} — remove it before deleting.`
-        : `A file now exists at ${destRel} — remove it before restoring.`,
+        ? `The trash already contains ${destRel}. Remove it before deleting.`
+        : `A file now exists at ${destRel}. Remove it before restoring.`,
       level: "err",
     };
   }
@@ -298,8 +298,8 @@ export function forceStopEngine(): void {
 }
 
 /**
- * Stage/archive skips. Temporary and in-memory only — never persisted to the
- * database — and consumed by the target archive at most once. Each request
+ * Stage/archive skips. Temporary and in-memory only. Never persisted to the
+ * database, and consumed by the target archive at most once. Each request
  * kills only that job's binary (listing is serial and uses the global kill).
  * An omitted id targets the first active job, which keeps the original
  * single-archive API and its callers working unchanged.
@@ -309,7 +309,7 @@ export function requestSkipListing(): boolean {
   // listing binary starts (e.g. during the temp purge), the listing never
   // runs and the engine proceeds straight to the stored queue. The button
   // on the Progress page only appears while the binary is in flight, so
-  // this relaxes the API guard — the UI behavior is unchanged.
+  // this relaxes the API guard. The UI behavior is unchanged.
   if (!engineState.running || engineState.stage !== "listing") {
     return false;
   }
@@ -361,7 +361,7 @@ export function setQueuedSkip(id: number, skipped: boolean): boolean {
 
 /**
  * Sentinel unwinding an archive the user asked to skip (re-queued, not
- * failed) — or one whose in-flight binary was killed by a hard stop (same
+ * failed), or one whose in-flight binary was killed by a hard stop (same
  * re-queue). The per-archive catch turns it back into a queued row.
  */
 class ArchiveSkipRequested extends Error {
@@ -417,7 +417,7 @@ function clampQueueMax(raw: string | undefined): number {
 /** Upper bound on simultaneous extraction workers; shared by form and engine. */
 export const MAX_CONCURRENCY = 8;
 
-/** Strict parse for the config form: null means "reject, do not silently clamp". */
+/** Strict parse for the config form. Null means "reject, do not silently clamp". */
 export function parseConcurrency(raw: string): number | null {
   const text = raw.trim();
   if (!/^\d+$/.test(text)) return null;
@@ -573,7 +573,7 @@ async function cancelRequestedCached(): Promise<boolean> {
 }
 
 /**
- * Archives whose trash copy exists were fully processed — the crash happened
+ * Archives whose trash copy exists were fully processed. The crash happened
  * between trash() and the done-UPDATE. Finalize them as done instead of
  * re-queueing into a permanent extract failure. Only ever called with the
  * ids of archives this recovery owns (see recoverStale).
@@ -592,7 +592,7 @@ async function settleTrashMovedArchives(ids: number[]): Promise<number> {
     try {
       rc = await Rclone.fromSettings();
     } catch {
-      rc = null; // remote unreachable — fall back to plain re-queue
+      rc = null; // remote unreachable; fall back to plain re-queue
     }
   }
   if (!rc) return 0;
@@ -666,7 +666,7 @@ export async function recoverStale(
   const owned = extracting.filter((a) => {
     const rid = Number(a.last_run_id ?? 0);
     if (rid) return staleSet.has(rid);
-    // Untagged rows: no owner signal — reclaim only when nothing is live.
+    // Untagged rows have no owner signal. Reclaim only when nothing is live.
     return !freshPeer;
   });
   const n = owned.length;
@@ -789,7 +789,7 @@ export async function runEngine(): Promise<void> {
   // Per-run private rclone.conf snapshot, created once the run is underway
   // (its content is resolved from the stored/env conf at that moment) and
   // deleted in the finally block. Null when nothing is configured or the
-  // write fails — the run then uses the shared working copy, as before.
+  // write fails. The run then uses the shared working copy, as before.
   let runConf: string | null = null;
 
   const fail = (msg: string, detail?: string) => {
@@ -805,7 +805,7 @@ export async function runEngine(): Promise<void> {
     errorLog?.warn(msg);
   };
 
-  // App errors — before or after the run row exists — close the run with
+  // App errors, before or after the run row exists, close the run with
   // outcome='error' and a short error code, and leave log lines behind, so
   // they never masquerade as a finish or a host kill.
   const abortWithError = async (code: string, msg: string) => {
@@ -831,7 +831,7 @@ export async function runEngine(): Promise<void> {
     engineState.running = false;
   };
 
-  // Remove only this run's temp tree at run end — never the shared temp root,
+  // Remove only this run's temp tree at run end. Never the shared temp root,
   // which may hold another run's data. Called on every outcome, including an
   // app error, so a failed or stopped run does not leave extracted data behind.
   let runTmpPurged = false;
@@ -940,7 +940,7 @@ export async function runEngine(): Promise<void> {
     if (runConf) {
       logger.info(`rclone.conf snapshot: this run is pinned to a private copy`);
     } else {
-      logger.info(`rclone.conf snapshot: none (no stored/env conf) — using the shared working copy`);
+      logger.info(`rclone.conf snapshot: none (no stored/env conf). Using the shared working copy`);
     }
     const rc = await Rclone.fromSettings(logger, runConf ? { confPath: runConf } : {});
     // Persist every command dispatch so a crash/kill leaves the in-flight
@@ -1019,7 +1019,7 @@ export async function runEngine(): Promise<void> {
       (cfg["rclonex_archive_password_enabled"] ?? "0") === "1";
     const rclonexPassword = cfg["rclonex_archive_password"] ?? "";
     // Sliding-window buffer for random-access formats read by rclonex
-    // (7Z, ISO) — stored as bytes; 0 disables the override (rclonex keeps
+    // (7Z, ISO), stored as bytes; 0 disables the override (rclonex keeps
     // its own default).
     const rawBuffer = cfg["rclonex_archive_buffer_size"] ?? "16777216";
     const rclonexBufferSize = Number(rawBuffer);
@@ -1064,7 +1064,7 @@ export async function runEngine(): Promise<void> {
     const createdAt = now();
     setActivity(reuseScan ? "Reusing cached scan" : "Listing archives");
     // A skip asked before the listing even starts (e.g. during the temp
-    // purge) short-circuits it entirely — no process is spawned.
+    // purge) short-circuits it entirely. No process is spawned.
     const skipListingAtStart = engineState.skipListing;
     if (!reuseScan && !skipListingAtStart) {
       // One line per fresh listing; the per-run "ignored N archive(s)"
@@ -1381,7 +1381,7 @@ export async function runEngine(): Promise<void> {
       const baseName = baseNameOf(rel);
       // Family of the rclone-handled archive this archive is; null for
       // RcloneX formats (they keep their existing always-extract-first
-      // behavior). The group key is the exact parent directory — not
+      // behavior). The group key is the exact parent directory, not
       // recursive. Grouping is per family and per run, never persisted.
       const family = archiveFamily(baseName);
       const groupKey =
@@ -1457,7 +1457,7 @@ export async function runEngine(): Promise<void> {
         // extract-first path applies to the "rest of the group" rule below:
         // archives in the same directory with a similar name of the same
         // archive family as an archive already inspected this run are
-        // extracted first and inspected on the extracted tree — but only
+        // extracted first and inspected on the extracted tree, but only
         // when the group's first archive passed inspection. Unrelated
         // names, different families, and groups whose first archive failed
         // inspection are pre-inspected as usual. A per-archive
@@ -1475,9 +1475,9 @@ export async function runEngine(): Promise<void> {
           logger.info(`skipping archive inspection for ${rel} (rclonex)`);
         } else if (extractFirst) {
           // Anchor archive already inspected this run and this name is part
-          // of the same series — extract first, inspect the tree after.
+          // of the same series. Extract first, inspect the tree after.
           logger.info(
-            `inspection deferred to post-extract for ${rel} (similar to ${group!.ref} — first of this series already inspected this run)`,
+            `inspection deferred to post-extract for ${rel} (similar to ${group!.ref}; first of this series already inspected this run)`,
           );
         } else {
           // Inspection always goes through the rclone binary: upstream's
@@ -1511,7 +1511,7 @@ export async function runEngine(): Promise<void> {
             }
           }
           // A user skip mid-inspection is treated as passed (skipReason
-          // stays null) — same semantics for the group anchor as for the
+          // stays null). Same semantics for the group anchor as for the
           // archive itself.
           noteGroupInspection(group, baseName, skipReason === null);
         }
@@ -1581,7 +1581,7 @@ export async function runEngine(): Promise<void> {
           // the archive itself cannot be cheaply listed (rclonex), or was
           // deliberately extracted first, so the extracted tree is checked
           // instead. Website dumps and torrent collections are skipped
-          // after extraction — the extracted data is removed and the
+          // after extraction. The extracted data is removed and the
           // archive stays in place (never promoted, never trashed).
           // Anything else continues as a normal extraction.
           let postSkip: "website" | "torrent" | null = null;
@@ -1645,7 +1645,7 @@ export async function runEngine(): Promise<void> {
           } else {
             await purgeTmp("done");
             // A skip asked while the cleanup ran must not move the archive to
-            // trash — without this guard the archive was extracted, promoted
+            // trash. Without this guard the archive was extracted, promoted
             // and trashed, then re-queued anyway.
             throwIfSkipArchive(job);
 
@@ -1700,7 +1700,7 @@ export async function runEngine(): Promise<void> {
           );
           await markRunTouch(Number(row.id), runRowId);
           if (engineState.forceStop) {
-            logger.info(`hard stop — re-queued: ${rel}`);
+            logger.info(`hard stop. Re-queued ${rel}`);
           } else {
             warn(`skipped by user (re-queued): ${rel}`);
           }
@@ -1813,7 +1813,7 @@ export async function runEngine(): Promise<void> {
     const stopped = engineState.stage === "interrupted";
     // A stop the engine asked for itself (stopEngine sets stopRequested) is a
     // user stop; one it only noticed via the cancel setting is an external
-    // cancel — say which, with a specific code.
+    // cancel. Say which, with a specific code.
     const stopCode = stopped
       ? engineState.forceStop
         ? "interrupted_hard"

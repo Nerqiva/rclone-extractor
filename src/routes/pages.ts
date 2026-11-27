@@ -66,11 +66,11 @@ pages.get("/config", async (c) => {
     ${
       runtime.ok
         ? ""
-        : `<p class="muted">rclone not runnable — see deploy logs (<code>RCLONE_BIN</code>, arch match).</p>`
+        : `<p class="muted">rclone not runnable. See deploy logs (<code>RCLONE_BIN</code>, arch match).</p>`
     }
     ${
       rclonexRuntime && !rclonexRuntime.ok
-        ? `<p class="muted">RcloneX is enabled but not runnable — all extraction will fail. Install the newest rclonex release or set <code>RCLONEX_BIN</code>.</p>`
+        ? `<p class="muted">RcloneX is enabled but not runnable. All extraction will fail. Install the newest rclonex release or set <code>RCLONEX_BIN</code>.</p>`
         : ""
     }
   </div>
@@ -96,12 +96,12 @@ pages.get("/config", async (c) => {
   </div>
   <div class="card">
     <h2 class="section-title" style="margin-top:0">Maintenance</h2>
-    ${running ? `<p class="muted">Task running — destructive actions are disabled. The settings form above stays editable; changes apply from the next run.</p>` : ""}
+    ${running ? `<p class="muted">Task running. Destructive actions are disabled. The settings form above stays editable; changes apply from the next run.</p>` : ""}
     <div class="btn-row">
       <span class="maint-btn"><button class="btn" hx-post="/maintenance/queues" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear the queue?|Clear queues"><span class="spinner" aria-hidden="true"></span>Clear queues</button>${info("Deletes queued archives (and their logs). A running engine skips the deleted rows; run count and history are kept.", "Clear queues")}</span>
       <span class="maint-btn"><button class="btn" hx-post="/maintenance/logs" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear logs and errors?|Clear logs"${dis}><span class="spinner" aria-hidden="true"></span>Clear logs</button>${info("Wipes log lines and error flags only. Runs and archives are kept.", "Clear logs")}</span>
       <span class="maint-btn"><button class="btn" hx-post="/maintenance/tmp-purge" hx-target="#tmp-purge-result" hx-swap="innerHTML" data-confirm="Clear the tmp directory?|Clear tmp directory"${dis}><span class="spinner" aria-hidden="true"></span>Clear tmp directory</button>${info("Purges stale app-owned run_* directories.", "Clear tmp directory")}</span>
-      <span class="maint-btn"><button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear everything (queue, history, logs, errors, tmp directory)?|Clear everything"${dis}><span class="spinner" aria-hidden="true"></span>Clear everything</button>${info("Queue, history, logs, errors and the tmp directory — next run starts from #1.", "Clear everything")}</span>
+      <span class="maint-btn"><button class="btn danger" hx-post="/maintenance/all" hx-target="#maintenance-result" hx-swap="innerHTML" data-confirm="Clear everything (queue, history, logs, errors, tmp directory)?|Clear everything"${dis}><span class="spinner" aria-hidden="true"></span>Clear everything</button>${info("Queue, history, logs, errors and the tmp directory. Next run starts from #1.", "Clear everything")}</span>
     </div>
     <div id="tmp-purge-result"></div>
     <div id="maintenance-result"></div>
@@ -210,7 +210,7 @@ pages.get("/logs", async (c) => {
     : "";
   const outcomeDetail = badOutcome
     ? `${outcome[0].toUpperCase() + outcome.slice(1)}${codeSuffix}${
-        reason ? ` — ${esc(reason)}` : ""
+        reason ? `. ${esc(reason)}` : ""
       }${outcomeTime}`
     : "";
   const statusPill = isLive

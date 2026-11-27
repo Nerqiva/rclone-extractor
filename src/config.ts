@@ -4,7 +4,7 @@ export const DATA_DIR = process.env.DATA_DIR ?? "/app/data";
 export const DB_PATH = `${DATA_DIR}/app.db`;
 // Every rclone invocation unconditionally gets `--config <effective path>`.
 // (A stored/env rclone_conf, when set, is written to the primary path as a
-// working copy — see Rclone.fromSettings. When the primary path is not
+// working copy. See Rclone.fromSettings. When the primary path is not
 // writable for any reason, the working copy goes to the /tmp fallback
 // instead; see RCLONE_CONF_FALLBACK_PATH.)
 export const RCLONE_CONF_PATH = `${DATA_DIR}/rclone.conf`;
@@ -45,7 +45,7 @@ const HOST_TZ = (() => {
 export const APP_TZ = (() => {
   const raw = (process.env.APP_TZ ?? "").trim() || HOST_TZ;
   if (validZone(raw)) return raw;
-  console.warn(`invalid APP_TZ "${raw}" — falling back to ${HOST_TZ}`);
+  console.warn(`invalid APP_TZ "${raw}"; falling back to ${HOST_TZ}`);
   return HOST_TZ;
 })();
 

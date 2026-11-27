@@ -110,7 +110,7 @@ const failedAttempts = new Map<string, { count: number; windowStart: number }>()
 // A second layer for TRUST_PROXY=1 deployments, where an attacker can
 // randomize X-Forwarded-For and defeat the per-IP throttle: once the whole
 // process sees enough failures in the window, EVERY login attempt pays a
-// fixed delay. Bounded and per-process — restarting resets it.
+// fixed delay. Bounded and per-process. Restarting resets it.
 const GLOBAL_FAILURE_LIMIT = 20;
 const GLOBAL_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 const GLOBAL_DELAY_MS = 400;
@@ -212,7 +212,7 @@ auth.get("/login", (c) => loginResponse(c, undefined));
 auth.post("/login", async (c) => {
   const ip = clientIp(c);
   if (globalThrottleTripped()) {
-    // Hold every attempt — including ones that look like a real user — so
+    // Hold every attempt. Including ones that look like a real user. So
     // distributed guessing cannot proceed faster than the delay allows.
     await new Promise((resolve) => setTimeout(resolve, GLOBAL_DELAY_MS));
   }

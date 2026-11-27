@@ -227,7 +227,7 @@ data.post("/import", async (c) => {
   // The Configuration page disables Import while a task is running; enforce
   // the same server-side since import replaces data wholesale.
   if (engineState.running) {
-    return c.json({ ok: false, message: "Task is running — stop it first." }, 409);
+    return c.json({ ok: false, message: "Task is running. Stop it first." }, 409);
   }
   const form = await c.req.formData().catch(() => null);
   if (!form) {
@@ -316,7 +316,7 @@ data.post("/import", async (c) => {
           await tx.run(`DELETE FROM archives WHERE id IN (${ph})`, conflictIds);
         }
         // The backup row itself may collide on either unique key with a row
-        // that shares its id (same backup re-imported) — delete then insert.
+        // that shares its id (same backup re-imported). Delete then insert.
         await tx.run("DELETE FROM log_lines WHERE scope = 'archive' AND ref_id = ?", [a.id]);
         await tx.run("DELETE FROM archives WHERE id = ? OR path = ?", [a.id, a.path]);
         await tx.run(
@@ -360,7 +360,7 @@ data.post("/import", async (c) => {
 
   const enc = encryptionEnabled()
     ? "Secrets re-encrypted with the current key."
-    : "Encryption off: secrets stored in plaintext.";
+    : "Encryption is off. Secrets are stored in plaintext.";
   return c.json({
     ok: true,
     message: `Imported ${counts.join(", ") || "nothing"}. ${enc}`,

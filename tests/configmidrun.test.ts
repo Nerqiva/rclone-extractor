@@ -9,11 +9,11 @@ import { createHash } from "node:crypto";
  * Behavior while a run is active:
  *
  * - The Configuration settings form saves against the database (the run is
- *   not affected — it pins its own rclone.conf snapshot at start).
+ *   not affected. It pins its own rclone.conf snapshot at start).
  * - rclone.conf saves/clears made mid-run sync the shared working copy
  *   immediately (on-demand rclone calls and the next run see the new conf),
  *   while the in-flight run keeps using its private snapshot taken at run
- *   start — every command it spawns carries the snapshot's --config path.
+ *   start. Every command it spawns carries the snapshot's --config path.
  * - The snapshot file is deleted when the run ends.
  * - Destructive maintenance actions (Clear logs, Clear tmp, Clear
  *   everything) stay blocked; Import stays blocked.
@@ -178,7 +178,7 @@ test("rclone.conf saves mid-run sync the shared working copy but the run keeps i
   expect(res.status).toBe(200);
   expect(await res.text()).toContain("from the next run");
 
-  // On-demand ops see the new conf immediately: shared working copy updated.
+  // On-demand ops see the new conf immediately. The shared working copy is updated.
   // (The multipart layer may convert LF to CRLF, so match loosely.)
   expect(readFileSync(join(dataDir, "rclone.conf"), "utf8")).toContain("new.example.com");
 
@@ -226,9 +226,9 @@ test("destructive actions stay blocked mid-run", async () => {
   const resImport = await app.request("/import", { method: "POST" });
   expect(resImport.status).toBe(409);
   const resAll = await app.request("/maintenance/all", { method: "POST" });
-  expect(await resAll.text()).toContain("stop it first");
+  expect(await resAll.text()).toContain("Stop it first");
   const resLogs = await app.request("/maintenance/logs", { method: "POST" });
-  expect(await resLogs.text()).toContain("stop it first");
+  expect(await resLogs.text()).toContain("Stop it first");
   const resTmp = await app.request("/maintenance/tmp-purge", { method: "POST" });
-  expect(await resTmp.text()).toContain("stop it first");
+  expect(await resTmp.text()).toContain("Stop it first");
 }, 10_000);

@@ -1,7 +1,7 @@
 # Local smoke-test setup
 
 How to run the app locally end-to-end with a throwaway rclone remote and
-seeded archives — the same setup used during development. Everything lives
+seeded archives. The same setup used during development. Everything lives
 under one scratch directory; deleting it removes all traces (database,
 logs, extracted files, trash).
 
@@ -75,14 +75,14 @@ inside `$SCRATCH`. Nothing else on the machine is touched.
 
 ## What this does not cover
 
-- **Password-protected archives** — no local tool can create one here
+- **Password-protected archives**. No local tool can create one here
   (rclonex/7z absent); covered by `tests/passwordtab.test.ts` instead.
-- **RAR/7Z/ISO extraction** — requires rclonex on the machine; covered by
+- **RAR/7Z/ISO extraction**. Requires rclonex on the machine; covered by
   the stub-binary integration tests (`tests/rclonex.test.ts`).
-- **Real pixel screenshots** — Playwright with Chromium can capture them,
+- **Real pixel screenshots**. Playwright with Chromium can capture them,
   but they are not wired into the test suite here.
 
 ## Automated tests
 
-`bun test --isolate` — the suite mocks rclone/rclonex with shell stubs in a
+`bun test --isolate`. The suite mocks rclone/rclonex with shell stubs in a
 temp dir, so it never needs a real remote.

@@ -109,7 +109,7 @@ test("clear everything wipes history, queue and caches, resets sequence and purg
 test("clear everything wipes archives too", async () => {
   engineState.running = true;
   const res = await app.request("/maintenance/all", { method: "POST" });
-  expect(await res.text()).toContain("stop it first");
+  expect(await res.text()).toContain("Stop it first");
   engineState.running = false;
 
   await store.run(
@@ -179,7 +179,7 @@ test("clear queues is allowed while running and keeps run count, history and cac
 test("clear logs wipes logs and errors but keeps runs and archives", async () => {
   engineState.running = true;
   const blocked = await app.request("/maintenance/logs", { method: "POST" });
-  expect(await blocked.text()).toContain("stop it first");
+  expect(await blocked.text()).toContain("Stop it first");
   engineState.running = false;
 
   const id = await insertRun();
@@ -208,6 +208,6 @@ test("clear logs wipes logs and errors but keeps runs and archives", async () =>
 test("tmp-purge is refused while a task is running", async () => {
   engineState.running = true;
   const res = await app.request("/maintenance/tmp-purge", { method: "POST" });
-  expect(await res.text()).toContain("stop it first");
+  expect(await res.text()).toContain("Stop it first");
   engineState.running = false;
 });

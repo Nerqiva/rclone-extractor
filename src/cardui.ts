@@ -47,7 +47,7 @@ export function minibar(name: string, percent: number | null): string {
 }
 
 export function indeterminateBar(name: string, phase = ""): string {
-  return `<div class="minibar is-indeterminate" role="progressbar" aria-label="${esc(name)} — ${esc(phase || "working")}"><span></span></div>`;
+  return `<div class="minibar is-indeterminate" role="progressbar" aria-label="${esc(name)} ${esc(phase || "working")}"><span></span></div>`;
 }
 
 export interface LogActionsOptions {

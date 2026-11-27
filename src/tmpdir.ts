@@ -29,7 +29,7 @@ function norm(p: string): string {
 
 /**
  * Normalize and validate a user-supplied tmp_dir. Returns null when the value
- * is unusable (message-worthy) — callers should ask the user for a different
+ * is unusable (message-worthy). Callers should ask the user for a different
  * value. Empty input falls back to the default (callers treat "" as unset).
  */
 export function parseTmpDir(

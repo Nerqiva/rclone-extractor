@@ -520,7 +520,7 @@
         });
         var contentType = res.headers.get("content-type") || "";
         var text = await res.text();
-        if (res.status === 401) throw new Error("your session expired — reload the page and sign in again");
+        if (res.status === 401) throw new Error("your session expired. Reload the page and sign in again");
         var parsed = null;
         try { parsed = JSON.parse(text); } catch (_) { /* not JSON */ }
         var isPayload = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);

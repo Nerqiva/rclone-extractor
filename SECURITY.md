@@ -1,4 +1,4 @@
-# Security Policy
+# Security policy
 
 ## How to report
 
@@ -13,7 +13,7 @@ response within a few days.
 
 ## Scope
 
-In scope: this app (rclone-extractor) — the web UI, the server, the job
+In scope: this app (rclone-extractor). The web UI, the server, the job
 engine, the database layer, and the Docker image built from this repo.
 
 Out of scope:

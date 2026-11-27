@@ -51,7 +51,7 @@ actions.post("/run/start", async (c) => {
     );
     await setSetting("cancel", "0");
     // Settle the rclone.conf working copy up front so a read-only DATA_DIR
-    // surfaces as a toast on this response (not just in the server log).
+    // reports a read-only DATA_DIR in a toast on this response.
     try {
       await Rclone.fromSettings();
     } catch (e) {
@@ -77,14 +77,14 @@ actions.post("/run/stop", async (c) => {
     return c.html(
       controlsFragment(),
       200,
-      toastTriggerHeaders("Stopping immediately — current archive aborted."),
+      toastTriggerHeaders("Stopping immediately. Current archive aborted."),
     );
   }
   stopEngine();
   return c.html(
     controlsFragment(),
     200,
-    toastTriggerHeaders("Stop requested — the current archive will finish first."),
+    toastTriggerHeaders("Stop requested. The current archive will finish first."),
   );
 });
 
@@ -107,10 +107,10 @@ actions.post("/run/skip", async (c) => {
   }
   const msg =
     target === "listing"
-      ? "Listing skipped — building the queue from stored archives."
+      ? "Listing skipped. Building the queue from stored archives."
       : target === "inspection"
-        ? "Inspection skipped — extracting this archive."
-        : "Archive skipped — it stays queued for the next run.";
+        ? "Inspection skipped. Extracting this archive."
+        : "Archive skipped. It stays queued for the next run.";
   return c.html(controlsFragment(), 200, toastTriggerHeaders(msg));
 });
 
@@ -450,7 +450,7 @@ actions.post("/config", async (c) => {
   return c.html(
     await configForm(`${warningNote}<p class="note">${esc(savedNote)}</p>`),
     200,
-    toastTriggerHeaders(engineState.running ? "Settings saved — applies from the next run." : "Settings saved."),
+    toastTriggerHeaders(engineState.running ? "Settings saved. Changes apply from the next run." : "Settings saved."),
   );
 });
 
@@ -512,7 +512,7 @@ function tempPurgeNote(p: Awaited<ReturnType<typeof purgeAppTempDirs>>): string 
   return ` Purged ${p.purged} stale temp dir(s)${p.failed ? ` (${p.failed} failed)` : ""}.`;
 }
 
-const RUNNING_GUARD = `<p class="note err">Task is running — stop it first.</p>`;
+const RUNNING_GUARD = `<p class="note err">Task is running. Stop it first.</p>`;
 const RUNNING_GUARD_HEADERS = toastTriggerHeaders("Stop the task first.", "err");
 
 async function passwordListResponse(c: Context, toast: string, toastKind: "ok" | "err" = "ok"): Promise<Response> {
@@ -541,8 +541,8 @@ async function movePasswordArchive(
     return passwordListResponse(
       c,
       direction === "delete"
-        ? "Queued — will move to trash when the current archive finishes."
-        : "Queued — will restore when the current archive finishes.",
+        ? "Queued. The archive will move to trash when the current archive finishes."
+        : "Queued. The archive will be restored when the current archive finishes.",
     );
   }
   const result = await performPasswordMove(direction, id);
@@ -554,7 +554,7 @@ async function movePasswordArchive(
   }
   return passwordListResponse(
     c,
-    result.direction === "delete" ? "Moved to trash." : "Restored — queued for the next run.",
+    result.direction === "delete" ? "Moved to trash." : "Restored. Queued for the next run.",
   );
 }
 
@@ -651,7 +651,7 @@ actions.post("/maintenance/all", async (c) => {
   }
   const purgeNote = await wipeEverything();
   return c.html(
-    `<p class="note">Cleared everything — queue, history, logs, errors and temp dir.${esc(purgeNote)} Next run starts from #1.</p>`,
+    `<p class="note">Cleared everything. Queue, history, logs, errors and temp dir.${esc(purgeNote)} Next run starts from #1.</p>`,
     200,
     toastTriggerHeaders("Cleared everything."),
   );
