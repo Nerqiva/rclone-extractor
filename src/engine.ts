@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { liveRunIds, STALE_MS } from "./runs";
 import { Logger, insertLogLines } from "./log";
 import { store, getSetting, setSetting, allSettings } from "./db";
-import { Rclone, killActiveProcs, writeRunConfSnapshot, deleteRunConfSnapshot, type ExtractStats } from "./rclone";
+import { Rclone, killActiveProcs, writeRunConfSnapshot, deleteRunConfSnapshot, type ExtractStats, type Outcome } from "./rclone";
 import { validateStoredExtraFlags } from "./extraflags";
 import {
   tmpRootPath,
@@ -427,6 +427,69 @@ export function parseCooldownSeconds(raw: string | null | undefined): number | n
   const n = Number(text);
   if (!Number.isSafeInteger(n) || n > 86400) return null;
   return n;
+}
+
+export type RetryPolicy = { baseMs: number; maxRetries: 3 };
+
+/** Cooldowns for retries 1, 2 and 3: base, twice base, four times base. */
+export function retryDelays(baseMs: number): readonly [number, number, number] {
+  return [baseMs, baseMs * 2, baseMs * 4];
+}
+
+type RetryOptions<T> = {
+  label: string;
+  log: (line: string) => void;
+  retryable?: (outcome: T) => boolean;
+  beforeRetry?: () => Promise<void>;
+};
+
+/** Sleep in short slices so a skip or hard stop aborts the wait promptly. */
+async function waitCooldown(job: JobState, ms: number): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (true) {
+    // The job flag (and a hard stop) aborts the wait; a soft stop does not.
+    throwIfSkipArchive(job);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, remaining)));
+  }
+}
+
+/**
+ * Run one command up to maxRetries+1 times. Successes, skips and explicitly
+ * non-retryable failures return on the first try; only failed outcomes and
+ * thrown spawn errors wait and re-invoke the same command.
+ */
+async function withRetries<T extends Outcome>(
+  job: JobState,
+  policy: RetryPolicy,
+  invoke: () => Promise<T>,
+  opts: RetryOptions<T>,
+): Promise<T> {
+  const delays = retryDelays(policy.baseMs);
+  for (let attempt = 0; ; attempt++) {
+    let outcome: T;
+    try {
+      outcome = await invoke();
+    } catch (e) {
+      if (e instanceof ArchiveSkipRequested || attempt >= policy.maxRetries) throw e;
+      const ms = delays[attempt];
+      opts.log(`retry ${attempt + 1}/${policy.maxRetries} after ${ms / 1000}s: ${opts.label}`);
+      await waitCooldown(job, ms);
+      await opts.beforeRetry?.();
+      throwIfSkipArchive(job);
+      continue;
+    }
+    if (outcome.code === 0 || (opts.retryable && !opts.retryable(outcome))) {
+      return outcome;
+    }
+    if (attempt >= policy.maxRetries) return outcome;
+    const ms = delays[attempt];
+    opts.log(`retry ${attempt + 1}/${policy.maxRetries} after ${ms / 1000}s: ${opts.label}`);
+    await waitCooldown(job, ms);
+    await opts.beforeRetry?.();
+    throwIfSkipArchive(job);
+  }
 }
 
 function clampConcurrency(raw: string | undefined): number {
@@ -887,6 +950,10 @@ export async function runEngine(): Promise<void> {
     const minArchiveSize = clampArchiveSize(
       await getSetting("min_archive_size", "0"),
     );
+    const cooldownSeconds =
+      parseCooldownSeconds(await getSetting("retry_cooldown_seconds", "60")) ?? 60;
+    const policy: RetryPolicy = { baseMs: cooldownSeconds * 1000, maxRetries: 3 };
+    logger.info(`retry cooldown=${cooldownSeconds}s (up to ${policy.maxRetries} retries)`);
     const rclonexEnabled = (await getSetting("rclonex", "0")) === "1";
     // RcloneX-specific extraction flags (default off). A stored archive
     // password is only passed when its checkbox enabled it.
@@ -1381,12 +1448,28 @@ export async function runEngine(): Promise<void> {
         } else {
         tmpAttempted = true;
         setActivity("Extracting", job);
-        const ex = await extractor.extract(
-          rel,
-          tmp,
-          ref,
-          statsTracker(runRowId, job),
-          rclonexRc ? rclonexFlags : undefined,
+        const ex = await withRetries(
+          job,
+          policy,
+          () =>
+            extractor.extract(
+              rel,
+              tmp,
+              ref,
+              statsTracker(runRowId, job),
+              rclonexRc ? rclonexFlags : undefined,
+            ),
+          {
+            label: `extract ${rel}`,
+            log: (line) => logger.info(line),
+            // A password failure is a terminal skip, not a transient error.
+            retryable: (outcome) =>
+              !PASSWORD_ERROR.test(`${outcome.tail.join("\n")}\n${outcome.stderr}`),
+            // Partial output from a failed attempt must not feed the next one.
+            beforeRetry: async () => {
+              await rc.purge(tmp, ref);
+            },
+          },
         );
         setActivity("", job);
         throwIfSkipArchive(job);
@@ -1466,7 +1549,12 @@ export async function runEngine(): Promise<void> {
             result = "skipped";
           } else {
           setActivity("Moving to destination", job);
-          const promoted = await rc.promote(rel, tmp, ref, tmpTop, statsTracker(runRowId, job));
+          const promoted = await withRetries(
+            job,
+            policy,
+            () => rc.promote(rel, tmp, ref, tmpTop, statsTracker(runRowId, job)),
+            { label: `promote ${rel}`, log: (line) => logger.info(line) },
+          );
           setActivity("", job);
           throwIfSkipArchive(job);
           if (promoted.code !== 0) {
@@ -1498,7 +1586,12 @@ export async function runEngine(): Promise<void> {
             throwIfSkipArchive(job);
 
             setActivity("Moving to trash", job);
-            const trashed = await rc.trash(rel, trashSubdir, ref, statsTracker(runRowId, job));
+            const trashed = await withRetries(
+              job,
+              policy,
+              () => rc.trash(rel, trashSubdir, ref, statsTracker(runRowId, job)),
+              { label: `trash ${rel}`, log: (line) => logger.info(line) },
+            );
             setActivity("", job);
             if (trashed.code !== 0) {
               // The move did not complete, so the existing skip unwind still

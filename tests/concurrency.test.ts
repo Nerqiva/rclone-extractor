@@ -136,6 +136,8 @@ exit 0
   await setSetting("scan_root", scanRoot);
   await setSetting("min_archive_size", "0");
   await setSetting("max_archive_size", "0");
+  // The failing-worker case tests isolation, not retry waits.
+  await setSetting("retry_cooldown_seconds", "0");
   await setSetting("scan_cache_state", "incomplete");
   await setSetting("scan_cache_key", "");
 });

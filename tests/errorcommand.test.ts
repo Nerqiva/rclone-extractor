@@ -40,6 +40,8 @@ beforeAll(async () => {
   await db.initDb();
   await db.setSetting("scan_root", join(base, "scan"));
   await db.setSetting("remote_flags", "");
+  // This suite tests error logging, not retries: keep its failing extract fast.
+  await db.setSetting("retry_cooldown_seconds", "0");
   engine = await import("../src/engine");
   await engine.runEngine();
   const row = await db.store.get1<{ id: number }>(
