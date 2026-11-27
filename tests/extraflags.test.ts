@@ -27,7 +27,6 @@ const KEYS = [
   "lsl_extra_flags",
   "lsjson_extra_flags",
   "purge_extra_flags",
-  "rmdir_extra_flags",
 ] as const;
 
 const MARK: Record<string, string> = {
@@ -41,7 +40,6 @@ const MARK: Record<string, string> = {
   lsl_extra_flags: "MARK-lsl",
   lsjson_extra_flags: "MARK-lsjson",
   purge_extra_flags: "MARK-purge",
-  rmdir_extra_flags: "MARK-rmdir",
 };
 
 let db: typeof import("../src/db");
@@ -180,7 +178,6 @@ test("each rclone command receives only its own extra flags", async () => {
   await rc.statFile("seeded.zip");
   await rc.purge("tmp");
   await rc.cleanup("tmp", ref);
-  await rc.rmdir("tmp");
   await rc.run(["version"]);
 
   const expectFor: Array<[string, string]> = [
@@ -193,7 +190,6 @@ test("each rclone command receives only its own extra flags", async () => {
     [" lsl ", "MARK-lsl"],
     [" lsjson ", "MARK-lsjson"],
     [" purge ", "MARK-purge"],
-    [" rmdir ", "MARK-rmdir"],
   ];
   for (const [fragment, marker] of expectFor) {
     const found = calls(rcloneLog).filter((l) => l.includes(fragment));

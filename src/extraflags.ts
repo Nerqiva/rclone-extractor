@@ -89,13 +89,6 @@ export const EXTRA_FLAG_FIELDS: readonly ExtraFlagField[] = [
     command: "purge",
     desc: "Extra flags for rclone purge (temp cleanup).",
   },
-  {
-    key: "rmdir_extra_flags",
-    label: "Remove directory (rmdir)",
-    binary: "rclone",
-    command: "rmdir",
-    desc: "Extra flags for rclone rmdir (empty-directory cleanup).",
-  },
 ] as const;
 
 /** The settings key a runner reads for one of its commands. */

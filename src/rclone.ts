@@ -993,11 +993,6 @@ export class Rclone {
     return this.run(["purge", this.fullPath(tmp)], ref, this.extraArgs("purge"));
   }
 
-  /** Remove an empty directory. Non-empty directories fail with code != 0. */
-  async rmdir(path: string): Promise<Outcome> {
-    return this.run(["rmdir", this.fullPath(path)], undefined, this.extraArgs("rmdir"));
-  }
-
   /** Recursively delete a tree. */
   async purge(path: string, ref?: RcloneRef): Promise<Outcome> {
     return this.run(["purge", this.fullPath(path)], ref, this.extraArgs("purge"));

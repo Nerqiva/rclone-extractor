@@ -1570,10 +1570,8 @@ export async function runEngine(): Promise<void> {
           job.phase = "";
           await recordOutcome(job, result);
         }
-        // Best effort: remove the per-archive temp dir with whatever is
-        // left in it. `rmdir` refuses non-empty dirs, which would leak
-        // partial extractions — purge instead. Only ever called on the
-        // app-owned archive dir.
+        // Best effort: purge the per-archive temp dir with whatever is left
+        // in it. Only ever called on the app-owned archive dir.
         if (tmpAttempted) {
           setActivity("Cleaning up", job);
           const purged = await rc.purge(archiveTmpDir, ref);
@@ -1631,11 +1629,9 @@ export async function runEngine(): Promise<void> {
     });
     await Promise.all(workers);
 
-    // Best effort: remove the now-possibly-empty run-level temp dir. If it
-    // still holds extracted data (e.g. an archive was force-stopped
-    // mid-flight), purge only that exact directory — never the shared
-    // temp root, which may hold other runs' data that the app must not
-    // delete.
+    // Best effort: purge only this run's temp dir, which may still hold
+    // extracted data (e.g. an archive was force-stopped mid-flight). Never
+    // purge the shared temp root: it may hold other runs' data.
     setActivity("Cleaning up");
     const tmpRootNorm = tmpRoot.replace(/\/+$/, "");
     const runDir = tmpRunDir(tmpRootNorm, runRowId);
@@ -1645,23 +1641,15 @@ export async function runEngine(): Promise<void> {
       !tmpRootNorm.endsWith(":") &&
       !/^[A-Za-z]:[\\/]?$/.test(tmpRootNorm) &&
       runDir === tmpRunDir(tmpRootNorm, runRowId);
-    const runRes = await rc.rmdir(runDir);
-    if (runRes.code !== 0) {
-      if (tmpRootIsSafe) {
-        const purged = await rc.purge(runDir);
-        if (purged.code === 0) {
-          logger.info(`purged ${runDir} (not empty)`);
-        } else {
-          logger.info(`left ${runDir} in place (${purged.stderr.trim() || "not empty"})`);
-        }
+    if (tmpRootIsSafe) {
+      const purged = await rc.purge(runDir);
+      if (purged.code === 0) {
+        logger.info(`purged ${runDir}`);
       } else {
-        logger.info(`left ${runDir} in place (temp root not safe to purge)`);
+        logger.info(`left ${runDir} in place (${purged.stderr.trim() || "purge failed"})`);
       }
-    }
-    // The shared temp root itself is only removed when already empty.
-    const rootRes = await rc.rmdir(tmpRootNorm);
-    if (rootRes.code !== 0) {
-      logger.info(`left ${tmpRootNorm} in place (not empty)`);
+    } else {
+      logger.info(`left ${runDir} in place (temp root not safe to purge)`);
     }
     setActivity("");
 

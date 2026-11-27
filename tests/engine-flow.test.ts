@@ -204,30 +204,19 @@ test("promote command excludes the tmp workspace from the destination", async ()
   ).toBe(true);
 });
 
-test("temp parents are removed (rmdir) after processing", async () => {
-  const row = await db!.store.get1<{ id: number }>(
-    "SELECT id FROM archives WHERE path='a/b.zip'",
-  );
-  expect(row).toBeDefined();
-  const lines = await readAll({
-    scope: "archive",
-    refId: Number(row!.id),
-    kind: "extract",
-  });
-  // rmdir has no archive ref, so its marker stays in the run log.
-  expect(lines.some((line) => line.includes("$ rclone rmdir"))).toBe(false);
-
+test("run dir is purged and rmdir is never used after processing", async () => {
   const main = await readAll({
     scope: "run",
     refId: engineState.runId,
     kind: "main",
   });
+  expect(main.some((line) => line.includes("rmdir"))).toBe(false);
   expect(
     main.some(
       (line) =>
         line.includes("$ rclone") &&
-        line.includes("rmdir") &&
-        line.includes(".Rclone-Extractor-tmp"),
+        line.includes("purge") &&
+        /\.Rclone-Extractor-tmp\/run_\d+["']?\s*$/.test(line),
     ),
   ).toBe(true);
 });

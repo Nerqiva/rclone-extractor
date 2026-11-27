@@ -124,7 +124,6 @@ const SETTING_KEYS = [
   "lsl_extra_flags",
   "lsjson_extra_flags",
   "purge_extra_flags",
-  "rmdir_extra_flags",
   "rclone_conf",
   "queue_max",
   "concurrency",

@@ -85,7 +85,7 @@ scan  →  extract  →  promote  →  trash
   per-run rate/ETA, the active rclone command, done/failed/skipped counters,
   and a slim live bar that follows the in-flight rclone command: real progress
   (bytes/speed/ETA) for transfer commands (extract / move / moveto), an
-  indeterminate sweeping bar for the rest (lsf, archive list, purge, rmdir).
+  indeterminate sweeping bar for the rest (lsf, archive list, purge).
   Updates every second without a page reload.
 - **Skip controls** — skip the listing stage, the current archive's
   inspection, or the current archive entirely. Skips are temporary, this run
@@ -343,7 +343,6 @@ re-queues every in-flight archive.
 | `lsl_extra_flags` | Extra flags for `rclone lsl` (exists check). |
 | `lsjson_extra_flags` | Extra flags for `rclone lsjson` (size/mtime probe). |
 | `purge_extra_flags` | Extra flags for `rclone purge` (temp cleanup). |
-| `rmdir_extra_flags` | Extra flags for `rclone rmdir` (empty-directory cleanup). |
 | `queue_max` | Maximum archives queued per run (default `500`). |
 | `concurrency` | Number of archives processed at the same time, `1`–`8` (default `1`). The scan and queue are still built serially; raising this runs that many extraction workers in parallel. Takes effect from the next run. |
 | `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
@@ -452,7 +451,7 @@ extract: rclone archive extract <ROOT>/<REL> <TMPDIR>/run_<runid>/<archiveid>/<s
          (or `rclonex archive extract` for RcloneX-handled formats, with the configured --archive-* flags)
 promote: rclone move <TMPDIR>/run_<runid>/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
 cleanup: rclone purge <TMPDIR>/run_<runid>/<archiveid>/<stem>
-purge:   rclone purge <TMPDIR>/run_<runid>/<archiveid> (and the run dir; `rmdir` only removes dirs that are already empty)
+purge:   rclone purge <TMPDIR>/run_<runid>/<archiveid> (and the run dir)
 trash:   rclone moveto <ROOT>/<REL> <ROOT>/<trash_subdir>/<REL>
 ```
 
@@ -506,7 +505,7 @@ Transfer commands stream single-line stats once per second (`--stats-one-line`);
 the app parses those lines to drive a live byte/percent/speed/ETA bar and
 filters them out of the archive log (they carry no error signal); everything
 else rclone writes is logged. Commands without byte progress (lsf, archive
-list, purge, rmdir) show an indeterminate bar instead.
+list, purge) show an indeterminate bar instead.
 
 Directories matching the app's run layout (`run_<digits>/`, as created
 under `tmp_dir`) are purged automatically at boot, at the start of every run,
@@ -536,7 +535,7 @@ Enable it with **Enable RcloneX** on the Configuration page.
 
 - **Extractor selection is deterministic** — rclonex handles exactly the
   formats above; everything else (ZIP, TAR family, …) always uses rclone's
-  native `archive extract`. Promotion/move/trash/rmdir are rclone operations
+  native `archive extract`. Promotion/move/trash/purge are rclone operations
   in both modes.
 - **Multivolume sets** — only the first volume is queued and extracted:
   `name.part1.rar` (or `part01.rar`), `name.rar` (old-style `.r00…` sets), and
