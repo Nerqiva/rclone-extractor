@@ -96,6 +96,9 @@ scan  →  extract  →  promote  →  trash
   fresh scan.
 - **Mobile-friendly logs** — the log and error views are selectable text with
   Copy all / Copy selection / Select all / Download controls.
+- **Task-first interface** — system UI typography for navigation and controls,
+  monospaced data for logs and values, sentence-case labels, and direct links
+  from the empty Progress page to configuration, logs and errors.
 - **Continue previous task** — resumable runs. If the app crashes or is
   restarted mid-job, archives stuck in *extracting* are automatically re-queued.
   Runs have an explicit outcome: a **user stop** ends as **Interrupted**, a

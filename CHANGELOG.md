@@ -45,6 +45,12 @@ to `main`.
   aborts.
 
 ### Changed
+- **Interface makeover.** Navigation and controls use system UI typography;
+  logs, paths and values keep the monospaced face. Labels read as sentences,
+  raw setting keys are de-emphasized, cards use softer corners, and the active
+  navigation item has a clear accent bar. The empty Progress page now links
+  directly to configuration, logs and errors. The mobile navigation overlay
+  no longer sits below the confirmation modal.
 - **Shared status and path helpers.** Stage labels, state classes, archive
   basenames and route id parsing now live in one module instead of being
   redefined in each view, so the Progress, Logs and Errors pages cannot drift

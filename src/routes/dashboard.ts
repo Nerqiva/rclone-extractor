@@ -277,6 +277,11 @@ export async function progressPanel(): Promise<string> {
         <h2>No tasks yet</h2>
         <p class="muted">Press Start to scan the configured remote and extract archives.</p>
         <p class="muted">Scan root: <code>${esc(s.scanRoot || "not set")}</code></p>
+        <div class="empty-actions">
+          ${s.scanRoot ? "" : `<a class="btn primary" href="/config">Set scan root</a>`}
+          <a class="btn" href="/logs">View logs</a>
+          <a class="btn" href="/errors">View errors</a>
+        </div>
       </div>
     </section>`;
   }
