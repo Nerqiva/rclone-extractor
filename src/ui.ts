@@ -353,6 +353,72 @@ const GLOBAL_SCRIPT = `<script>
     btn.click();
     btn.removeAttribute("data-confirmed");
   });
+
+  // Queue visibility lives in the DOM outside #dashboard-panel, which is
+  // swapped every second. The controls fragment is replaced on that same
+  // tick, so re-sync its toggle label after a swap and on the refresh timer.
+  function queuePanel() { return document.getElementById("queuePanel"); }
+  function syncQueueButtons() {
+    var panel = queuePanel();
+    if (!panel) return;
+    var toggles = document.querySelectorAll("[data-queue-toggle]");
+    for (var i = 0; i < toggles.length; i++) {
+      var btn = toggles[i];
+      var hidden = panel.hidden;
+      btn.textContent = (hidden ? "Show Queue (" : "Hide Queue (") +
+        (btn.getAttribute("data-queue-count") || "0") + ")";
+      btn.setAttribute("aria-expanded", hidden ? "false" : "true");
+    }
+  }
+  function loadQueue(page, quiet) {
+    var body = document.getElementById("queuePanelBody");
+    if (!body) return;
+    body.setAttribute("data-page", String(page));
+    if (!quiet) body.innerHTML = '<p class="muted">Loading…</p>';
+    fetch("/dashboard/queue?page=" + encodeURIComponent(String(page)), {
+      credentials: "same-origin",
+      cache: "no-store",
+    })
+      .then(function (response) { return response.ok ? response.text() : ""; })
+      .then(function (html) {
+        body.innerHTML = html || '<p class="muted">Could not load the queue.</p>';
+      })
+      .catch(function () {
+        body.innerHTML = '<p class="muted">Could not load the queue.</p>';
+      });
+  }
+  function queueRefresh() {
+    var panel = queuePanel();
+    var body = document.getElementById("queuePanelBody");
+    if (!panel || panel.hidden || !body || document.hidden) return;
+    syncQueueButtons();
+    loadQueue(Number(body.getAttribute("data-page") || "1"), true);
+  }
+  document.body.addEventListener("click", function (event) {
+    var toggle = event.target.closest ? event.target.closest("[data-queue-toggle]") : null;
+    if (toggle) {
+      var panel = queuePanel();
+      if (!panel) return;
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) loadQueue(1);
+      syncQueueButtons();
+      if (window.appUnmark) window.appUnmark(toggle);
+      return;
+    }
+    var pager = event.target.closest ? event.target.closest("[data-queue-page]") : null;
+    if (pager) {
+      // The global busy handler disables .btn in the capture phase, so do not
+      // gate on disabled here; the server clamps the requested page anyway.
+      loadQueue(Number(pager.getAttribute("data-queue-page")));
+      if (window.appUnmark) window.appUnmark(pager);
+    }
+  });
+  document.body.addEventListener("htmx:afterSwap", function (event) {
+    var target = event.detail && event.detail.target;
+    if (target && target.id === "controls") syncQueueButtons();
+  });
+  syncQueueButtons();
+  if (queuePanel()) window.setInterval(queueRefresh, 3000);
 })();
 </script>`;
 

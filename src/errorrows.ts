@@ -58,6 +58,7 @@ export function renderErrorCards(rows: ErrorRow[]): string {
       return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
+          <span class="queue-id">Queue ID #${r.id}</span>
           <span class="pill ${cls}">${esc(r.error_kind)}</span>
         </div>
         <div class="error-path muted">${esc(r.path)}</div>

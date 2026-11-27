@@ -65,6 +65,8 @@ test("archives fragment lists only archives tagged with the run", async () => {
   expect(html).not.toContain("unrelated.zip");
   expect(html).toContain("data-log-toggle");
   expect(html).toContain("ar-log-");
+  expect(html).toContain(`Queue ID #${seeded.a}`);
+  expect(html).toContain(`Queue ID #${seeded.b}`);
 });
 
 test("archives fragment renders pills per status", async () => {

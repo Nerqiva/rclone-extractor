@@ -89,6 +89,8 @@ test("renderPasswordList shows empty state and both row states", async () => {
   expect(html).toContain("/download/archive-file/7");
   expect(html).toContain("password");
   expect(html).toContain("in trash");
+  expect(html).toContain("Queue ID #7");
+  expect(html).toContain("Queue ID #8");
 });
 
 test("delete moves the archive to trash and flips the row to deleted", async () => {

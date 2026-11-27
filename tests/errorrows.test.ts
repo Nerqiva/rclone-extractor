@@ -53,4 +53,5 @@ test("error cards show the failing command with raw native output", async () => 
   const html = renderErrorCards(rows);
   expect(html).toContain("ERROR: archive broken.zip: corrupt zip data");
   expect(html).toContain('class="error-message"');
+  expect(html).toContain(`Queue ID #${archiveId}`);
 });

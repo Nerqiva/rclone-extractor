@@ -28,7 +28,13 @@ pages.get("/", async (c) => {
     layout(
       "Progress",
       `<div id="dashboard-panel" hx-get="/dashboard/fragment" hx-trigger="every 1s" hx-swap="innerHTML">${panel}</div>
-      <div class="controls-dock">${controls}</div>${noticeScript}`,
+      <div class="controls-dock">
+        ${controls}
+        <div id="queuePanel" class="queue-panel" hidden>
+          <h2 class="section-title">Queue</h2>
+          <div id="queuePanelBody"></div>
+        </div>
+      </div>${noticeScript}`,
       "dashboard",
       csrfFor(c),
       "Start, stop and watch the current task.",
@@ -371,6 +377,7 @@ pages.get("/logs", async (c) => {
       </span>
     </div>`
     : `<div class="log-actions" role="toolbar" aria-label="Log actions">
+      ${isLive ? `<button class="btn small" type="button" data-live-toggle="log" aria-pressed="true" title="Toggle live preview">Live preview</button>` : ""}
       <span class="log-actions-right">
         <button class="btn small" type="button" data-copy-url="${esc(downloadHref)}">Copy all</button>
         <a class="btn small ghost" href="${esc(downloadHref)}">Download ${kind === "errors" ? "errors" : "log"}</a>
@@ -447,6 +454,7 @@ pages.get("/errors", async (c) => {
   const body = `<h2 class="section-title" style="margin-top:0">Failed archives ${info("Archives with an error_kind set, newest first. Password-protected archives are excluded — they have their own section below. Copy fetches the raw output of the failing command.", "Failed archives")}</h2>
     <div class="log-actions" role="toolbar" aria-label="Error actions">
       ${running ? `<span class="pill warn" id="livePill">live</span>` : ""}
+      ${running ? `<button class="btn small" type="button" data-live-toggle="errors" aria-pressed="true" title="Toggle live preview">Live preview</button>` : ""}
       <button class="btn small" type="button" data-copy-table="#errorCards">Copy all errors</button>
     </div>
     <div id="errorCards" data-live="${running ? "1" : "0"}">${renderErrorCards(rows)}</div>
