@@ -46,7 +46,9 @@ export function multiVolumePart(name: string): MultiVolume | null {
   return null;
 }
 
-function isRclonexSupported(lower: string): boolean {
+/** True for formats only rclonex can extract (first multivolume part only). */
+export function isRclonexFormat(name: string): boolean {
+  const lower = name.toLowerCase();
   const mv = multiVolumePart(lower);
   if (mv) {
     return mv.index === 1;
@@ -58,7 +60,7 @@ export function isSupported(name: string, rclonex = false): boolean {
   const lower = name.toLowerCase();
   if (SUPPORTED.some((suffix) => lower.endsWith(suffix))) return true;
   if (!rclonex) return false;
-  return isRclonexSupported(lower);
+  return isRclonexFormat(name);
 }
 
 /**
@@ -75,28 +77,6 @@ export function archiveIncludePatterns(rclonex = false): string[] {
     patterns.push("*.rar", "*.7z", "*.7z.[0-9][0-9][0-9]", "*.iso");
   }
   return patterns;
-}
-
-/**
- * Deterministic extractor selection. RcloneX is used only for the formats
- * listed above (including multivolume archives) when enabled; everything
- * else goes through rclone's native archive command. Non-first volumes are
- * not queueable, so they fall back to rclone — which would fail on them,
- * mirroring the queue-time exclusion instead of silently picking an
- * extractor that cannot handle them either.
- */
-export function selectExtractor(
-  name: string,
-  rclonexEnabled: boolean,
-): "rclone" | "rclonex" {
-  if (!rclonexEnabled) return "rclone";
-  const lower = name.toLowerCase();
-  const mv = multiVolumePart(lower);
-  if (mv) return mv.index === 1 ? "rclonex" : "rclone";
-  if (RCLONEX_SUPPORTED.some((suffix) => lower.endsWith(suffix))) {
-    return "rclonex";
-  }
-  return "rclone";
 }
 
 const STEM_SUFFIXES = [...SUPPORTED, ...RCLONEX_SUPPORTED];

@@ -3,39 +3,34 @@ import {
   isSupported,
   stem,
   multiVolumePart,
-  selectExtractor,
+  isRclonexFormat,
 } from "../src/archive";
 
-test("selectExtractor: rclone-native formats always use rclone", () => {
-  for (const [name, enabled] of [["a.zip", false], ["a.zip", true], ["a.tar.gz", true], ["a.tar", true], ["a.tbz2", true]] as const) {
-    expect(selectExtractor(name, enabled)).toBe("rclone");
+test("isRclonexFormat: rclone-native formats are not rclonex formats", () => {
+  for (const name of ["a.zip", "A.ZIP", "a.tar.gz", "a.tar", "a.tbz2"]) {
+    expect(isRclonexFormat(name)).toBe(false);
   }
 });
 
-test("selectExtractor: rar/7z/iso use rclonex only when enabled", () => {
+test("isRclonexFormat: rar/7z/iso are rclonex formats", () => {
   for (const name of ["a.rar", "A.RAR", "a.7z", "a.iso", "A.ISO"]) {
-    expect(selectExtractor(name, false)).toBe("rclone");
-    expect(selectExtractor(name, true)).toBe("rclonex");
+    expect(isRclonexFormat(name)).toBe(true);
   }
 });
 
-test("selectExtractor: multivolume archives use rclonex only when enabled", () => {
+test("isRclonexFormat: only the first multivolume part qualifies", () => {
   for (const name of ["a.part1.rar", "a.part01.rar", "a.7z.001"]) {
-    expect(selectExtractor(name, false)).toBe("rclone");
-    expect(selectExtractor(name, true)).toBe("rclonex");
+    expect(isRclonexFormat(name)).toBe(true);
   }
+  expect(isRclonexFormat("a.part2.rar")).toBe(false);
+  expect(isRclonexFormat("a.7z.002")).toBe(false);
+  expect(isRclonexFormat("a.r00")).toBe(false);
 });
 
-test("selectExtractor: non-first volumes stay on rclone (they are never queued)", () => {
-  expect(selectExtractor("a.part2.rar", true)).toBe("rclone");
-  expect(selectExtractor("a.7z.002", true)).toBe("rclone");
-  expect(selectExtractor("a.r00", true)).toBe("rclone");
-});
-
-test("selectExtractor: unsupported formats stay on rclone (and are filtered elsewhere)", () => {
-  expect(selectExtractor("a.sqfs", true)).toBe("rclone");
-  expect(selectExtractor("a.txt", true)).toBe("rclone");
-  expect(selectExtractor("a.zip.001", true)).toBe("rclone");
+test("isRclonexFormat: unsupported formats are not rclonex formats", () => {
+  expect(isRclonexFormat("a.sqfs")).toBe(false);
+  expect(isRclonexFormat("a.txt")).toBe(false);
+  expect(isRclonexFormat("a.zip.001")).toBe(false);
 });
 
 test("multiVolumePart detects rar/7z multivolume shapes", () => {

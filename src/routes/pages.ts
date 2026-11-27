@@ -68,7 +68,7 @@ pages.get("/config", async (c) => {
     }
     ${
       rclonexRuntime && !rclonexRuntime.ok
-        ? `<p class="muted">RcloneX is enabled but not runnable — RAR/7Z/ISO extraction will fail. Install the newest rclonex release or set <code>RCLONEX_BIN</code>.</p>`
+        ? `<p class="muted">RcloneX is enabled but not runnable — all extraction will fail. Install the newest rclonex release or set <code>RCLONEX_BIN</code>.</p>`
         : ""
     }
   </div>

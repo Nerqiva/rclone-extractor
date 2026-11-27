@@ -51,12 +51,12 @@ scan  →  extract  →  promote  →  trash
   (`.partN.rar`, `.7z.NNN`).
 - **Extract → promote → trash** pipeline, one archive at a time, fully
   cancellable mid-run.
-- **RcloneX integration** (optional) — when enabled, RAR/RAR5, multivolume
-  RAR, 7Z, multivolume 7Z and ISO archives are extracted with
-  [Nerqiva/rclonex](https://github.com/Nerqiva/rclonex); everything else
-  (ZIP, TAR, …) stays on rclone's native `archive extract`. Encrypted
-  archives and entry-error tolerance are exposed as Configuration-page
-  checkboxes.
+- **RcloneX integration** (optional) — when enabled, **all** archives are
+  extracted with [Nerqiva/rclonex](https://github.com/Nerqiva/rclonex),
+  including ZIP and TAR. RAR/RAR5, multivolume RAR, 7Z, multivolume 7Z and
+  ISO9660 are queueable only while the setting is on; rclone still handles
+  listing, inspection, promotion, cleanup and trash. Encrypted archives and
+  entry-error tolerance are exposed as Configuration-page checkboxes.
 - **Same-series archives in one directory skip pre-inspection** — the first
   archive of one archive family per directory (per run) is inspected before
   extraction; the rest of a similar incremental/decremental series are
@@ -347,7 +347,7 @@ re-queues every in-flight archive.
 | `concurrency` | Number of archives processed at the same time, `1`–`8` (default `1`). The scan and queue are still built serially; raising this runs that many extraction workers in parallel. Takes effect from the next run. |
 | `min_archive_size` | Ignore archives smaller than this: they are never queued and are re-evaluated on every run. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
 | `max_archive_size` | Ignore archives larger than this: they are never queued and are re-evaluated on every run, so raising the limit takes effect immediately. Entered in MB or GB (stored in bytes); `0` = no limit (default). |
-| `rclonex` | **Enable RcloneX** (default off). When on, archives whose format rclone cannot handle — RAR/RAR5, multivolume RAR (`x.partN.rar` / `x.r00…`), 7Z, split/multivolume 7Z (`x.7z.NNN`), and ISO9660 — are queued and extracted with rclonex, including multivolume sets (only the first volume is queued: `part1.rar` / `.7z.001` / plain `.rar`). Everything else stays on rclone's native `archive extract`. When off, these formats are not queued at all. |
+| `rclonex` | **Enable RcloneX** (default off). When on, archives whose format rclone cannot handle — RAR/RAR5, multivolume RAR (`x.partN.rar` / `x.r00…`), 7Z, split/multivolume 7Z (`x.7z.NNN`), and ISO9660 — are queued (only the first volume of a set: `part1.rar` / `.7z.001` / plain `.rar`), and **every** queued archive, ZIP/TAR included, is extracted with rclonex. Listing, inspection, promotion, cleanup and trash stay on rclone. When off, those formats are not queued at all and rclone does all extraction. |
 | `auto_skip_known` | Keep reappearing archives classified as a torrent or website dump skipped automatically (default on — they are never re-queued/re-inspected). Uncheck to re-inspect such reappearing archives on later runs. |
 | `rclonex_archive_password_enabled` + `rclonex_archive_password` | RcloneX flag `--archive-password` (default off): password for encrypted RAR/7Z archives (multivolume sets included). The password is stored encrypted at rest; leaving the field blank on save keeps the stored value, and the **Clear** button removes it (disables the flag). |
 | `rclonex_archive_buffer_size` | RcloneX flag `--archive-window-size` (how much of the archive is buffered in memory while rclonex reads random-access formats such as 7Z/ISO). Bytes; `0` keeps rclonex's own default. The Configuration page asks for MB/GB. |
@@ -447,8 +447,8 @@ For each archive at `<ROOT>/<REL>`:
 ```
 list:    rclone lsf <ROOT> --recursive --files-only --format ps --separator ";" --ignore-case --include "<each supported archive extension glob>" [--min-size <bytes>B] [--max-size <bytes>B]
 inspect: rclone archive list <ROOT>/<REL> --files-only (skipped for RcloneX formats by default, always for ISO)
-extract: rclone archive extract <ROOT>/<REL> <TMPDIR>/run_<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
-         (or `rclonex archive extract` for RcloneX-handled formats, with the configured --archive-* flags)
+extract: rclonex archive extract <ROOT>/<REL> <TMPDIR>/run_<runid>/<archiveid>/<stem> --stats 1s --stats-one-line --log-level INFO
+         (with the configured --archive-* flags; rclone's native `archive extract` is used only when RcloneX is disabled)
 promote: rclone move <TMPDIR>/run_<runid>/<archiveid>/<stem> <ROOT>/<PARENT> [--exclude /<tmp-top-segment>/**] --delete-empty-src-dirs
 cleanup: rclone purge <TMPDIR>/run_<runid>/<archiveid>/<stem>
 purge:   rclone purge <TMPDIR>/run_<runid>/<archiveid> (and the run dir)
@@ -531,11 +531,12 @@ all are disabled while a task is running except **Clear queues**):
 [Nerqiva/rclonex](https://github.com/Nerqiva/rclonex) is a public fork of
 rclone that extends `archive extract` with streaming remote-to-remote
 extraction for **RAR/RAR5, multivolume RAR, 7Z, multivolume 7Z and ISO9660**.
-Enable it with **Enable RcloneX** on the Configuration page.
+Enable it with **Enable RcloneX** on the Configuration page. While enabled,
+rclonex performs **all** extraction, including ZIP and TAR.
 
-- **Extractor selection is deterministic** — rclonex handles exactly the
-  formats above; everything else (ZIP, TAR family, …) always uses rclone's
-  native `archive extract`. Promotion/move/trash/purge are rclone operations
+- **Enable RcloneX is the format gate** — the RcloneX-only formats above are
+  queued only while the setting is on; once on, every queued archive is
+  extracted with rclonex. Promotion/move/trash/purge stay rclone operations
   in both modes.
 - **Multivolume sets** — only the first volume is queued and extracted:
   `name.part1.rar` (or `part01.rar`), `name.rar` (old-style `.r00…` sets), and

@@ -86,7 +86,7 @@ beforeEach(async () => {
   await setSetting("scan_cache_state", "incomplete");
 });
 
-test("rclonex handles rar/7z/iso, rclone handles zip; only first multivolume volume is queued", async () => {
+test("all extraction uses rclonex when enabled; only first multivolume volume is queued", async () => {
   resetLogs();
   await runEngine();
   const rows = await db!.store.query<{ path: string; status: string }>(
@@ -101,23 +101,21 @@ test("rclonex handles rar/7z/iso, rclone handles zip; only first multivolume vol
   // The second volume is never queued.
   expect(byPath.has("set.part2.rar")).toBe(false);
 
-  const rxLog = readLog(rclonexLog);
-  expect(rxLog).toContain("archive extract");
-  expect(rxLog).toContain("big.rar");
-  expect(rxLog).toContain("big.7z");
-  expect(rxLog).toContain("big.iso");
-  expect(rxLog).toContain("set.part1.rar");
-  expect(rxLog).not.toContain("big.zip");
+  const rxExtracts = readLog(rclonexLog)
+    .split("\n")
+    .filter((l) => l.includes("archive extract"));
+  for (const name of ["big.rar", "big.7z", "big.iso", "big.zip", "set.part1.rar"]) {
+    expect(rxExtracts.some((l) => l.includes(name))).toBe(true);
+  }
 
   const rcLog = readLog(rcloneLog);
-  expect(rcLog).toContain("archive extract");
+  // Rclone still lists, inspects, promotes, cleans up and trashes — it never extracts.
+  expect(rcLog).toContain("archive list");
   expect(rcLog).toContain("big.zip");
   const rcExtracts = rcLog
     .split("\n")
     .filter((l) => l.includes("archive extract"));
-  expect(rcExtracts.some((l) => l.includes("big.zip"))).toBe(true);
-  expect(rcExtracts.some((l) => /big\.(rar|7z|iso)/.test(l))).toBe(false);
-  expect(rcExtracts.some((l) => l.includes("set.part1.rar"))).toBe(false);
+  expect(rcExtracts).toEqual([]);
 });
 
 test("inspection is skipped for rclonex formats by default, kept for zip", async () => {

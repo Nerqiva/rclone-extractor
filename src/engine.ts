@@ -24,7 +24,7 @@ import {
   stem,
   isSafeRel,
   parseTrashSubdir,
-  selectExtractor,
+  isRclonexFormat,
   archiveFamily,
   namesRelated,
   TRASH,
@@ -1274,9 +1274,12 @@ export async function runEngine(): Promise<void> {
       ) {
         extractFirst = true;
       }
-      const useRclonex =
-        rclonexRc !== null && selectExtractor(baseName, true) === "rclonex";
-      const extractor = useRclonex && rclonexRc ? rclonexRc : rc;
+      // The setting gates which formats are queued and which skip
+      // pre-inspection, but once enabled every supported archive is extracted
+      // with rclonex (including ZIP/TAR). Rclone stays responsible for
+      // listing, inspection, promotion, cleanup and trash.
+      const useRclonex = rclonexEnabled && isRclonexFormat(baseName);
+      const extractor = rclonexRc ?? rc;
       const tmp = tmpStemDir(tmpRoot, runRowId, row.id, stem(baseName));
       const archiveTmpDir = tmpArchiveDir(tmpRoot, runRowId, row.id);
       const ref = { scope: "archive" as const, refId: row.id, kind: "extract" as const };
@@ -1373,7 +1376,7 @@ export async function runEngine(): Promise<void> {
           tmp,
           ref,
           statsTracker(runRowId, job),
-          useRclonex ? rclonexFlags : undefined,
+          rclonexRc ? rclonexFlags : undefined,
         );
         setActivity("", job);
         throwIfSkipArchive(job);
