@@ -27,6 +27,7 @@ const defaults: Record<string, string> = {
   ...Object.fromEntries(EXTRA_FLAG_FIELDS.map((f) => [f.key, ""])),
   queue_max: "500",
   concurrency: "1",
+  retry_cooldown_seconds: "60",
   max_archive_size: "0",
   min_archive_size: "0",
   sort_by: "path",

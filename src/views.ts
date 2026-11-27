@@ -225,6 +225,15 @@ export async function configForm(note = ""): Promise<string> {
       },
     ) +
     settingRow(
+      "Retry cooldown",
+      `${s.retry_cooldown_seconds ?? "60"} s`,
+      `<label class="field"><input type="number" name="retry_cooldown_seconds" min="0" max="86400" step="1" value="${esc(s.retry_cooldown_seconds ?? "60")}" aria-label="retry_cooldown_seconds"></label>`,
+      {
+        key: "retry_cooldown_seconds",
+        desc: "Wait before retrying a failed extract, move or trash. Each retry doubles the wait (default 60s).",
+      },
+    ) +
+    settingRow(
       "Smallest archive",
       formatSizeLimit(minSizeBytes),
       `<label class="field"><div class="field-inline">

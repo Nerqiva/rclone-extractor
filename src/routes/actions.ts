@@ -12,6 +12,7 @@ import {
   queuePasswordMove,
   parseConcurrency,
   MAX_CONCURRENCY,
+  parseCooldownSeconds,
 } from "../engine";
 import { esc, toastTriggerHeaders } from "../ui";
 import { normalizeRcloneConf } from "../rcloneconf";
@@ -127,6 +128,7 @@ const SETTING_KEYS = [
   "rclone_conf",
   "queue_max",
   "concurrency",
+  "retry_cooldown_seconds",
   "max_archive_size",
   "sort_by",
   "sort_dir",
@@ -282,6 +284,26 @@ actions.post("/config", async (c) => {
     }
     concurrencyStored = String(parsed);
   }
+  // Cooldown before retrying a failed command. Bounded whole seconds: an
+  // invalid value is rejected instead of turning into a runaway wait.
+  let cooldownStored: string | undefined;
+  const cooldownRaw =
+    form.get("retry_cooldown_seconds") === null
+      ? undefined
+      : String(form.get("retry_cooldown_seconds") ?? "").trim();
+  if (cooldownRaw !== undefined) {
+    const parsed = parseCooldownSeconds(cooldownRaw);
+    if (parsed === null) {
+      return c.html(
+        await configForm(
+          `<p class="note err">retry_cooldown_seconds must be a whole number of seconds between 0 and 86400.</p>`,
+        ),
+        200,
+        toastTriggerHeaders("retry_cooldown_seconds is invalid", "err"),
+      );
+    }
+    cooldownStored = String(parsed);
+  }
   // RcloneX extraction flags. Passwords are write-only here: leaving the
   // field blank keeps the stored one; clearing happens via the Clear button.
   const passwordRaw = form.get("rclonex_archive_password");
@@ -344,6 +366,7 @@ actions.post("/config", async (c) => {
     if (key === "trash_subdir") continue; // stored normalized below
     if (key === "max_archive_size") continue; // stored normalized below (bytes)
     if (key === "concurrency") continue; // stored normalized below
+    if (key === "retry_cooldown_seconds") continue; // stored normalized below
     const value = form.get(key);
     if (value !== null) await setSetting(key, String(value));
   }
@@ -357,6 +380,9 @@ actions.post("/config", async (c) => {
   }
   if (concurrencyStored !== undefined) {
     await setSetting("concurrency", concurrencyStored);
+  }
+  if (cooldownStored !== undefined) {
+    await setSetting("retry_cooldown_seconds", cooldownStored);
   }
   await setSetting("rclonex", form.get("rclonex") !== null ? "1" : "0");
   await setSetting(

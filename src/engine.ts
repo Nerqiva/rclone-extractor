@@ -419,6 +419,16 @@ export function parseConcurrency(raw: string): number | null {
   return n;
 }
 
+/** Retry cooldown in whole seconds (0..86400), or null when invalid. */
+export function parseCooldownSeconds(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  const text = raw.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  if (!Number.isSafeInteger(n) || n > 86400) return null;
+  return n;
+}
+
 function clampConcurrency(raw: string | undefined): number {
   return parseConcurrency(raw ?? "1") ?? 1;
 }
