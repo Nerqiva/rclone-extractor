@@ -60,6 +60,10 @@ to `main`.
   section.
 
 ### Changed
+- **Help markers are tiny superscripts.** The `?` beside labels and headings is
+  a plain raised glyph instead of a circled badge. Tooltip bubbles use the same
+  Inter face and regular weight on every page, including the Errors page, so
+  bold headings no longer make their tips look different.
 - **Polling patches only changed values.** Progress, controls, archive rows,
   the queue and the Errors page merge new fragments into the existing DOM with
   vendored `morphdom` instead of replacing whole containers, so text selected

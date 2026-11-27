@@ -33,6 +33,13 @@ test("the help indicator is a question mark and the nav uses a slim active marke
   expect(info("tip", "thing")).toContain('class="info-i"');
   expect(info("tip", "thing")).toContain(">?</button>");
   const css = readFileSync(join(import.meta.dir, "..", "public", "styles.css"), "utf8");
+  const marker = css.slice(css.indexOf(".info-i {"), css.indexOf(".info-tip-bubble {"));
+  expect(marker).toContain("vertical-align: super");
+  expect(marker).not.toContain("border-radius");
+  expect(marker).not.toContain("width:");
+  const bubble = css.slice(css.indexOf(".info-tip-bubble {"), css.indexOf(".info-tip:hover"));
+  expect(bubble).toContain("font-family: var(--font-ui)");
+  expect(bubble).toContain("font-weight: 400");
   const nav = css.slice(css.indexOf(".nav-link {"), css.indexOf(".rail-foot {"));
   expect(nav).toContain("-webkit-tap-highlight-color: transparent");
   expect(nav).not.toContain("background: rgba(");

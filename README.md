@@ -101,8 +101,9 @@ scan  →  extract  →  promote  →  trash
 - **Task-first interface** — self-hosted Inter for navigation and controls,
   monospaced data for logs and values, sentence-case labels, and direct links
   from the empty Progress page to configuration, logs and errors. Help tips use
-  a small `?` marker, and the active nav item is marked by an underline rather
-  than a filled box.
+  a small superscript `?` marker, and tip bubbles use the same Inter face and
+  weight on every page, including Errors. The active nav item is marked by an
+  underline rather than a filled box.
 - **Continue previous task** — resumable runs. If the app crashes or is
   restarted mid-job, archives stuck in *extracting* are automatically re-queued.
   Runs have an explicit outcome: a **user stop** ends as **Interrupted**, a

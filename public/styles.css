@@ -1298,34 +1298,26 @@ textarea {
   flex: none;
 }
 .info-i {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  border: 1px solid var(--muted);
-  background: transparent;
+  display: inline;
+  border: 0;
+  background: none;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   font-family: var(--font-ui);
   line-height: 1;
   cursor: pointer;
   vertical-align: super;
-  padding: 0;
-  margin-left: 4px;
+  padding: 2px 3px;
 }
 .info-i:hover,
 .info-i:focus-visible,
 .info-tip.open .info-i {
   color: var(--accent);
-  border-color: var(--accent);
   outline: none;
 }
 @media (hover: none) {
   .info-i {
-    border-color: var(--accent);
     color: var(--accent);
   }
 }
@@ -1339,7 +1331,9 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text);
+  font-family: var(--font-ui);
   font-size: 11px;
+  font-weight: 400;
   line-height: 1.35;
   max-width: 240px;
   width: max-content;
