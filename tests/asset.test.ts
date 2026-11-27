@@ -41,11 +41,14 @@ test("the help indicator is a tiny SVG question mark and the nav uses a slim act
   const css = readFileSync(join(import.meta.dir, "..", "public", "styles.css"), "utf8");
   const marker = css.slice(css.indexOf(".info-i {"), css.indexOf(".info-i svg {"));
   expect(marker).toContain("vertical-align: super");
+  expect(marker).toContain("color: var(--faint)");
   expect(marker).not.toContain("border-radius");
   expect(marker).not.toContain("width:");
   const glyph = css.slice(css.indexOf(".info-i svg {"), css.indexOf(".info-i:hover"));
   expect(glyph).toContain("width: 9px");
   expect(glyph).toContain("height: 9px");
+  const hover = css.slice(css.indexOf(".info-i:hover,"), css.indexOf("@media (hover: none)"));
+  expect(hover).toContain("color: var(--accent)");
   const bubble = css.slice(css.indexOf(".info-tip-bubble {"), css.indexOf(".info-tip:hover"));
   expect(bubble).toContain("font-family: var(--font-ui)");
   expect(bubble).toContain("font-weight: 400");

@@ -72,7 +72,8 @@ to `main`.
   is a minimal SVG question mark raised like a superscript instead of a circled
   badge. Tooltip bubbles use the same Inter face and regular weight on every
   page, including the Errors page, so bold headings no longer make their tips
-  look different.
+  look different. The icon uses a fainter resting color so tip-heavy pages stay
+  calm; hover and focus still highlight it in the accent color.
 - **Times use the host timezone by default.** `APP_TZ` now defaults to the
   host's timezone and still accepts an IANA override. An invalid value warns at
   boot and falls back to the host. Database values and backups stay in UTC.
