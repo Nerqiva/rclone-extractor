@@ -17,7 +17,7 @@
     "test": "bun test --isolate"
   },
   "dependencies": {
-    "hono": "^4.13.18"
+    "hono": "^4.13.21"
   },
   "devDependencies": {
     "@types/bun": "latest"
