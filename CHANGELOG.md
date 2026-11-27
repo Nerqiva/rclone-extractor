@@ -60,6 +60,10 @@ to `main`.
   section.
 
 ### Changed
+- **Removed the ambiguous controls-row Skip archive button.** With more than
+  one worker it skipped only the first active archive. Use the per-archive
+  **Skip archive** button on a job card instead, which skips exactly that
+  archive. Skip listing and Skip inspection stay in the controls row.
 - **Help markers are tiny superscripts.** The `?` beside labels and headings is
   a plain raised glyph instead of a circled badge. Tooltip bubbles use the same
   Inter face and regular weight on every page, including the Errors page, so
@@ -139,6 +143,8 @@ to `main`.
   `tests/tmppurge.test.ts` cover the new behavior.
 
 ### Fixed
+- **An open per-archive log keeps its "Hide log" label after a live poll.** A poll that morphed the container restored the open log viewer but only reset `aria-expanded`, letting the server's "Log view" label reappear while the log stayed open. The toggle text is now restored alongside the expanded state.
+- **Configuration Import button no longer stays disabled after an early exit.** Cancelling the import or choosing no backup file left the button stuck with its loading spinner until a page reload. It is now re-enabled on every exit path.
 - **RcloneX extraction flags appear only once on the command line.** Runtime
   password and buffer flags were appended twice, once with the command arguments
   and once with the configured extra flags. The recorded `$ command` line and

@@ -51,18 +51,6 @@ export function controlsFragment(): string {
       )}`,
     );
   }
-  if (
-    stage === "extracting" &&
-    engineState.archiveInFlight &&
-    activity !== "Moving to trash"
-  ) {
-    skips.push(
-      `<button class="btn small ghost" hx-post="/run/skip" hx-vals='{"target":"archive"}' hx-target="#controls" hx-swap="outerHTML">Skip archive</button>${info(
-        "Leave this archive queued; it retries next run. This run only.",
-        "Skip archive",
-      )}`,
-    );
-  }
   const skipCluster = skips.length
     ? `<span class="skip-cluster" aria-label="Skip controls">\n    ${skips.join("\n    ")}\n    </span>`
     : "";

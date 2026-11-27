@@ -41,7 +41,10 @@
         if (!after[j].innerHTML && saved.html) after[j].innerHTML = saved.html;
         var toggleId = after[j].id.split("-log-").pop();
         var toggle = target.querySelector('[data-log-toggle="' + toggleId + '"]');
-        if (toggle) toggle.setAttribute("aria-expanded", "true");
+        if (toggle) {
+          toggle.textContent = "Hide log";
+          toggle.setAttribute("aria-expanded", "true");
+        }
         break;
       }
     }
@@ -536,14 +539,14 @@
     importForm.addEventListener("submit", async function (event) {
       event.preventDefault();
       var btn = importForm.querySelector('button[type="submit"]');
-      var fileInput = importForm.querySelector('input[type="file"]');
-      if (fileInput && (!fileInput.files || fileInput.files.length === 0)) {
-        toast("Choose a backup .json file first.", "err");
-        return;
-      }
-      if (!window.confirm("Importing a backup overwrites matching rows in the current database. Continue?")) return;
       setLoading(btn, true);
       try {
+        var fileInput = importForm.querySelector('input[type="file"]');
+        if (fileInput && (!fileInput.files || fileInput.files.length === 0)) {
+          toast("Choose a backup .json file first.", "err");
+          return;
+        }
+        if (!window.confirm("Importing a backup overwrites matching rows in the current database. Continue?")) return;
         var res = await fetch(importForm.action, { method: "POST", body: new FormData(importForm) });
         var data = await res.json().catch(function () { return null; });
         if (!data) throw new Error("import failed (HTTP " + res.status + ")");

@@ -482,9 +482,9 @@ skipped after extraction, or on a skip request / stop. Pre-extraction skips
 older than 24 hours or tied to archives that are no longer eligible for retry.
 A skip request or hard stop during a cooldown aborts the wait and re-queues the
 archive; a soft stop waits it out. Password, website/torrent, empty and
-unreadable archives are never resurrected by a retry. The **Skip archive**
-button works at every stage up to the move to trash; it is hidden once that
-stage begins.
+unreadable archives are never resurrected by a retry. The per-archive **Skip
+archive** button on the job card works at every stage up to the move to
+trash; it is hidden once that stage begins.
 
 The listing is spawned with `--ignore-case` and one `--include` glob per
 supported archive extension (RAR/7z/ISO and split `name.7z.NNN` volumes only
@@ -716,13 +716,13 @@ output at all likewise get a single `exit N (no output)` diagnostic line.
   (only while the listing binary is running) stops the scan early and builds
   the queue from the archives already stored; **Skip inspection** (only
   while an archive is being inspected) treats the inspection as passed and
-  extracts the archive; **Skip archive** (only while an archive is in
-  flight) stops the current archive and leaves it queued — it is retried on
-  the next run, and is counted as skipped for this run's counters. A skip
-  affects only the archive/stage in flight — never subsequent archives,
-  later runs, or the queue order. A skip asked while nothing matching is in
-  flight is refused with a toast instead of being silently dropped.
-  Skipping an archive never moves it to the trash folder.
+  extracts the archive. To skip one archive, use the **Skip archive** button
+  on its job card. It stops only that archive and leaves it queued — it is
+  retried on the next run, and is counted as skipped for this run's counters.
+  A skip affects only the archive/stage in flight — never subsequent
+  archives, later runs, or the queue order. A skip asked while nothing
+  matching is in flight is refused with a toast instead of being silently
+  dropped. Skipping an archive never moves it to the trash folder.
 - **Cached scan results are reused automatically.** When the last scan
   completed and the configuration has not changed since, the run rebuilds the
   queue from the archives already stored in the database instead of
