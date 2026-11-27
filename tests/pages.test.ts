@@ -62,7 +62,6 @@ test("the queue toggle counts queued archives", async () => {
       {
         id: 5,
         rel: "incoming/a.zip",
-        baseName: "a.zip",
         order: 0,
         status: "queued" as const,
         phase: "",
@@ -71,7 +70,6 @@ test("the queue toggle counts queued archives", async () => {
         skipArchive: false,
         skipInspection: false,
         groupKey: null,
-        startedAt: "",
         finishedAt: "",
       },
     ],

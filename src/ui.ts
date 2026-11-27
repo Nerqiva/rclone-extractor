@@ -473,7 +473,7 @@ const NAV: { href: string; label: string; key: string; icon: string }[] = [
 
 const BRAND_MARK = `<svg class="brand-mark" viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="14" fill="#242d40" stroke="#2e3a52" stroke-width="3"/><text x="31" y="44" text-anchor="middle" font-family="ui-monospace, JetBrains Mono, Menlo, monospace" font-weight="700" font-size="32"><tspan fill="#6f9bff">r</tspan><tspan fill="#cdd6f4">/</tspan></text></svg>`;
 
-export function rail(active: string, csrf: string | null = null): string {
+function rail(active: string, csrf: string | null = null): string {
   const links = NAV.map(
     (n) => `<a class="nav-link${n.key === active ? " active" : ""}" href="${n.href}"${
       n.key === active ? ' aria-current="page"' : ""

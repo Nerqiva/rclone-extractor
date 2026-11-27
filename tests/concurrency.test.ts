@@ -353,7 +353,6 @@ test("the polled fragment renders active and History cards with Queue IDs", asyn
   ) => ({
     id,
     rel: `dir${id}/archive${id}.zip`,
-    baseName: `archive${id}.zip`,
     order,
     status,
     phase,
@@ -371,7 +370,6 @@ test("the polled fragment renders active and History cards with Queue IDs", asyn
     skipArchive: false,
     skipInspection: false,
     groupKey: null,
-    startedAt: "",
     finishedAt: "",
   });
   engineState.jobs = new Map([
@@ -415,7 +413,6 @@ test("only the five newest terminal archives appear in History", async () => {
   const mkJob = (id: number, order: number, status: "active" | "failed", offset: number) => ({
     id,
     rel: `dir${id}/archive${id}.zip`,
-    baseName: `archive${id}.zip`,
     order,
     status,
     phase: "",
@@ -424,7 +421,6 @@ test("only the five newest terminal archives appear in History", async () => {
     skipArchive: false,
     skipInspection: false,
     groupKey: null,
-    startedAt: "",
     finishedAt: status === "failed" ? new Date(base + offset).toISOString() : "",
   });
   engineState.jobs = new Map([
@@ -464,7 +460,6 @@ test("the queue page caps at 20 rows per page and shows Queue IDs", async () => 
       {
         id,
         rel: `q${i}/archive${i}.zip`,
-        baseName: `archive${i}.zip`,
         order: i,
         status: "queued" as const,
         phase: "",
@@ -473,8 +468,7 @@ test("the queue page caps at 20 rows per page and shows Queue IDs", async () => 
         skipArchive: false,
         skipInspection: false,
         groupKey: null,
-        startedAt: "",
-        finishedAt: "",
+            finishedAt: "",
       },
     ] as const;
   });

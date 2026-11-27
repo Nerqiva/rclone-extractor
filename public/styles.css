@@ -329,10 +329,6 @@ textarea {
   width: 14em;
   margin-left: 2px;
 }
-.check-input.small-num {
-  width: 9em;
-}
-
 .btn {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -1641,8 +1637,4 @@ button[disabled] {
 .pw-log {
   margin: 0 14px 14px;
   max-height: 320px;
-}
-
-.check-inline {
-  display: contents;
 }

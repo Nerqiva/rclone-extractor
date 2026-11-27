@@ -42,7 +42,7 @@ await setSetting("remote_flags", "");
 await setSetting("cancel", "0");
 const engine = runEngine();
 const deadline = Date.now() + 10000;
-while (engineState.stage !== "extracting" || !engineState.currentRel) {
+while (engineState.stage !== "extracting" || engineState.activeIds.size === 0) {
   if (Date.now() > deadline) { console.error("never reached extracting"); process.exit(1); }
   await new Promise((r) => setTimeout(r, 50));
 }

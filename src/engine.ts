@@ -44,7 +44,6 @@ export type JobStatus = "queued" | "active" | "done" | "failed" | "skipped";
 export interface JobState {
   id: number;
   rel: string;
-  baseName: string;
   order: number;
   status: JobStatus;
   phase: string;
@@ -53,7 +52,6 @@ export interface JobState {
   skipArchive: boolean;
   skipInspection: boolean;
   groupKey: string | null;
-  startedAt: string;
   finishedAt: string;
 }
 
@@ -90,8 +88,7 @@ export type PasswordMoveResult =
 export const engineState = {
   running: false,
   runId: 0,
-  stage: "idle", // idle|listing|queueing|extracting|finished|interrupted|error
-  currentRel: "",
+  stage: "idle", // idle|listing|queueing|extracting|finished|error
   currentCommand: "",
   total: 0,
   done: 0,
@@ -124,8 +121,6 @@ export const engineState = {
   // consumed by the archive/stage in flight and does not carry over to the
   // next archive, stage, or run.
   skipListing: false,
-  skipInspection: false,
-  skipArchive: false,
   // True while an archive is being processed (set where last_archive is
   // persisted, cleared in the per-archive finally). Lets skip requests tell
   // "between archives" apart from "an archive is in flight".
@@ -136,7 +131,7 @@ export const engineState = {
   deferredPasswordMoves: [] as DeferredPasswordMove[],
   // One entry per queued archive, in queue order. The single source of truth
   // for live per-job progress; the scalar fields above mirror the primary
-  // active job for older consumers.
+  // active job for the controls and the stop path.
   jobs: new Map<number, JobState>(),
   activeIds: new Set<number>(),
   concurrency: 1,
@@ -242,7 +237,7 @@ export function queuePasswordMove(direction: PasswordMoveDirection, id: number):
 }
 
 /** Drop every pending move and leave a short note in the run log. */
-export function discardDeferredPasswordMoves(reason: string): number {
+function discardDeferredPasswordMoves(reason: string): number {
   const n = engineState.deferredPasswordMoves.length;
   if (n === 0) return 0;
   engineState.deferredPasswordMoves = [];
@@ -336,7 +331,6 @@ export function requestSkipInspection(id?: number): boolean {
   const job = activeJobForSkip(id);
   if (!job || job.phase !== "Inspecting archive") return false;
   job.skipInspection = true;
-  engineState.skipInspection = true;
   killActiveProcs(job.id);
   return true;
 }
@@ -346,7 +340,6 @@ export function requestSkipArchive(id?: number): boolean {
   const job = activeJobForSkip(id);
   if (!job) return false;
   job.skipArchive = true;
-  engineState.skipArchive = true;
   killActiveProcs(job.id);
   return true;
 }
@@ -373,10 +366,9 @@ function now(): string {
   return new Date().toISOString();
 }
 
-/** Point the legacy single-archive fields at the first active job. */
+/** Mirror the active job's phase and command into the scalar controls view. */
 function refreshPrimaryMirror(): void {
   const job = activeJobForSkip();
-  engineState.currentRel = job?.rel ?? "";
   engineState.currentCommand = job?.command ?? "";
   engineState.activity = job?.phase ?? "";
   engineState.archiveInFlight = engineState.activeIds.size > 0;
@@ -564,24 +556,6 @@ async function cancelRequestedCached(): Promise<boolean> {
 }
 
 /**
- * Close runs left unfinished by a previous process and settle archives left
- * mid-extraction. With `recoverArchives` (resume on) they go back to the
- * queue; otherwise they are marked failed/killed so they never sit in
- * 'extracting' forever.
- *
- * A killed run is one the host stopped: a run row with no finish time left
- * behind by a process that did not finalize (crash, SIGKILL, OOM, or a
- * signal handler that exits early). `reason` is recorded on the run so the
- * Progress and Logs pages can show why it was killed.
- */
-/**
- * A crash between trash() succeeding and the done-UPDATE leaves the row in
- * 'extracting' although the files are already in the trash; re-queueing
- * would fail it forever. When the trash copy exists, finalize as done.
- * Rclone failures are tolerated: an unreachable remote falls back to a plain
- * re-queue.
- */
-/**
  * Archives whose trash copy exists were fully processed — the crash happened
  * between trash() and the done-UPDATE. Finalize them as done instead of
  * re-queueing into a permanent extract failure. Only ever called with the
@@ -634,6 +608,17 @@ async function settleTrashMovedArchives(ids: number[]): Promise<number> {
 // 'extracting' forever (boot/start recovery only runs at those moments).
 let recheckPending = false;
 
+/**
+ * Close runs left unfinished by a previous process and settle archives left
+ * mid-extraction. With `recoverArchives` (resume on) they go back to the
+ * queue; otherwise they are marked failed/killed so they never sit in
+ * 'extracting' forever.
+ *
+ * A killed run is one the host stopped: a run row with no finish time left
+ * behind by a process that did not finalize (crash, SIGKILL, OOM, or a
+ * signal handler that exits early). `reason` is recorded on the run so the
+ * Progress and Logs pages can show why it was killed.
+ */
 export async function recoverStale(
   recoverArchives = true,
   reason = "previous process exited mid-run (crash or kill)",
@@ -745,7 +730,6 @@ export async function runEngine(): Promise<void> {
   engineState.running = true;
   engineState.lastError = "";
   engineState.runId = 0;
-  engineState.currentRel = "";
   engineState.currentCommand = "";
   engineState.total = 0;
   engineState.done = 0;
@@ -759,8 +743,6 @@ export async function runEngine(): Promise<void> {
   engineState.errorKind = "";
   engineState.interruptReason = "";
   engineState.skipListing = false;
-  engineState.skipInspection = false;
-  engineState.skipArchive = false;
   engineState.archiveInFlight = false;
   engineState.deferredPasswordMoves = [];
   engineState.currentScanRoot = "";
@@ -1225,7 +1207,6 @@ export async function runEngine(): Promise<void> {
       engineState.jobs.set(row.id, {
         id: row.id,
         rel: row.path,
-        baseName,
         order,
         status: "queued",
         phase: "",
@@ -1234,7 +1215,6 @@ export async function runEngine(): Promise<void> {
         skipArchive: false,
         skipInspection: false,
         groupKey,
-        startedAt: "",
         finishedAt: "",
       });
     });
@@ -1252,7 +1232,6 @@ export async function runEngine(): Promise<void> {
         // Claim atomically: the worker awaits a DB read right after this, so
         // the status must change now or another worker takes the same job.
         job.status = "active";
-        job.startedAt = now();
         return job;
       }
       return undefined;
@@ -1285,7 +1264,7 @@ export async function runEngine(): Promise<void> {
       rc: Rclone,
       rclonexRc: Rclone | null,
     ) => {
-      const row = { id: job.id, path: job.rel, size: 0 };
+      const row = { id: job.id, path: job.rel };
 
       // Skip flags are set on this job by targeted requests and cleared
       // when the worker claims it.
@@ -1767,9 +1746,7 @@ export async function runEngine(): Promise<void> {
     // another loop iteration to notice it, so decide here. A user-stopped run
     // ends as outcome='interrupted' (reason names the stop mode); a clean run
     // ends as 'finished'.
-    if (engineState.stage !== "interrupted") {
-      engineState.stage = engineState.stopRequested ? "interrupted" : "finished";
-    }
+    engineState.stage = engineState.stopRequested ? "interrupted" : "finished";
     engineState.finishedAt = now();
     const stopped = engineState.stage === "interrupted";
     // A stop the engine asked for itself (stopEngine sets stopRequested) is a
@@ -1826,14 +1803,11 @@ export async function runEngine(): Promise<void> {
       deleteRunConfSnapshot(runConf);
     }
     engineState.running = false;
-    engineState.currentRel = "";
     engineState.currentCommand = "";
     engineState.activity = "";
     engineState.stopRequested = false;
     engineState.forceStop = false;
     engineState.skipListing = false;
-    engineState.skipInspection = false;
-    engineState.skipArchive = false;
     engineState.archiveInFlight = false;
   }
 }

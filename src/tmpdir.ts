@@ -1,7 +1,5 @@
 export const TMP_DIR = ".Rclone-Extractor-tmp";
 
-/** Prefix for app-owned run directories directly inside TMP_DIR. */
-export const TMP_RUN_PREFIX = "run_";
 /** Matches app-owned run directories inside TMP_DIR; everything else is left alone. */
 export const TMP_RUN_DIR_RE = /^run_(\d+)$/;
 
@@ -93,7 +91,7 @@ export function tmpTopSegment(spec: TmpDirSpec): string | null {
 
 /** Directory holding all in-flight extraction data for one run. */
 export function tmpRunDir(tmpRoot: string, runId: number): string {
-  return `${tmpRoot}/${TMP_RUN_PREFIX}${runId}`;
+  return `${tmpRoot}/run_${runId}`;
 }
 export function tmpArchiveDir(tmpRoot: string, runId: number, archiveId: number): string {
   return `${tmpRunDir(tmpRoot, runId)}/${archiveId}`;

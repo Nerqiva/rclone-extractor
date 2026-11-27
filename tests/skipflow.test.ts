@@ -86,8 +86,6 @@ beforeEach(async () => {
   engine.engineState.stopRequested = false;
   engine.engineState.forceStop = false;
   engine.engineState.skipListing = false;
-  engine.engineState.skipInspection = false;
-  engine.engineState.skipArchive = false;
   engine.engineState.done = 0;
   engine.engineState.failed = 0;
   engine.engineState.skipped = 0;
@@ -132,7 +130,7 @@ test("skip inspection bypasses the inspection and extracts the archive", async (
     "SELECT status FROM archives WHERE path='victim.zip'",
   );
   expect(row?.status).toBe("done");
-  expect(engine.engineState.skipInspection).toBe(false);
+  expect([...engine.engineState.jobs.values()].every((j) => !j.skipInspection)).toBe(true);
   expect(engine.engineState.skipped).toBe(0);
 });
 
@@ -151,7 +149,7 @@ test("skip archive re-queues the current archive and finishes the run", async ()
   expect(row?.status).toBe("queued");
   expect(row?.error_kind).toBeNull();
   expect(engine.engineState.skipped).toBe(1);
-  expect(engine.engineState.skipArchive).toBe(false);
+  expect([...engine.engineState.jobs.values()].every((j) => !j.skipArchive)).toBe(true);
 });
 
 test("a skip asked while the trash move finishes does not re-queue the archive", async () => {
@@ -166,7 +164,9 @@ test("a skip asked while the trash move finishes does not re-queue the archive",
   expect(sawTrash).toBe(true);
   // The skip lands while the moveto is blocked. Releasing the gate lets the
   // move finish with exit 0, leaving the archive in trash.
-  engine.engineState.skipArchive = true;
+  const active = [...engine.engineState.jobs.values()].find((j) => j.status === "active");
+  if (!active) throw new Error("no active archive to skip");
+  active.skipArchive = true;
   rmSync(gate, { force: true });
   await done;
   const row = await db!.store.get1<{ status: string; error_kind: string | null }>(

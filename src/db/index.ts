@@ -282,18 +282,6 @@ async function removeLegacyPassword(): Promise<void> {
 }
 
 /**
- * Rename the RcloneX sliding-window setting to rclonex_archive_buffer_size
- * (bytes; 0 = disabled). Idempotent: writes the new key only when missing,
- * then drops the legacy keys. Runs before the defaults are inserted so a
- * legacy value is upgraded instead of silently replaced by the default.
- */
-/**
- * Add the `archives.last_run_id` column: which run last processed the
- * archive (NULL for archives never processed, or processed before this
- * migration). Powers the Logs page's per-run Archives tab. Idempotent; the
- * fresh-install schema already includes the column.
- */
-/**
  * Add the `runs.last_touch_at` heartbeat: the engine bumps it while a run
  * is alive; recoverStale only reclaims runs whose heartbeat is stale, so a
  * second instance (rolling deploy / replicas) never closes a live peer's
@@ -305,6 +293,12 @@ async function migrateRunsLastTouch(): Promise<void> {
   console.log("migrated: added runs.last_touch_at");
 }
 
+/**
+ * Add the `archives.last_run_id` column: which run last processed the
+ * archive (NULL for archives never processed, or processed before this
+ * migration). Powers the Logs page's per-run Archives tab. Idempotent; the
+ * fresh-install schema already includes the column.
+ */
 async function migrateArchivesLastRun(): Promise<void> {
   try {
     await store.run(
@@ -326,6 +320,12 @@ async function migrateArchivesLastRun(): Promise<void> {
   }
 }
 
+/**
+ * Rename the RcloneX sliding-window setting to rclonex_archive_buffer_size
+ * (bytes; 0 = disabled). Idempotent: writes the new key only when missing,
+ * then drops the legacy keys. Runs before the defaults are inserted so a
+ * legacy value is upgraded instead of silently replaced by the default.
+ */
 async function migrateRclonexArchiveBufferSize(): Promise<void> {
   const rows = await store.query<{ key: string; value: string }>(
     "SELECT key, value FROM settings WHERE key IN ('rclonex_window_size_enabled', 'rclonex_window_size', 'rclonex_archive_buffer_size')",

@@ -94,7 +94,7 @@ export async function verifySession(value: string | undefined): Promise<string |
   return id;
 }
 
-export async function revokeSession(value: string | undefined): Promise<void> {
+async function revokeSession(value: string | undefined): Promise<void> {
   if (!value) return;
   const idx = value.lastIndexOf(".");
   const id = idx === -1 ? value : value.slice(0, idx);

@@ -30,7 +30,7 @@ type SpawnError = Error & { code?: string };
  * so callers get the probable cause and the fix (matching arch, or the
  * RCLONE_BIN/RCLONEX_BIN env var).
  */
-export function describeSpawnError(
+function describeSpawnError(
   e: unknown,
   bin: string,
   binEnv: string = "RCLONE_BIN",
@@ -407,7 +407,7 @@ function writeConfAtomic(path: string, conf: string): void {
  * back to the RCLONE_CONF env var. Returns "" when nothing is configured or
  * the candidates fail validation.
  */
-export async function resolveConfText(): Promise<string> {
+async function resolveConfText(): Promise<string> {
   const storedConf = (await getSetting("rclone_conf", "")) ?? "";
   for (const candidate of [storedConf, RCLONE_CONF]) {
     if (!candidate) continue;

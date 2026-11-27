@@ -42,7 +42,6 @@ function fmtTime(ts: string): string {
 
 export interface RenderedEntry {
   html: string;
-  level: string;
 }
 
 // Detail ids must be unique across the initial render and every live poll
@@ -67,7 +66,6 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
         const id = `log-det-${detailIdSeq++}`;
         const content = detailLines.map((l) => esc(l)).join("\n");
         entries.push({
-          level: "DETAIL",
           html: `<div class="log-entry log-detail"><span class="log-time">${esc(time)}</span><details id="${id}"><summary>Show full output (${detailLines.length} lines)</summary><pre class="log-detail-pre">${content}</pre></details></div>`,
         });
         inDetail = false;
@@ -94,14 +92,12 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
     const isContinuation = !level && !isCmd && entries.length > 0;
     if (isContinuation) {
       entries.push({
-        level: "CONT",
         html: `<div class="log-entry log-continuation"><span class="log-time"></span>${esc(line)}</div>`,
       });
       continue;
     }
 
     entries.push({
-      level: level || "INFO",
       html: `<div class="${cls}"><span class="log-time">${esc(time)}</span>${chip}<span class="log-msg">${esc(line)}</span></div>`,
     });
   }
@@ -109,7 +105,6 @@ function renderLogEntries(rows: LogRow[]): RenderedEntry[] {
   if (inDetail && detailLines.length > 0) {
     const content = detailLines.map((l) => esc(l)).join("\n");
     entries.push({
-      level: "DETAIL",
       html: `<div class="log-entry log-detail"><span class="log-time"></span><pre class="log-detail-pre">${content}</pre></div>`,
     });
   }
