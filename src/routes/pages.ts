@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { store, getSetting } from "../db";
-import { layout, esc, fmtDisplayTime, info, asset } from "../ui";
+import { layout, esc, fmtDisplayTime, info, asset, APP_VERSION } from "../ui";
+import { BOOT_AT } from "../config";
 import { csrfFor } from "./auth";
 import { configForm, controlsFragment } from "../views";
 import { resolveOutcome } from "../runs";
@@ -28,7 +29,7 @@ pages.get("/", async (c) => {
   return c.html(
     layout(
       "Progress",
-      `<div id="dashboard-panel" hx-get="/dashboard/fragment" hx-trigger="every 1s" hx-swap="innerHTML">${panel}</div>
+      `<div id="dashboard-panel" hx-get="/dashboard/fragment" hx-trigger="every 1s" hx-swap="morphdom">${panel}</div>
       <div class="controls-dock">
         ${controls}
         <div id="queuePanel" class="queue-panel" hidden>
@@ -56,12 +57,14 @@ pages.get("/config", async (c) => {
       ? `<dt>rclonex</dt><dd><code>${esc(rclonexRuntime.detail)}</code><br><span class="muted">${esc(rclonexRuntime.bin)}</span></dd>`
       : `<dt>rclonex</dt><dd><span class="note err">not runnable</span><br><code>${esc(rclonexRuntime.detail)}</code></dd>`
     : "";
+  const versionRow = `<dt>App version</dt><dd><code>${esc(APP_VERSION)}</code></dd>`;
+  const bootRow = `<dt>Booted at</dt><dd><code>${esc(fmtDisplayTime(BOOT_AT.toISOString(), true))}</code></dd>`;
   const running = engineState.running;
   const dis = running ? " disabled" : "";
   const backupCls = running ? "card is-disabled" : "card";
   const extra = `<div class="card">
     <h2 class="section-title" style="margin-top:0">Runtime</h2>
-    <dl class="detail-grid">${runtimeRow}${rclonexRow}</dl>
+    <dl class="detail-grid">${versionRow}${bootRow}${runtimeRow}${rclonexRow}</dl>
     ${
       runtime.ok
         ? ""
@@ -260,7 +263,7 @@ pages.get("/logs", async (c) => {
   const entriesHtml = entries.map((e) => e.html).join("");
   const pollAttr =
     isLive && isArchivesTab
-      ? ` hx-get="/logs/archives-fragment?run=${selected.id}" hx-trigger="every 2s" hx-swap="innerHTML"`
+      ? ` hx-get="/logs/archives-fragment?run=${selected.id}" hx-trigger="every 2s" hx-swap="morphdom"`
       : "";
   const logBlock = isArchivesTab
     ? `<div id="ar-list"${pollAttr}>${renderArchiveLogRows(archiveRows ?? [], liveArchiveJobs)}</div>`

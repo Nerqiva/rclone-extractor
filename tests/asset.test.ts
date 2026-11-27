@@ -13,6 +13,8 @@ test("asset() busts /public/* caches with the release version", async () => {
   const html = layout("t", "<p>x</p>", "test");
   expect(html).toContain(`href="/public/styles.css?v=${VERSION}"`);
   expect(html).toContain(`src="/public/htmx.min.js?v=${VERSION}"`);
+  expect(html).toContain(`src="${asset("morphdom-umd.min.js")}"`);
+  expect(html).toContain('hx-ext="app-morph"');
   expect(html).not.toContain('href="/public/styles.css"');
 });
 
@@ -23,4 +25,18 @@ test("the shared client runtime ships the htmx:beforeSwap tooltip guard", async 
   const app = readFileSync(join(import.meta.dir, "..", "public", "app.js"), "utf8");
   expect(app).toContain("htmx:beforeSwap");
   expect(app).toContain('querySelector(".info-tip.open")');
+  expect(app).toContain('htmx.defineExtension("app-morph"');
+});
+
+test("the client runtime morphs polled fragments instead of repeating their HTML", async () => {
+  const app = readFileSync(join(import.meta.dir, "..", "public", "app.js"), "utf8");
+  const copy = readFileSync(join(import.meta.dir, "..", "public", "copy.js"), "utf8");
+  const morphdom = readFileSync(
+    join(import.meta.dir, "..", "public", "morphdom-umd.min.js"),
+    "utf8",
+  );
+  expect(app).toContain("morphdom(target, wrap, { childrenOnly: true })");
+  expect(app).not.toContain("__pollHtml");
+  expect(copy).toContain("window.appMorph(errorCards, payload.html)");
+  expect(morphdom).toContain("morphdom");
 });

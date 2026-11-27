@@ -6,7 +6,7 @@ import { join } from "node:path";
 // heuristic caching to the stylesheet/scripts, which once served a stale
 // pre-tooltip stylesheet next to fresh HTML. The release-bumped VERSION
 // changes the URL on every deploy; /public/* itself revalidates (server.ts).
-const APP_VERSION = readFileSync(
+export const APP_VERSION = readFileSync(
   join(import.meta.dir, "..", "VERSION"),
   "utf8",
 ).trim();
@@ -174,9 +174,10 @@ ${csrf ? `<meta name="csrf-token" content="${esc(csrf)}">` : ""}
 <link rel="icon" type="image/svg+xml" href="${asset("favicon.svg")}">
 <link rel="stylesheet" href="${asset("styles.css")}">
 <script src="${asset("htmx.min.js")}" defer></script>
+<script src="${asset("morphdom-umd.min.js")}" defer></script>
 <script src="${asset("app.js")}" defer></script>
 </head>
-<body>
+<body hx-ext="app-morph">
 ${railHtml}
 <main class="content">
 <h1 class="page-title">${esc(title)}</h1>

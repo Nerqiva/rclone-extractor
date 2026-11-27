@@ -7,7 +7,9 @@ configuration page, and log/error views.
 
 Written in TypeScript and run directly by [Bun](https://bun.sh) — no build step,
 no bundler, no client framework. The UI is server-rendered HTML with
-[htmx](https://htmx.org) polling.
+[htmx](https://htmx.org) polling. Polled fragments are merged into the page by
+[morphdom](https://github.com/patrick-steele-idem/morphdom), so only values that
+changed are replaced and text you select stays selected.
 
 ```
 scan  →  extract  →  promote  →  trash
@@ -363,7 +365,9 @@ re-queues every in-flight archive.
 
 Most settings are shown as compact rows on the Configuration page, each with a
 single terse line of help. Click **Edit** to unfold a field, then **Save**.
-The extra-flags rows stay permanently visible.
+The extra-flags rows stay permanently visible. The **Runtime** card on that page
+shows the app version and the time the process booted, alongside the rclone
+checks.
 
 ### Switching between SQLite and Postgres
 
@@ -897,7 +901,8 @@ public/
   favicon.svg      r/ monogram icon
   styles.css       design system
   htmx.min.js      vendored htmx
-  app.js           shared client runtime: toasts, busy state, polling, modals, config editing
+  morphdom-umd.min.js vendored morphdom for targeted DOM updates
+  app.js           shared client runtime: toasts, busy state, polling, DOM morphing, modals, config editing
   copy.js          clipboard copy + incremental polling with live-preview toggle
   fonts/           self-hosted JetBrains Mono
 ```
@@ -989,6 +994,6 @@ SECRET_KEY=dev-key APP_PASSWORD=dev bun run src/server.ts
 | Database | `bun:sqlite` or `Bun.SQL` (Postgres) |
 | Processes | `Bun.spawn` (rclone / rclonex) |
 | Encryption | Node `crypto` (AES-256-GCM) |
-| UI | htmx 2.0.11, server-rendered |
+| UI | htmx 2.0.11 + morphdom 2.7.7, server-rendered |
 
 No bundler, no client framework, no ORM.

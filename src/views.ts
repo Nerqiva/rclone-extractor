@@ -26,7 +26,7 @@ export function controlsFragment(): string {
   </div>`;
   }
   if (engineState.forceStop) {
-    return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
+    return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="morphdom">
     <span class="controls-note warn-line stop-note">Stopping immediately — in-flight archives were aborted…</span>
     ${queueToggleButton()}
     <button class="btn danger solid is-loading btn-stop" disabled><span class="spinner" aria-hidden="true"></span>Stopping…</button>
@@ -69,7 +69,7 @@ export function controlsFragment(): string {
   const note = engineState.stopRequested
     ? `<span class="controls-note warn-line stop-note">Stop requested — finishing in-flight archives…</span>`
     : `<span class="controls-note muted">${workers}run in progress…</span>`;
-  return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="outerHTML">
+  return `<div id="controls" class="btn-row controls-row" hx-get="/dashboard/controls" hx-trigger="every 1s" hx-swap="morphdom">
     ${note}
     ${skipCluster}
     ${queueToggleButton()}

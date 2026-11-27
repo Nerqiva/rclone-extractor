@@ -4,6 +4,32 @@
   // One client runtime for every page. Server-rendered markup stays the source
   // of truth; this file only adds behavior to elements that exist.
 
+  // morphdom patches changed nodes in place, so a poll leaves text selection
+  // and scroll position alone. childrenOnly keeps target ids and JS attributes.
+  function morphInto(target, html) {
+    var wrap = document.createElement("div");
+    if (typeof html === "string") wrap.innerHTML = html;
+    else while (html.firstChild) wrap.appendChild(html.firstChild);
+    var root = wrap.firstElementChild;
+    if (root && root.id === target.id && root.nodeName === target.nodeName) {
+      morphdom(target, root);
+    } else {
+      morphdom(target, wrap, { childrenOnly: true });
+    }
+  }
+  window.appMorph = morphInto;
+
+  if (window.htmx) {
+    htmx.defineExtension("app-morph", {
+      isInlineSwap: function (style) { return style === "morphdom"; },
+      handleSwap: function (style, target, fragment) {
+        if (style !== "morphdom") return false;
+        morphInto(target, fragment.cloneNode(true));
+        return [target];
+      },
+    });
+  }
+
   function toast(message, kind) {
     var region = document.getElementById("toast-region");
     if (!region) return;
@@ -140,25 +166,11 @@
     if (btn) mark(btn, true);
   }, true);
 
-  var pollHtml = window.__pollHtml || (window.__pollHtml = {});
   document.body.addEventListener("htmx:beforeSwap", function (event) {
     var target = event.detail && event.detail.target;
-    if (!target) return;
-    if (target.querySelector && target.querySelector(".info-tip.open")) {
+    if (target && target.querySelector && target.querySelector(".info-tip.open")) {
       event.preventDefault();
-      return;
     }
-    var elt = event.detail.elt;
-    var trigger = elt && elt.getAttribute ? elt.getAttribute("hx-trigger") : null;
-    if (!trigger || trigger.indexOf("every") === -1) return;
-    var id = target.id || (elt && elt.id) || "";
-    if (!id) return;
-    var response = typeof event.detail.serverResponse === "string" ? event.detail.serverResponse : "";
-    if (pollHtml[id] === response) {
-      event.preventDefault();
-      return;
-    }
-    pollHtml[id] = response;
   });
   window.addEventListener("pageshow", function (event) {
     if (event.persisted) window.location.reload();
@@ -294,8 +306,8 @@
       credentials: "same-origin", cache: "no-store",
     })
       .then(function (response) { return response.ok ? response.text() : ""; })
-      .then(function (html) { body.innerHTML = html || '<p class="muted">Could not load the queue.</p>'; })
-      .catch(function () { body.innerHTML = '<p class="muted">Could not load the queue.</p>'; });
+      .then(function (html) { morphInto(body, html || '<p class="muted">Could not load the queue.</p>'); })
+      .catch(function () { morphInto(body, '<p class="muted">Could not load the queue.</p>'); });
   }
   document.body.addEventListener("click", function (event) {
     var toggle = event.target.closest ? event.target.closest("[data-queue-toggle]") : null;

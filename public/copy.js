@@ -265,7 +265,7 @@
           if (errorCards.dataset.live === "1") {
             var atBottom = nearBottom(errorCards);
             var top = errorCards.scrollTop;
-            errorCards.innerHTML = payload.html;
+            window.appMorph(errorCards, payload.html);
             errorCards.scrollTop = atBottom ? errorCards.scrollHeight : top;
           }
           if (!payload.live) {

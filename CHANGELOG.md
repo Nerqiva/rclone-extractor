@@ -43,8 +43,14 @@ to `main`.
   each wait doubles the previous one. `tests/retry.test.ts` covers the attempt
   count, the doubling waits, the purge before a re-extract, and skip/hard-stop
   aborts.
+- **App version and boot time on the Configuration page.** The Runtime card
+  shows the running build's `VERSION` and the process start time in `APP_TZ`.
 
 ### Changed
+- **Polling patches only changed values.** Progress, controls, archive rows,
+  the queue and the Errors page merge new fragments into the existing DOM with
+  vendored `morphdom` instead of replacing whole containers, so text selected
+  while a page polls stays selected. The whole-fragment response cache is gone.
 - **The Errors page separates informational skips from failures.** Tiny,
   website, torrent, unreadable and user-skipped archives move to an
   *Informational skips* section with muted pills. *Failed archives* now holds

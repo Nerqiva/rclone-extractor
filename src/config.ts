@@ -12,6 +12,8 @@ export const RCLONE_CONF_FALLBACK_DIR = "/tmp/app/data";
 export const RCLONE_CONF_FALLBACK_PATH = `${RCLONE_CONF_FALLBACK_DIR}/rclone.conf`;
 export const BIND = process.env.BIND ?? "0.0.0.0";
 export const PORT = Number(process.env.PORT ?? 8080);
+// Process lifetime starts here; the Configuration page shows this timestamp.
+export const BOOT_AT = new Date();
 export const APP_PASSWORD = process.env.APP_PASSWORD ?? "";
 export const SECRET_KEY = process.env.SECRET_KEY ?? "";
 export const DATABASE_URL = process.env.DATABASE_URL ?? "";

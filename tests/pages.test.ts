@@ -1,11 +1,13 @@
 import { test, expect, beforeAll, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "rx-pages-"));
 delete process.env.DATABASE_URL;
+
+const VERSION = readFileSync(join(import.meta.dir, "..", "VERSION"), "utf8").trim();
 
 // Mock rclone so the Configuration page's binary probe (checkRclone) has
 // something to talk to.
@@ -45,6 +47,7 @@ test("Progress page renders", async () => {
   expect(body).toContain("<title>Progress · rclone-extractor</title>");
   expect(body).toContain("Start, stop and watch the current task.");
   expect(body).toContain('data-queue-toggle');
+  expect(body).toContain('hx-swap="morphdom"');
   expect(body).toContain('Show Queue (0)');
   expect(body).toContain('id="queuePanel"');
   expect(body).toContain('id="queuePanelBody"');
@@ -90,6 +93,9 @@ test("Configuration page renders the sectioned plain-English form", async () => 
   expect(body).toContain("Scan root");
   expect(body).toContain("scan_root"); // stored key stays visible
   expect(body).toMatch(/name="concurrency"[^>]*step="1"/);
+  expect(body).toContain("App version");
+  expect(body).toContain(`<code>${VERSION}</code>`);
+  expect(body).toContain("Booted at");
 });
 
 test("Configuration page stays editable while a task runs", async () => {
