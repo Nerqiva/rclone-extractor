@@ -1740,6 +1740,12 @@ button[disabled] {
 .progress-panel {
   border-radius: 10px;
 }
+.error-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 20px 0 10px;
+}
 .empty-actions {
   display: flex;
   flex-wrap: wrap;

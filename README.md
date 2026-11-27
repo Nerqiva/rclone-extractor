@@ -34,8 +34,8 @@ scan  →  extract  →  promote  →  trash
       <sub><strong>Logs</strong> — colorized raw output with session picker</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/screenshots/errors.png" alt="Errors page with failed archive cards on top and the password-protected section below, including a card in trash" width="100%"><br>
-      <sub><strong>Errors</strong> — failed archives and password-protected files</sub>
+      <img src="docs/screenshots/errors.png" alt="Errors page with an Informational skips section above a password-protected section, each card showing its queue ID and raw log actions" width="100%"><br>
+      <sub><strong>Errors</strong> — failures, informational skips and password-protected files</sub>
     </td>
   </tr>
 </table>

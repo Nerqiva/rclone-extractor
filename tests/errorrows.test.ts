@@ -55,3 +55,18 @@ test("error cards show the failing command with raw native output", async () => 
   expect(html).toContain('class="error-message"');
   expect(html).toContain(`Queue ID #${archiveId}`);
 });
+
+test("informational skips are separated from failures", async () => {
+  const now = new Date().toISOString();
+  await store.run(
+    "INSERT INTO archives(path, size, status, error_kind, created_at, updated_at) VALUES('incoming/tiny.zip', 10, 'skipped', 'tiny', ?, ?)",
+    [now, now],
+  );
+  const html = renderErrorCards(await readErrorRows(store));
+  const skipHeading = html.indexOf("Informational skips");
+  expect(skipHeading).toBeGreaterThan(-1);
+  expect(html).toContain("tiny.zip");
+  expect(html).toContain('class="pill info"');
+  expect(html.indexOf("tiny.zip")).toBeGreaterThan(skipHeading);
+  expect(html.indexOf("broken.zip")).toBeLessThan(skipHeading);
+});

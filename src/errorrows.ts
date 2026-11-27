@@ -1,4 +1,4 @@
-import { esc } from "./ui";
+import { esc, info } from "./ui";
 import { baseNameOf } from "./domain";
 import { COMMAND_SEPARATOR } from "./log";
 
@@ -21,13 +21,29 @@ const KIND_COMMAND: Record<string, RegExp> = {
   unreadable: /\sarchive list\b/,
 };
 
+// Skips are recorded with an error_kind too, but they need no action. Keep
+// them out of the failure cards so the Errors page is a work queue.
+const INFO_KINDS = new Set([
+  "empty",
+  "torrent",
+  "website",
+  "tiny",
+  "unreadable",
+  "skip_requested",
+]);
+
+export function isInformationalKind(kind: string): boolean {
+  return INFO_KINDS.has(kind);
+}
+
 const KIND_CLASS: Record<string, string> = {
   password: "warn",
-  empty: "warn",
-  torrent: "warn",
-  website: "warn",
-  tiny: "warn",
-  unreadable: "warn",
+  empty: "info",
+  torrent: "info",
+  website: "info",
+  tiny: "info",
+  unreadable: "info",
+  skip_requested: "info",
   extract: "err",
   promote: "err",
   trash: "err",
@@ -48,15 +64,10 @@ export function relativeTime(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export function renderErrorCards(rows: ErrorRow[]): string {
-  if (rows.length === 0) {
-    return `<div class="empty-state"><p>No errors.</p></div>`;
-  }
-  return `<div class="error-grid">${rows
-    .map((r) => {
-      const cls = KIND_CLASS[r.error_kind] || "err";
-      const name = baseNameOf(r.path) || r.path;
-      return `<div class="error-card">
+function errorCard(r: ErrorRow): string {
+  const cls = KIND_CLASS[r.error_kind] || "err";
+  const name = baseNameOf(r.path) || r.path;
+  return `<div class="error-card">
         <div class="error-card-head">
           <span class="error-name" title="${esc(r.path)}">${esc(name)}</span>
           <span class="queue-id">Queue ID #${r.id}</span>
@@ -74,8 +85,24 @@ export function renderErrorCards(rows: ErrorRow[]): string {
           </span>
         </div>
       </div>`;
-    })
-    .join("")}</div>`;
+}
+
+export function renderErrorCards(rows: ErrorRow[]): string {
+  const failures = rows.filter((r) => !isInformationalKind(r.error_kind));
+  const skips = rows.filter((r) => isInformationalKind(r.error_kind));
+  if (failures.length === 0 && skips.length === 0) {
+    return `<div class="empty-state"><p>No errors.</p></div>`;
+  }
+  const grid = (rs: ErrorRow[]) =>
+    `<div class="error-grid">${rs.map(errorCard).join("")}</div>`;
+  return `${failures.length > 0 ? grid(failures) : ""}${
+    skips.length > 0
+      ? `<h3 class="error-group-title">Informational skips ${info(
+          "Archives intentionally skipped by the skip rules (tiny, website dump, torrent collection, unreadable). No action needed.",
+          "Informational skips",
+        )}</h3>${grid(skips)}`
+      : ""
+  }`;
 }
 
 export async function readErrorRows(

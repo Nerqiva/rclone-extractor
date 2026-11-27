@@ -45,6 +45,10 @@ to `main`.
   aborts.
 
 ### Changed
+- **The Errors page separates informational skips from failures.** Tiny,
+  website, torrent, unreadable and user-skipped archives move to an
+  *Informational skips* section with muted pills. *Failed archives* now holds
+  only items that need action. `tests/errorrows.test.ts` covers the split.
 - **Cold starts and polls do less work.** Derived encryption keys are memoized
   per salt, each run and rclone construction reads one settings snapshot instead
   of a dozen queries, and the Errors and Archives poll fragments are reused
