@@ -167,25 +167,28 @@ test("boot recovery settles an archive already in trash before requeueing it", a
   void new Response(child.stderr).text();
   try {
     let status = "";
-    const deadline = Date.now() + 3000;
+    let outcome = "";
+    const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
       try {
         status =
           (await store.get1<{ status: string }>(
             "SELECT status FROM archives WHERE path='stuck.zip'",
           ))?.status ?? "";
+        outcome =
+          (await store.get1<{ outcome: string }>(
+            "SELECT outcome FROM runs WHERE id = ?",
+            [runId],
+          ))?.outcome ?? "";
       } catch {
         // SQLite lock while the child writes; retry.
       }
-      if (status === "done") break;
+      // Boot recovery settles the archive before it closes the run.
+      if (status === "done" && outcome === "killed") break;
       await new Promise((r) => setTimeout(r, 25));
     }
     expect(status).toBe("done");
-    const run = await store.get1<{ outcome: string }>(
-      "SELECT outcome FROM runs WHERE id = ?",
-      [runId],
-    );
-    expect(run?.outcome).toBe("killed");
+    expect(outcome).toBe("killed");
   } finally {
     child.kill(9);
   }
