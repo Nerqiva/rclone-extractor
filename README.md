@@ -821,7 +821,8 @@ page, plus tabs for the run log and the per-archive logs.
   button and a **Download** button for that archive's raw output. Live
   sessions refresh the list every 2 seconds. **Download all** exports one
   text file with the run log, the errors log and every per-archive log of the
-  session, delimited by section headers.
+  session, delimited by section headers. A re-run starts that archive's log
+  clean, so it shows only the current run's output.
 
 - Polling is **incremental** (`?after=<line-id>`): only new lines are fetched
   and appended. Finishing a run updates the pill but keeps polling available,

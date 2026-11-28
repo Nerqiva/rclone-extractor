@@ -1343,6 +1343,12 @@ export async function runEngine(): Promise<void> {
     ) => {
       const row = { id: job.id, path: job.rel };
 
+      // This archive id is reused across runs; start its raw log clean.
+      await store.run(
+        "DELETE FROM log_lines WHERE scope='archive' AND ref_id=? AND kind='extract'",
+        [row.id],
+      );
+
       // Skip flags are set on this job by targeted requests and cleared
       // when the worker claims it.
       const rel = row.path;

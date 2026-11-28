@@ -164,6 +164,15 @@ to `main`.
   `tests/tmppurge.test.ts` cover the new behavior.
 
 ### Fixed
+- **Per-archive logs start clean on a re-run.** A reprocessed archive keeps its
+  id, so the earlier run's raw lines used to reappear in **Log view** and in the
+  full download. The archive's extraction lines are now cleared when it is
+  claimed for a new run. `tests/archivelog-rerun.test.ts` covers it.
+- **Targeted Skip archive works under Postgres.** BIGSERIAL ids come back as
+  strings, so the queue was keyed by strings and the numeric id posted by the
+  button missed it, showing "Nothing to skip right now." Queue ids are now
+  normalized to numbers, which also fixes targeted inspection and queue
+  toggles. `tests/skiptarget.test.ts` covers it.
 - **RcloneX extraction no longer fails with `could not initialize libc7zip`.** The container refresh installed only the rclonex binary and dropped the 7-Zip libraries packed beside it in the release. It now runs rclonex's own install script with `RCLONEX_INSTALL_DIR` set to `/app/data/bin`, so `libc7zip.so`, `7z.so` and `Codecs` land with the binary. `tests/fetch-deps.test.ts` covers the refresh.
 - **"Show full output" now uses the same compact log rows as the rest of the page.** Folded command output was rendered as one plain `<pre>` block, so expanding it showed an unorganized wall of text. Each line now renders as a continuation row inside the fold, and an unfinished trailing block uses the same rows.
 - **An open per-archive log keeps its "Hide log" label after a live poll.** A poll that morphed the container restored the open log viewer but only reset `aria-expanded`, letting the server's "Log view" label reappear while the log stayed open. The toggle text is now restored alongside the expanded state.
