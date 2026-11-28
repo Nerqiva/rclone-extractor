@@ -75,11 +75,12 @@ function errorCard(r: ErrorRow): string {
     name,
     logId: `er-log-${idAttr}`,
     copyHref: `/download/archive/${idAttr}?kind=extract`,
-    downloadHref: `/download/archive/${idAttr}?kind=extract`,
+    downloadHref: `/download/archive-file/${idAttr}`,
     copyLabel: "Copy",
     copyTitle: "Copy the full error log",
     copyAria: `Copy error log for ${esc(name)}`,
-    downloadAria: `Download error log for ${esc(name)}`,
+    downloadAria: `Download ${esc(name)} archive`,
+    downloadAttrs: `data-download-archive data-archive-id="${idAttr}"`,
   });
   return `<div class="error-card">
         <div class="error-card-head">

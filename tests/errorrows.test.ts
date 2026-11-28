@@ -59,6 +59,15 @@ test("error cards link to the log view instead of inlining raw output", async ()
   expect(html).toContain(`id="er-log-${archiveId}"`);
 });
 
+test("failed archive cards download the archive file, not the log", async () => {
+  const rows = await readErrorRows(store);
+  const html = renderFailureCards(rows);
+  expect(html).toContain(`href="/download/archive-file/${archiveId}"`);
+  expect(html).toContain(`data-archive-id="${archiveId}"`);
+  expect(html).toContain("data-download-archive");
+  expect(html).not.toContain(`href="/download/archive/${archiveId}?kind=extract"`);
+});
+
 test("informational skips are separated from failures", async () => {
   const now = new Date().toISOString();
   await store.run(

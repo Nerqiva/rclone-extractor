@@ -1179,6 +1179,11 @@ textarea {
   display: flex;
   gap: 6px;
 }
+.error-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  line-height: normal;
+}
 
 .note {
   color: var(--ok);

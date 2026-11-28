@@ -846,9 +846,10 @@ page, plus tabs for the run log and the per-archive logs.
   and other informational skips. It has a **Copy all** button for a
   tab-separated summary. Every card shows its Queue ID and the stage where it
   stopped; no error lines are inlined. The inline **Log view** opens the same
-  staged command output as the Archives tab, alongside **Copy** / **Download**
-  for the full archive log. The run error log also records the redacted
-  command that failed.
+  staged command output as the Archives tab, alongside **Copy** for the full
+  archive log and a **Download** button that streams the archive itself, the
+  same as on Skipped archives cards. The run error log also records the
+  redacted command that failed.
 - The **Skipped archives** section lists every archive that reached a run but
   needs a password (a warning is logged and the run moves
   to the next archive; they are never extracted without one). Each row shows

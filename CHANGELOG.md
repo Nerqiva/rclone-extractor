@@ -164,6 +164,13 @@ to `main`.
   `tests/tmppurge.test.ts` cover the new behavior.
 
 ### Fixed
+- **Failed archive cards download the archive file like skipped cards.** The
+  Download button on the Errors page fetched the error log instead of the
+  archive, so it did not match the Skipped archives cards. It now streams the
+  archive through `/download/archive-file/:id` and shares the app-wide
+  one-at-a-time grey-out. Its label also sits centered like the neighbouring
+  buttons instead of riding high in the link. `tests/errorrows.test.ts` covers
+  the download target.
 - **Per-archive logs start clean on a re-run.** A reprocessed archive keeps its
   id, so the earlier run's raw lines used to reappear in **Log view** and in the
   full download. The archive's extraction lines are now cleared when it is
