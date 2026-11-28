@@ -1268,17 +1268,18 @@ export async function runEngine(): Promise<void> {
     const predecessors = new Map<number, number | null>();
     const lastByGroup = new Map<string, number>();
     rows.forEach((row, order) => {
+      const id = Number(row.id);
       const baseName = baseNameOf(row.path);
       const family = archiveFamily(baseName);
       const groupKey = family === null ? null : `${dirOfRel(row.path)}|${family}`;
       let predecessor: number | null = null;
       if (groupKey !== null) {
         predecessor = lastByGroup.get(groupKey) ?? null;
-        lastByGroup.set(groupKey, row.id);
+        lastByGroup.set(groupKey, id);
       }
-      predecessors.set(row.id, predecessor);
-      engineState.jobs.set(row.id, {
-        id: row.id,
+      predecessors.set(id, predecessor);
+      engineState.jobs.set(id, {
+        id,
         rel: row.path,
         order,
         status: "queued",
